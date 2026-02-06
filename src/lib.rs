@@ -4,4 +4,4 @@
 //! by matching geometric star patterns against a reference catalog,
 //! returning a WCS (World Coordinate System) solution.
 
-pub mod kdtree;
+pub mod extraction;
