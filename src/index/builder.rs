@@ -1,5 +1,7 @@
 use std::collections::HashSet;
 
+use starfield::catalogs::{StarCatalog, StarData};
+
 use crate::geom::sphere::{angular_distance, radec_to_xyz, star_midpoint};
 use crate::kdtree::KdTree;
 use crate::quads::{Code, DIMCODES, DIMQUADS, Quad, compute_canonical_code};
@@ -142,6 +144,29 @@ pub fn build_index(stars: &[(u64, f64, f64, f64)], config: &IndexBuilderConfig) 
         scale_lower: config.scale_lower,
         scale_upper: config.scale_upper,
     }
+}
+
+/// Build an index from a starfield `StarCatalog`.
+///
+/// Extracts stars via the `star_data()` iterator. RA/Dec from `StarData.position`
+/// are in radians (matching our internal convention).
+pub fn build_index_from_catalog(catalog: &impl StarCatalog, config: &IndexBuilderConfig) -> Index {
+    let stars: Vec<(u64, f64, f64, f64)> = catalog
+        .star_data()
+        .map(|s| (s.id, s.position.ra, s.position.dec, s.magnitude))
+        .collect();
+    build_index(&stars, config)
+}
+
+/// Build an index from pre-collected `StarData` entries.
+///
+/// Useful when you've already filtered or transformed catalog data.
+pub fn build_index_from_star_data(stars: &[StarData], config: &IndexBuilderConfig) -> Index {
+    let tuples: Vec<(u64, f64, f64, f64)> = stars
+        .iter()
+        .map(|s| (s.id, s.position.ra, s.position.dec, s.magnitude))
+        .collect();
+    build_index(&tuples, config)
 }
 
 #[cfg(test)]
