@@ -7,3 +7,4 @@
 pub mod extraction;
 pub mod geom;
 pub mod kdtree;
+pub mod quads;
