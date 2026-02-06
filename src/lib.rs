@@ -5,3 +5,4 @@
 //! returning a WCS (World Coordinate System) solution.
 
 pub mod extraction;
+pub mod kdtree;
