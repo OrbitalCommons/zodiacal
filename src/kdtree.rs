@@ -55,7 +55,7 @@ impl<const DIM: usize> KdTree<DIM> {
         };
 
         let mut order: Vec<usize> = (0..n).collect();
-        tree.build_recursive(&mut order, 0, n, 0);
+        tree.build_recursive(&mut order, 0, n);
 
         let old_points = tree.points.clone();
         let old_indices = tree.indices.clone();
@@ -67,13 +67,7 @@ impl<const DIM: usize> KdTree<DIM> {
         tree
     }
 
-    fn build_recursive(
-        &mut self,
-        order: &mut [usize],
-        start: usize,
-        end: usize,
-        depth: usize,
-    ) -> usize {
+    fn build_recursive(&mut self, order: &mut [usize], start: usize, end: usize) -> usize {
         let count = end - start;
 
         if count <= LEAF_SIZE {
@@ -91,8 +85,8 @@ impl<const DIM: usize> KdTree<DIM> {
         let node_idx = self.nodes.len();
         self.nodes.push(Node::Leaf { start: 0, end: 0 });
 
-        let left = self.build_recursive(order, start, median_pos, depth + 1);
-        let right = self.build_recursive(order, median_pos, end, depth + 1);
+        let left = self.build_recursive(order, start, median_pos);
+        let right = self.build_recursive(order, median_pos, end);
 
         self.nodes[node_idx] = Node::Split {
             dim: split_dim,
