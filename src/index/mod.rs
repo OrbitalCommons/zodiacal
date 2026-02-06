@@ -1,4 +1,5 @@
 pub mod builder;
+pub mod store;
 
 use crate::kdtree::KdTree;
 use crate::quads::{DIMCODES, Quad};
@@ -25,4 +26,15 @@ pub struct Index {
     /// Scale range this index covers (radians).
     pub scale_lower: f64,
     pub scale_upper: f64,
+}
+
+impl std::fmt::Debug for Index {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Index")
+            .field("stars", &self.stars.len())
+            .field("quads", &self.quads.len())
+            .field("scale_lower", &self.scale_lower)
+            .field("scale_upper", &self.scale_upper)
+            .finish()
+    }
 }
