@@ -10,3 +10,4 @@ categories = ["science"]
 exclude = ["external/", "PLAN.md"]
 
 [dependencies]
+ndarray = "0.17.2"
