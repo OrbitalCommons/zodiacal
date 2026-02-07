@@ -38,8 +38,15 @@ pub fn fit_tan_wcs(
     let crval_xyz = [cx / norm, cy / norm, cz / norm];
     let (crval_ra, crval_dec) = xyz_to_radec(crval_xyz);
 
-    // 2. Set crpix to image center.
-    let crpix = [image_size.0 / 2.0, image_size.1 / 2.0];
+    // 2. Set crpix to centroid of pixel positions so the no-offset model works
+    //    correctly even with asymmetric star placements.
+    let mut px_cx = 0.0;
+    let mut px_cy = 0.0;
+    for &(x, y) in &field_xy[..n] {
+        px_cx += x;
+        px_cy += y;
+    }
+    let crpix = [px_cx / n as f64, px_cy / n as f64];
 
     // 3. Project each star onto the tangent plane.
     let mut xi = Vec::with_capacity(n);
