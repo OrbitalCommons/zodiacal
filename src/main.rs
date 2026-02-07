@@ -418,10 +418,13 @@ fn cmd_diagnose(
         let mut ref_pixels: Vec<(f64, f64)> = Vec::new();
         for result in &nearby {
             let star = &index.stars[result.index];
-            if let Some((px, py)) = wcs.radec_to_pixel(star.ra, star.dec) {
-                if px >= 0.0 && px <= w as f64 && py >= 0.0 && py <= h as f64 {
-                    ref_pixels.push((px, py));
-                }
+            if let Some((px, py)) = wcs.radec_to_pixel(star.ra, star.dec)
+                && px >= 0.0
+                && px <= w as f64
+                && py >= 0.0
+                && py <= h as f64
+            {
+                ref_pixels.push((px, py));
             }
         }
 
