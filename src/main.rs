@@ -66,9 +66,9 @@ enum Commands {
         #[arg(long, default_value = "10")]
         max_stars_per_cell: usize,
 
-        /// Maximum number of quads to generate.
-        #[arg(long, default_value = "100000")]
-        max_quads: usize,
+        /// Maximum number of quads to generate (auto-computed if omitted).
+        #[arg(long)]
+        max_quads: Option<usize>,
 
         /// HEALPix depth for star uniformization (auto if omitted).
         #[arg(long)]
@@ -323,6 +323,17 @@ fn cmd_solve(
 
 fn cmd_build_index(catalog_path: &Path, output_path: &Path, config: &CatalogBuilderConfig) {
     use starfield::catalogs::MinimalCatalog;
+
+    let quad_depth = config.effective_quad_depth();
+    let n_cells = zodiacal::healpix::npix(quad_depth);
+    let max_quads = config.effective_max_quads();
+    eprintln!(
+        "Index params: depth={}, cells={}, quads_per_cell={}, max_quads={}",
+        quad_depth,
+        n_cells,
+        max_quads / n_cells as usize,
+        max_quads
+    );
 
     let catalog = MinimalCatalog::load(catalog_path).unwrap_or_else(|e| {
         eprintln!("Failed to load catalog {}: {e}", catalog_path.display());
