@@ -33,8 +33,9 @@ pub struct CatalogBuilderConfig {
     pub scale_upper: f64,
     /// Maximum brightest stars to keep per HEALPix cell during uniformization.
     pub max_stars_per_cell: usize,
-    /// Maximum total quads to generate.
-    pub max_quads: usize,
+    /// Maximum total quads to generate. If None, auto-computed as
+    /// `passes * npix(quad_depth)` to ensure every cell gets adequate coverage.
+    pub max_quads: Option<usize>,
     /// HEALPix depth for star uniformization (auto-computed if None).
     pub uniformize_depth: Option<u8>,
     /// HEALPix depth for quad building cells (auto-computed if None).
@@ -51,7 +52,7 @@ impl Default for CatalogBuilderConfig {
             scale_lower: (30.0 / 3600.0_f64).to_radians(),
             scale_upper: (1800.0 / 3600.0_f64).to_radians(),
             max_stars_per_cell: 10,
-            max_quads: 100_000,
+            max_quads: None,
             uniformize_depth: None,
             quad_depth: None,
             passes: 16,
@@ -65,6 +66,27 @@ impl CatalogBuilderConfig {
     fn effective_uniformize_depth(&self) -> u8 {
         self.uniformize_depth
             .unwrap_or_else(|| healpix::depth_for_scale(self.scale_upper * 2.0))
+    }
+
+    /// Compute the effective quad-building depth (auto or explicit).
+    pub fn effective_quad_depth(&self) -> u8 {
+        self.quad_depth
+            .unwrap_or_else(|| healpix::depth_for_scale(self.scale_upper * 2.0))
+    }
+
+    /// Compute recommended max_quads based on HEALPix geometry.
+    ///
+    /// Returns `passes * npix(quad_depth)` — enough quads to fill
+    /// every cell with the requested number of passes.
+    pub fn recommended_max_quads(&self) -> usize {
+        let n_cells = healpix::npix(self.effective_quad_depth()) as usize;
+        self.passes * n_cells
+    }
+
+    /// Resolve the effective max_quads (explicit or auto-computed).
+    pub fn effective_max_quads(&self) -> usize {
+        self.max_quads
+            .unwrap_or_else(|| self.recommended_max_quads())
     }
 }
 
@@ -493,11 +515,10 @@ pub fn build_index_from_catalog(
     finish_spinner(&pb_tree, &format!("✓ KD-tree built ({} nodes)", xyzs.len()));
 
     // --- Phase 3: Per-cell quad building ---
-    let quad_depth = config
-        .quad_depth
-        .unwrap_or_else(|| healpix::depth_for_scale(config.scale_upper * 2.0));
+    let quad_depth = config.effective_quad_depth();
     let n_quad_cells = healpix::npix(quad_depth);
-    let quads_per_cell = (config.max_quads as u64 / n_quad_cells).max(1) as usize;
+    let max_quads = config.effective_max_quads();
+    let quads_per_cell = (max_quads as u64 / n_quad_cells).max(1) as usize;
 
     let pb_quads = mp.add(ProgressBar::new(n_quad_cells));
     pb_quads.set_style(bar_style());
