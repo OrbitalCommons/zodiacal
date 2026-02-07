@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BinaryHeap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
@@ -312,15 +312,55 @@ pub fn build_index(stars: &[(u64, f64, f64, f64)], config: &IndexBuilderConfig) 
     }
 }
 
+/// A star tuple wrapped for use in a max-heap keyed by magnitude.
+///
+/// We want to keep the *brightest* (lowest magnitude) stars, so the heap
+/// should evict the *faintest* (highest magnitude). A max-heap with magnitude
+/// as the key naturally puts the faintest star at the top for eviction.
+#[derive(PartialEq)]
+struct HeapStar(f64, u64, f64, f64); // (mag, id, ra, dec)
+
+impl Eq for HeapStar {}
+
+impl PartialOrd for HeapStar {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for HeapStar {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0
+            .partial_cmp(&other.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    }
+}
+
 /// Build an index from a starfield `StarCatalog`.
 ///
-/// Extracts stars via the `star_data()` iterator. RA/Dec from `StarData.position`
-/// are in radians (matching our internal convention).
+/// Streams through the catalog iterator keeping only the top-N brightest
+/// stars in a bounded heap, avoiding loading the entire catalog into memory.
 pub fn build_index_from_catalog(catalog: &impl StarCatalog, config: &IndexBuilderConfig) -> Index {
-    let stars: Vec<(u64, f64, f64, f64)> = catalog
-        .star_data()
-        .map(|s| (s.id, s.position.ra, s.position.dec, s.magnitude))
+    let mut heap: BinaryHeap<HeapStar> = BinaryHeap::with_capacity(config.max_stars + 1);
+
+    for s in catalog.star_data() {
+        let star = HeapStar(s.magnitude, s.id, s.position.ra, s.position.dec);
+        if heap.len() < config.max_stars {
+            heap.push(star);
+        } else if let Some(faintest) = heap.peek() {
+            if star.0 < faintest.0 {
+                heap.pop();
+                heap.push(star);
+            }
+        }
+    }
+
+    let mut stars: Vec<(u64, f64, f64, f64)> = heap
+        .into_iter()
+        .map(|HeapStar(mag, id, ra, dec)| (id, ra, dec, mag))
         .collect();
+    stars.sort_by(|a, b| a.3.partial_cmp(&b.3).unwrap_or(std::cmp::Ordering::Equal));
+
     build_index(&stars, config)
 }
 
