@@ -6,7 +6,7 @@ use ndarray::Array2;
 
 use zodiacal::extraction::ExtractionConfig;
 use zodiacal::index::Index;
-use zodiacal::index::builder::{IndexBuilderConfig, build_index_from_catalog};
+use zodiacal::index::builder::{CatalogBuilderConfig, build_index_from_catalog};
 use zodiacal::solver::{SolverConfig, solve_image};
 
 #[derive(Parser)]
@@ -62,13 +62,25 @@ enum Commands {
         #[arg(long, default_value = "1800.0")]
         scale_upper: f64,
 
-        /// Maximum number of catalog stars to use.
-        #[arg(long, default_value = "1000")]
-        max_stars: usize,
+        /// Maximum brightest stars per HEALPix cell.
+        #[arg(long, default_value = "10")]
+        max_stars_per_cell: usize,
 
         /// Maximum number of quads to generate.
-        #[arg(long, default_value = "10000")]
+        #[arg(long, default_value = "100000")]
         max_quads: usize,
+
+        /// HEALPix depth for star uniformization (auto if omitted).
+        #[arg(long)]
+        uniformize_depth: Option<u8>,
+
+        /// Number of quad-building passes per cell.
+        #[arg(long, default_value = "16")]
+        passes: usize,
+
+        /// Maximum times a star can appear in quads.
+        #[arg(long, default_value = "8")]
+        max_reuse: usize,
     },
 }
 
@@ -88,30 +100,32 @@ fn load_fits(path: &Path) -> Array2<f32> {
     let reader = BufReader::new(f);
     let mut hdu_list = Fits::from_reader(reader);
 
-    let hdu = match hdu_list.next() {
-        Some(Ok(HDU::Primary(hdu))) => hdu,
-        Some(Ok(_)) => {
-            eprintln!("First HDU is not a primary image HDU");
-            process::exit(1);
-        }
-        Some(Err(e)) => {
-            eprintln!("Failed to read FITS HDU: {e}");
-            process::exit(1);
-        }
-        None => {
-            eprintln!("FITS file contains no HDUs");
-            process::exit(1);
+    // Find the first image HDU with actual data (NAXIS >= 2).
+    // The primary HDU may be empty (NAXIS=0) with the image in an extension.
+    let hdu = loop {
+        match hdu_list.next() {
+            Some(Ok(HDU::Primary(hdu))) | Some(Ok(HDU::XImage(hdu))) => {
+                let naxis = hdu.get_header().get_xtension().get_naxis();
+                if naxis.len() >= 2 {
+                    break hdu;
+                }
+            }
+            Some(Ok(_)) => continue,
+            Some(Err(e)) => {
+                eprintln!("Failed to read FITS HDU: {e}");
+                process::exit(1);
+            }
+            None => {
+                eprintln!("No image HDU with data found in FITS file");
+                process::exit(1);
+            }
         }
     };
 
     let xtension = hdu.get_header().get_xtension();
     let naxis = xtension.get_naxis();
-    if naxis.len() < 2 {
-        eprintln!("FITS image has fewer than 2 axes");
-        process::exit(1);
-    }
-    let naxis1 = naxis[0] as usize; // width
-    let naxis2 = naxis[1] as usize; // height
+    let naxis1 = naxis[0] as usize;
+    let naxis2 = naxis[1] as usize;
 
     let header = hdu.get_header();
     let bzero: f64 = match header.get("BZERO") {
@@ -124,6 +138,15 @@ fn load_fits(path: &Path) -> Array2<f32> {
         Some(Value::Integer { value, .. }) => *value as f64,
         _ => 1.0,
     };
+
+    eprintln!(
+        "FITS: {}x{} BITPIX={:?} BZERO={} BSCALE={}",
+        naxis1,
+        naxis2,
+        xtension.get_bitpix(),
+        bzero,
+        bscale
+    );
 
     let image_data = hdu_list.get_data(&hdu);
     let pixels = image_data.pixels();
@@ -149,7 +172,7 @@ fn load_fits(path: &Path) -> Array2<f32> {
         process::exit(1);
     }
 
-    // FITS: NAXIS1=width, NAXIS2=height, row-major
+    // FITS data: row-major, NAXIS1=columns (width), NAXIS2=rows (height)
     Array2::from_shape_vec((naxis2, naxis1), raw).unwrap_or_else(|e| {
         eprintln!("Failed to reshape FITS data: {e}");
         process::exit(1);
@@ -263,14 +286,7 @@ fn cmd_solve(
     }
 }
 
-fn cmd_build_index(
-    catalog_path: &Path,
-    output_path: &Path,
-    scale_lower_arcsec: f64,
-    scale_upper_arcsec: f64,
-    max_stars: usize,
-    max_quads: usize,
-) {
+fn cmd_build_index(catalog_path: &Path, output_path: &Path, config: &CatalogBuilderConfig) {
     use starfield::catalogs::MinimalCatalog;
 
     let catalog = MinimalCatalog::load(catalog_path).unwrap_or_else(|e| {
@@ -279,14 +295,7 @@ fn cmd_build_index(
     });
     eprintln!("Loaded catalog: {} stars", catalog.len());
 
-    let config = IndexBuilderConfig {
-        scale_lower: (scale_lower_arcsec / 3600.0).to_radians(),
-        scale_upper: (scale_upper_arcsec / 3600.0).to_radians(),
-        max_stars,
-        max_quads,
-    };
-
-    let index = build_index_from_catalog(&catalog, &config);
+    let index = build_index_from_catalog(&catalog, config);
     eprintln!(
         "Built index: {} stars, {} quads",
         index.stars.len(),
@@ -327,17 +336,23 @@ fn main() {
             output,
             scale_lower,
             scale_upper,
-            max_stars,
+            max_stars_per_cell,
             max_quads,
+            uniformize_depth,
+            passes,
+            max_reuse,
         } => {
-            cmd_build_index(
-                catalog,
-                output,
-                *scale_lower,
-                *scale_upper,
-                *max_stars,
-                *max_quads,
-            );
+            let config = CatalogBuilderConfig {
+                scale_lower: (*scale_lower / 3600.0).to_radians(),
+                scale_upper: (*scale_upper / 3600.0).to_radians(),
+                max_stars_per_cell: *max_stars_per_cell,
+                max_quads: *max_quads,
+                uniformize_depth: *uniformize_depth,
+                quad_depth: None,
+                passes: *passes,
+                max_reuse: *max_reuse,
+            };
+            cmd_build_index(catalog, output, &config);
         }
     }
 }

@@ -237,6 +237,14 @@ pub fn solve(
                                         | Err(FitError::ProjectionFailed) => continue,
                                     };
 
+                                    // Check pixel scale against user-specified range.
+                                    if let Some((lo, hi)) = config.scale_range {
+                                        let scale_arcsec = wcs.pixel_scale() * 3600.0;
+                                        if scale_arcsec < lo || scale_arcsec > hi {
+                                            continue;
+                                        }
+                                    }
+
                                     // Quick sanity check: the 4 quad stars should
                                     // project back close to their field positions.
                                     let quad_residual_limit = 10.0;
@@ -375,8 +383,9 @@ mod tests {
             max_field_stars: 25,
             code_tolerance: 0.002,
             verify: VerifyConfig {
-                match_radius_pix: 15.0,
-                log_odds_accept: 40.0,
+                match_radius_pix: 3.0,
+                log_odds_accept: 10.0,
+                min_matches: 3,
                 ..VerifyConfig::default()
             },
         };
@@ -458,6 +467,7 @@ mod tests {
             verify: VerifyConfig {
                 match_radius_pix: 3.0,
                 log_odds_accept: 20.0,
+                min_matches: 3,
                 ..VerifyConfig::default()
             },
             ..SolverConfig::default()
@@ -479,6 +489,7 @@ mod tests {
             verify: VerifyConfig {
                 match_radius_pix: 10.0,
                 log_odds_accept: 10.0,
+                min_matches: 3,
                 ..VerifyConfig::default()
             },
         };
@@ -516,6 +527,7 @@ mod tests {
             verify: VerifyConfig {
                 match_radius_pix: 10.0,
                 log_odds_accept: 10.0,
+                min_matches: 3,
                 ..VerifyConfig::default()
             },
         };
@@ -552,6 +564,7 @@ mod tests {
         assert!((config.verify.distractor_fraction - 0.25).abs() < 1e-15);
         assert!((config.verify.log_odds_accept - 20.0).abs() < 1e-15);
         assert!((config.verify.log_odds_bail - (-20.0)).abs() < 1e-15);
+        assert_eq!(config.verify.min_matches, 10);
     }
 
     #[test]
@@ -692,12 +705,21 @@ mod tests {
         let rotation = PI / 6.0;
         let wcs = make_test_wcs([1.0, 0.5], pixel_scale_arcsec, rotation, image_size);
 
+        // Use random positions to avoid grid symmetry artifacts.
+        let mut state: u64 = 271828182;
+        let mut rng = || -> f64 {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state as f64) / (u64::MAX as f64)
+        };
+
         let mut catalog = Vec::new();
         let mut sources = Vec::new();
 
         for i in 0..30 {
-            let px = 50.0 + (i % 6) as f64 * 80.0;
-            let py = 50.0 + (i / 6) as f64 * 80.0;
+            let px = 30.0 + rng() * 452.0;
+            let py = 30.0 + rng() * 452.0;
             let (ra, dec) = wcs.pixel_to_radec(px, py);
             catalog.push((i as u64, ra, dec, i as f64));
             sources.push(DetectedSource {
@@ -723,10 +745,11 @@ mod tests {
         let config = SolverConfig {
             scale_range: None,
             max_field_stars: 30,
-            code_tolerance: 0.01,
+            code_tolerance: 0.002,
             verify: VerifyConfig {
-                match_radius_pix: 10.0,
+                match_radius_pix: 3.0,
                 log_odds_accept: 10.0,
+                min_matches: 3,
                 ..VerifyConfig::default()
             },
         };

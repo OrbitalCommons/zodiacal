@@ -1,4 +1,4 @@
-use std::collections::{BinaryHeap, HashSet};
+use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
@@ -6,6 +6,7 @@ use rayon::prelude::*;
 use starfield::catalogs::{StarCatalog, StarData};
 
 use crate::geom::sphere::{angular_distance, radec_to_xyz, star_midpoint};
+use crate::healpix;
 use crate::kdtree::KdTree;
 use crate::quads::{Code, DIMCODES, DIMQUADS, Quad, compute_canonical_code};
 
@@ -18,15 +19,56 @@ pub struct IndexBuilderConfig {
     /// Maximum angular size of quads (radians).
     pub scale_upper: f64,
     /// Maximum number of stars to use (brightest first).
+    /// Used by `build_index` for direct star lists.
     pub max_stars: usize,
     /// Maximum number of quads to generate.
     pub max_quads: usize,
 }
 
+/// Configuration for the HEALPix-guided catalog index builder.
+pub struct CatalogBuilderConfig {
+    /// Minimum angular size of quads (radians).
+    pub scale_lower: f64,
+    /// Maximum angular size of quads (radians).
+    pub scale_upper: f64,
+    /// Maximum brightest stars to keep per HEALPix cell during uniformization.
+    pub max_stars_per_cell: usize,
+    /// Maximum total quads to generate.
+    pub max_quads: usize,
+    /// HEALPix depth for star uniformization (auto-computed if None).
+    pub uniformize_depth: Option<u8>,
+    /// HEALPix depth for quad building cells (auto-computed if None).
+    pub quad_depth: Option<u8>,
+    /// Number of quad-building passes per cell.
+    pub passes: usize,
+    /// Maximum times a star can appear in quads (limits over-representation).
+    pub max_reuse: usize,
+}
+
+impl Default for CatalogBuilderConfig {
+    fn default() -> Self {
+        Self {
+            scale_lower: (30.0 / 3600.0_f64).to_radians(),
+            scale_upper: (1800.0 / 3600.0_f64).to_radians(),
+            max_stars_per_cell: 10,
+            max_quads: 100_000,
+            uniformize_depth: None,
+            quad_depth: None,
+            passes: 16,
+            max_reuse: 8,
+        }
+    }
+}
+
+impl CatalogBuilderConfig {
+    /// Compute the effective uniformization depth (auto or explicit).
+    fn effective_uniformize_depth(&self) -> u8 {
+        self.uniformize_depth
+            .unwrap_or_else(|| healpix::depth_for_scale(self.scale_upper * 2.0))
+    }
+}
+
 /// Convert an angular distance (radians) to squared chord distance on the unit sphere.
-///
-/// For two unit vectors separated by angle theta, the chord distance squared is
-/// `2 * (1 - cos(theta))`, which equals the squared L2 distance between the vectors.
 fn angular_to_chord_sq(theta: f64) -> f64 {
     2.0 * (1.0 - theta.cos())
 }
@@ -50,7 +92,6 @@ fn canonical_quad_order(
         }
     }
 
-    // Build reordered arrays: backbone pair first, then remaining stars sorted by index
     let (ai, bi) = best_pair;
     let mut others: Vec<usize> = (0..DIMQUADS).filter(|&i| i != ai && i != bi).collect();
     others.sort_by_key(|&i| star_ids[i]);
@@ -94,7 +135,6 @@ fn finish_bar(pb: &ProgressBar, msg: &str) {
 pub fn build_index(stars: &[(u64, f64, f64, f64)], config: &IndexBuilderConfig) -> Index {
     let mp = MultiProgress::new();
 
-    // --- Phase 1: Sort stars by magnitude ---
     let pb_sort = mp.add(ProgressBar::new_spinner());
     pb_sort.set_style(spinner_style());
     pb_sort.set_prefix("✦ Stars");
@@ -120,7 +160,24 @@ pub fn build_index(stars: &[(u64, f64, f64, f64)], config: &IndexBuilderConfig) 
         &format!("✓ {} stars selected (brightest first)", index_stars.len()),
     );
 
-    // --- Phase 2: Build star KD-tree ---
+    build_index_from_stars(
+        index_stars,
+        config.scale_lower,
+        config.scale_upper,
+        config.max_quads,
+        &mp,
+    )
+}
+
+/// Core index builder that takes pre-selected IndexStars.
+fn build_index_from_stars(
+    index_stars: Vec<IndexStar>,
+    scale_lower: f64,
+    scale_upper: f64,
+    max_quads: usize,
+    mp: &MultiProgress,
+) -> Index {
+    // --- Build star KD-tree ---
     let pb_tree = mp.add(ProgressBar::new_spinner());
     pb_tree.set_style(spinner_style());
     pb_tree.set_prefix("✦ Star tree");
@@ -145,18 +202,12 @@ pub fn build_index(stars: &[(u64, f64, f64, f64)], config: &IndexBuilderConfig) 
             stars: index_stars,
             code_tree,
             quads: vec![],
-            scale_lower: config.scale_lower,
-            scale_upper: config.scale_upper,
+            scale_lower,
+            scale_upper,
         };
     }
 
-    // --- Phase 3: Parallel quad generation ---
-    //
-    // Each thread processes a range of "anchor" star indices and discovers
-    // candidate 4-star quads. To ensure the canonical code is independent of
-    // which (A,B) backbone first discovers a quad, we always reorder the 4
-    // stars so the max-distance pair is used as backbone before computing
-    // the canonical code.
+    // --- Parallel quad generation ---
     let n_stars = xyzs.len();
     let pb_quads = mp.add(ProgressBar::new(n_stars as u64));
     pb_quads.set_style(bar_style());
@@ -166,8 +217,7 @@ pub fn build_index(stars: &[(u64, f64, f64, f64)], config: &IndexBuilderConfig) 
 
     let quad_count = AtomicUsize::new(0);
     let done = AtomicBool::new(false);
-    let chord_sq_upper = angular_to_chord_sq(config.scale_upper);
-    let max_quads = config.max_quads;
+    let chord_sq_upper = angular_to_chord_sq(scale_upper);
 
     let batches: Vec<Vec<([usize; DIMQUADS], Quad, Code)>> = (0..n_stars)
         .into_par_iter()
@@ -194,7 +244,7 @@ pub fn build_index(stars: &[(u64, f64, f64, f64)], config: &IndexBuilderConfig) 
 
                 let b_xyz = xyzs[b_idx];
                 let ab_dist = angular_distance(a_xyz, b_xyz);
-                if ab_dist < config.scale_lower || ab_dist > config.scale_upper {
+                if ab_dist < scale_lower || ab_dist > scale_upper {
                     continue;
                 }
 
@@ -217,8 +267,6 @@ pub fn build_index(stars: &[(u64, f64, f64, f64)], config: &IndexBuilderConfig) 
                             continue;
                         }
 
-                        // Reorder so max-distance pair is backbone, ensuring
-                        // code is deterministic regardless of discovery order.
                         let raw_xyz = [a_xyz, b_xyz, xyzs[c_idx], xyzs[d_idx]];
                         let raw_ids = [a_idx, b_idx, c_idx, d_idx];
                         let (ordered_xyz, ordered_ids) = canonical_quad_order(&raw_xyz, raw_ids);
@@ -247,7 +295,7 @@ pub fn build_index(stars: &[(u64, f64, f64, f64)], config: &IndexBuilderConfig) 
         })
         .collect();
 
-    // --- Phase 3b: Merge & deduplicate ---
+    // --- Merge & deduplicate ---
     let pb_dedup = mp.add(ProgressBar::new_spinner());
     pb_dedup.set_style(spinner_style());
     pb_dedup.set_prefix("✦ Dedup");
@@ -283,7 +331,7 @@ pub fn build_index(stars: &[(u64, f64, f64, f64)], config: &IndexBuilderConfig) 
         &format!("✓ {} unique quads (from {} raw)", quads.len(), total_raw),
     );
 
-    // --- Phase 4: Build code KD-tree ---
+    // --- Build code KD-tree ---
     let pb_code_tree = mp.add(ProgressBar::new_spinner());
     pb_code_tree.set_style(spinner_style());
     pb_code_tree.set_prefix("✦ Code tree");
@@ -307,8 +355,8 @@ pub fn build_index(stars: &[(u64, f64, f64, f64)], config: &IndexBuilderConfig) 
         stars: index_stars,
         code_tree,
         quads,
-        scale_lower: config.scale_lower,
-        scale_upper: config.scale_upper,
+        scale_lower,
+        scale_upper,
     }
 }
 
@@ -318,7 +366,12 @@ pub fn build_index(stars: &[(u64, f64, f64, f64)], config: &IndexBuilderConfig) 
 /// should evict the *faintest* (highest magnitude). A max-heap with magnitude
 /// as the key naturally puts the faintest star at the top for eviction.
 #[derive(PartialEq)]
-struct HeapStar(f64, u64, f64, f64); // (mag, id, ra, dec)
+struct HeapStar {
+    mag: f64,
+    id: u64,
+    ra: f64,
+    dec: f64,
+}
 
 impl Eq for HeapStar {}
 
@@ -330,43 +383,111 @@ impl PartialOrd for HeapStar {
 
 impl Ord for HeapStar {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.0
-            .partial_cmp(&other.0)
+        self.mag
+            .partial_cmp(&other.mag)
             .unwrap_or(std::cmp::Ordering::Equal)
     }
 }
 
-/// Build an index from a starfield `StarCatalog`.
+/// Build an index from a starfield `StarCatalog` using HEALPix-guided uniformization.
 ///
-/// Streams through the catalog iterator keeping only the top-N brightest
-/// stars in a bounded heap, avoiding loading the entire catalog into memory.
-pub fn build_index_from_catalog(catalog: &impl StarCatalog, config: &IndexBuilderConfig) -> Index {
-    let mut heap: BinaryHeap<HeapStar> = BinaryHeap::with_capacity(config.max_stars + 1);
+/// Streams through the catalog, keeping the N brightest stars per HEALPix cell
+/// to ensure spatially uniform coverage. Then builds quads from the uniformized set.
+pub fn build_index_from_catalog(
+    catalog: &impl StarCatalog,
+    config: &CatalogBuilderConfig,
+) -> Index {
+    let mp = MultiProgress::new();
+
+    let uni_depth = config.effective_uniformize_depth();
+    let n_cells = healpix::npix(uni_depth);
+    let max_per_cell = config.max_stars_per_cell;
+
+    // --- Phase 1: HEALPix uniformization ---
+    let pb_uni = mp.add(ProgressBar::new_spinner());
+    pb_uni.set_style(spinner_style());
+    pb_uni.set_prefix("✦ Uniformize");
+    pb_uni.set_message(format!(
+        "streaming catalog (depth {}, {} cells, {} per cell)...",
+        uni_depth, n_cells, max_per_cell
+    ));
+    pb_uni.enable_steady_tick(std::time::Duration::from_millis(80));
+
+    // Per-cell heaps: keep brightest max_per_cell stars per HEALPix pixel
+    let mut cell_heaps: HashMap<u64, BinaryHeap<HeapStar>> = HashMap::new();
+    let mut total_streamed: u64 = 0;
 
     for s in catalog.star_data() {
-        let star = HeapStar(s.magnitude, s.id, s.position.ra, s.position.dec);
-        if heap.len() < config.max_stars {
+        total_streamed += 1;
+        if total_streamed.is_multiple_of(1_000_000) {
+            pb_uni.set_message(format!(
+                "streamed {}M stars ({} cells populated)...",
+                total_streamed / 1_000_000,
+                cell_heaps.len()
+            ));
+        }
+
+        let pixel = healpix::lon_lat_to_nested(s.position.ra, s.position.dec, uni_depth);
+        let heap = cell_heaps
+            .entry(pixel)
+            .or_insert_with(|| BinaryHeap::with_capacity(max_per_cell + 1));
+
+        let star = HeapStar {
+            mag: s.magnitude,
+            id: s.id,
+            ra: s.position.ra,
+            dec: s.position.dec,
+        };
+
+        if heap.len() < max_per_cell {
             heap.push(star);
-        } else if let Some(faintest) = heap.peek() {
-            if star.0 < faintest.0 {
-                heap.pop();
-                heap.push(star);
-            }
+        } else if let Some(faintest) = heap.peek()
+            && star.mag < faintest.mag
+        {
+            heap.pop();
+            heap.push(star);
         }
     }
 
-    let mut stars: Vec<(u64, f64, f64, f64)> = heap
-        .into_iter()
-        .map(|HeapStar(mag, id, ra, dec)| (id, ra, dec, mag))
-        .collect();
-    stars.sort_by(|a, b| a.3.partial_cmp(&b.3).unwrap_or(std::cmp::Ordering::Equal));
+    // Flatten all heaps into a single sorted star list
+    let mut stars: Vec<IndexStar> = Vec::new();
+    for (_, heap) in cell_heaps {
+        for hs in heap {
+            stars.push(IndexStar {
+                catalog_id: hs.id,
+                ra: hs.ra,
+                dec: hs.dec,
+                mag: hs.mag,
+            });
+        }
+    }
+    stars.sort_by(|a, b| {
+        a.mag
+            .partial_cmp(&b.mag)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
-    build_index(&stars, config)
+    finish_spinner(
+        &pb_uni,
+        &format!(
+            "✓ {} stars from {}M catalog (depth {}, {} per cell)",
+            stars.len(),
+            total_streamed / 1_000_000,
+            uni_depth,
+            max_per_cell
+        ),
+    );
+
+    build_index_from_stars(
+        stars,
+        config.scale_lower,
+        config.scale_upper,
+        config.max_quads,
+        &mp,
+    )
 }
 
 /// Build an index from pre-collected `StarData` entries.
-///
-/// Useful when you've already filtered or transformed catalog data.
 pub fn build_index_from_star_data(stars: &[StarData], config: &IndexBuilderConfig) -> Index {
     let tuples: Vec<(u64, f64, f64, f64)> = stars
         .iter()
@@ -439,19 +560,12 @@ mod tests {
 
         let index = build_index(&catalog, &config);
 
-        // The backbone pair (star_ids[0], star_ids[1]) is the max-distance
-        // pair among the 4 quad stars. With canonical ordering this may be
-        // larger than the (A,B) pair that originally passed the scale filter,
-        // so we check that the backbone is at most scale_upper * sqrt(2)
-        // (diagonal of the search region).
         for quad in &index.quads {
             let a = &index.stars[quad.star_ids[0]];
             let b = &index.stars[quad.star_ids[1]];
             let a_xyz = radec_to_xyz(a.ra, a.dec);
             let b_xyz = radec_to_xyz(b.ra, b.dec);
             let dist = angular_distance(a_xyz, b_xyz);
-            // The max-distance pair can be up to ~2x the AB distance
-            // (since C,D are within ab_dist of the midpoint).
             assert!(
                 dist <= scale_upper * 3.0,
                 "quad backbone distance {dist} unexpectedly large (scale_upper = {scale_upper})"
@@ -546,7 +660,6 @@ mod tests {
         let index = build_index(&catalog, &config);
         assert!(!index.quads.is_empty());
 
-        // Recompute the code for the first quad and search for it
         let quad = &index.quads[0];
         let star_xyz: [[f64; 3]; DIMQUADS] = std::array::from_fn(|i| {
             let s = &index.stars[quad.star_ids[i]];
