@@ -12,4 +12,5 @@ pub mod index;
 pub mod kdtree;
 pub mod quads;
 pub mod solver;
+pub mod tweak;
 pub mod verify;
