@@ -1,6 +1,8 @@
 //! Main blind plate solver that ties together quad building, code matching,
 //! WCS fitting, and verification.
 
+use std::time::{Duration, Instant};
+
 use crate::extraction::DetectedSource;
 use crate::fitting::{FitError, fit_tan_wcs};
 use crate::geom::sphere::radec_to_xyz;
@@ -19,6 +21,8 @@ pub struct SolverConfig {
     pub code_tolerance: f64,
     /// Verification configuration.
     pub verify: VerifyConfig,
+    /// Maximum time to spend solving before giving up.
+    pub timeout: Option<Duration>,
 }
 
 impl Default for SolverConfig {
@@ -28,6 +32,7 @@ impl Default for SolverConfig {
             max_field_stars: 50,
             code_tolerance: 0.01,
             verify: VerifyConfig::default(),
+            timeout: None,
         }
     }
 }
@@ -113,6 +118,8 @@ pub fn solve(
         return None;
     }
 
+    let deadline = config.timeout.map(|d| Instant::now() + d);
+
     // 1. Sort sources by flux (descending = brightest first).
     let mut sorted: Vec<(usize, &DetectedSource)> = sources.iter().enumerate().collect();
     sorted.sort_by(|a, b| {
@@ -131,6 +138,11 @@ pub fn solve(
 
     // 2. For each "new" field star N, for each pair (A, B) where A < B < N:
     for n in 2..sorted.len() {
+        if let Some(dl) = deadline
+            && Instant::now() > dl
+        {
+            return None;
+        }
         for a in 0..n {
             for b in (a + 1)..n {
                 let (a_orig, sa) = sorted[a];
@@ -387,6 +399,7 @@ mod tests {
                 min_matches: 3,
                 ..VerifyConfig::default()
             },
+            ..SolverConfig::default()
         };
 
         let solution = solve(&sources, &[&index], (512.0, 512.0), &config);
@@ -491,6 +504,7 @@ mod tests {
                 min_matches: 3,
                 ..VerifyConfig::default()
             },
+            ..SolverConfig::default()
         };
 
         let solution = solve(&sources, &[&index], (512.0, 512.0), &config);
@@ -529,6 +543,7 @@ mod tests {
                 min_matches: 3,
                 ..VerifyConfig::default()
             },
+            ..SolverConfig::default()
         };
 
         let solution = solve(
@@ -751,6 +766,7 @@ mod tests {
                 min_matches: 3,
                 ..VerifyConfig::default()
             },
+            ..SolverConfig::default()
         };
 
         let solution = solve(&sources, &[&index], image_size, &config);

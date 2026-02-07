@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::process;
+use std::time::{Duration, Instant};
 
 use clap::{Parser, Subcommand};
 use ndarray::Array2;
@@ -42,6 +43,44 @@ enum Commands {
         /// Code matching tolerance (squared L2 in code space).
         #[arg(long, default_value = "0.01")]
         code_tolerance: f64,
+
+        /// Timeout per image in seconds (no limit if omitted).
+        #[arg(long)]
+        timeout: Option<f64>,
+    },
+
+    /// Solve multiple images against prebuilt star indexes.
+    BatchSolve {
+        /// Directory containing image files (PNG or FITS).
+        dir: PathBuf,
+
+        /// Path to index file(s). Can be repeated.
+        #[arg(short, long, required = true)]
+        index: Vec<PathBuf>,
+
+        /// Max sources to extract from each image.
+        #[arg(long, default_value = "200")]
+        max_sources: usize,
+
+        /// Detection threshold in sigma units.
+        #[arg(long, default_value = "5.0")]
+        threshold_sigma: f64,
+
+        /// Pixel scale range hint in arcsec/pixel (e.g. "0.5,5.0").
+        #[arg(long)]
+        scale_range: Option<String>,
+
+        /// Code matching tolerance (squared L2 in code space).
+        #[arg(long, default_value = "0.01")]
+        code_tolerance: f64,
+
+        /// Timeout per image in seconds (no limit if omitted).
+        #[arg(long)]
+        timeout: Option<f64>,
+
+        /// Glob pattern for files within the directory (default: "*_data_raw.fits").
+        #[arg(long, default_value = "*_data_raw.fits")]
+        pattern: String,
     },
 
     /// Build a star index from a starfield binary catalog.
@@ -265,6 +304,7 @@ fn cmd_solve(
     threshold_sigma: f64,
     scale_range: Option<(f64, f64)>,
     code_tolerance: f64,
+    timeout: Option<Duration>,
 ) {
     let array = load_image(image_path);
     let (h, w) = array.dim();
@@ -290,6 +330,7 @@ fn cmd_solve(
     let solver_config = SolverConfig {
         scale_range,
         code_tolerance,
+        timeout,
         ..SolverConfig::default()
     };
 
@@ -317,6 +358,113 @@ fn cmd_solve(
         None => {
             eprintln!("No solution found.");
             process::exit(1);
+        }
+    }
+}
+
+fn cmd_batch_solve(
+    dir: &Path,
+    index_paths: &[PathBuf],
+    extraction_config: &ExtractionConfig,
+    solver_config: &SolverConfig,
+    pattern: &str,
+) {
+    let indexes: Vec<Index> = index_paths
+        .iter()
+        .map(|p| {
+            Index::load(p).unwrap_or_else(|e| {
+                eprintln!("Failed to load index {}: {e}", p.display());
+                process::exit(1);
+            })
+        })
+        .collect();
+    let index_refs: Vec<&Index> = indexes.iter().collect();
+    eprintln!("Loaded {} index(es)", indexes.len());
+
+    let glob_pattern = dir.join(pattern);
+    let mut files: Vec<PathBuf> = glob::glob(glob_pattern.to_str().unwrap())
+        .unwrap_or_else(|e| {
+            eprintln!("Invalid glob pattern: {e}");
+            process::exit(1);
+        })
+        .filter_map(|r| r.ok())
+        .collect();
+    files.sort();
+
+    if files.is_empty() {
+        eprintln!("No files matched pattern '{}'", glob_pattern.display());
+        process::exit(1);
+    }
+    eprintln!("Found {} images to solve\n", files.len());
+
+    let mut n_solved = 0;
+    let mut n_failed = 0;
+    let mut solve_times: Vec<f64> = Vec::new();
+    let mut fail_times: Vec<f64> = Vec::new();
+
+    for (i, file) in files.iter().enumerate() {
+        let name = file.file_name().unwrap().to_string_lossy();
+        eprint!("[{:3}/{}] {}: ", i + 1, files.len(), name);
+
+        let array = load_image(file);
+        let t0 = Instant::now();
+        let result = solve_image(&array, &index_refs, extraction_config, solver_config);
+        let elapsed = t0.elapsed().as_secs_f64();
+
+        match result {
+            Some(solution) => {
+                let (ra, dec) = solution.wcs.field_center();
+                eprintln!(
+                    "SOLVED in {:.1}s  RA={:.4} Dec={:+.4}  matched={}",
+                    elapsed,
+                    ra.to_degrees(),
+                    dec.to_degrees(),
+                    solution.verify_result.n_matched
+                );
+                n_solved += 1;
+                solve_times.push(elapsed);
+            }
+            None => {
+                eprintln!("FAILED in {:.1}s", elapsed);
+                n_failed += 1;
+                fail_times.push(elapsed);
+            }
+        }
+    }
+
+    let total = n_solved + n_failed;
+    eprintln!("\n========== RESULTS ==========");
+    eprintln!(
+        "Solved: {}/{} ({:.0}%)",
+        n_solved,
+        total,
+        100.0 * n_solved as f64 / total as f64
+    );
+    eprintln!("Failed: {}/{}", n_failed, total);
+
+    if !solve_times.is_empty() {
+        solve_times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let min = solve_times[0];
+        let max = solve_times[solve_times.len() - 1];
+        let median = solve_times[solve_times.len() / 2];
+        let mean = solve_times.iter().sum::<f64>() / solve_times.len() as f64;
+        eprintln!("\nSolve time distribution:");
+        eprintln!("  Min:    {:.2}s", min);
+        eprintln!("  Median: {:.2}s", median);
+        eprintln!("  Mean:   {:.2}s", mean);
+        eprintln!("  Max:    {:.2}s", max);
+
+        // Histogram buckets
+        let buckets = [1.0, 5.0, 10.0, 30.0, 60.0];
+        eprintln!("\n  Cumulative:");
+        for &b in &buckets {
+            let count = solve_times.iter().filter(|&&t| t <= b).count();
+            eprintln!(
+                "    <= {:4.0}s: {:3} ({:.0}%)",
+                b,
+                count,
+                100.0 * count as f64 / solve_times.len() as f64
+            );
         }
     }
 }
@@ -690,8 +838,10 @@ fn main() {
             threshold_sigma,
             scale_range,
             code_tolerance,
+            timeout,
         } => {
             let sr = scale_range.as_ref().map(|s| parse_scale_range(s));
+            let dur = timeout.map(Duration::from_secs_f64);
             cmd_solve(
                 image,
                 index,
@@ -699,7 +849,33 @@ fn main() {
                 *threshold_sigma,
                 sr,
                 *code_tolerance,
+                dur,
             );
+        }
+        Commands::BatchSolve {
+            dir,
+            index,
+            max_sources,
+            threshold_sigma,
+            scale_range,
+            code_tolerance,
+            timeout,
+            pattern,
+        } => {
+            let sr = scale_range.as_ref().map(|s| parse_scale_range(s));
+            let dur = timeout.map(Duration::from_secs_f64);
+            let extraction_config = ExtractionConfig {
+                threshold_sigma: *threshold_sigma,
+                max_sources: *max_sources,
+                ..ExtractionConfig::default()
+            };
+            let solver_config = SolverConfig {
+                scale_range: sr,
+                code_tolerance: *code_tolerance,
+                timeout: dur,
+                ..SolverConfig::default()
+            };
+            cmd_batch_solve(dir, index, &extraction_config, &solver_config, pattern);
         }
         Commands::BuildIndex {
             catalog,
