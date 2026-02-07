@@ -89,7 +89,7 @@ impl TanWcs {
     /// to a unit vector on the sphere.
     ///
     /// Follows the astrometry.net `tan_iwc2xyzarr` algorithm.
-    fn iwc_to_xyz(&self, x: f64, y: f64) -> [f64; 3] {
+    pub(crate) fn iwc_to_xyz(&self, x: f64, y: f64) -> [f64; 3] {
         let x = -x;
 
         let r = sphere::radec_to_xyz(self.crval[0], self.crval[1]);
