@@ -280,4 +280,170 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn wcs_test_image_roundtrip() {
+        let ps = (0.1296_f64 / 3600.0).to_radians(); // 0.1296 arcsec/pixel in radians
+        let crval_ra = 12.3634_f64.to_radians();
+        let crval_dec = (-9.7928_f64).to_radians();
+
+        // Negative CD matrix (typical for real FITS images: RA decreases with pixel x)
+        let wcs_neg = TanWcs {
+            crval: [crval_ra, crval_dec],
+            crpix: [3190.0, 4784.0],
+            cd: [[-ps, 0.0], [0.0, -ps]],
+            image_size: [6380.0, 9568.0],
+        };
+
+        // Positive CD matrix (non-standard sign)
+        let wcs_pos = TanWcs {
+            crval: [crval_ra, crval_dec],
+            crpix: [3190.0, 4784.0],
+            cd: [[ps, 0.0], [0.0, ps]],
+            image_size: [6380.0, 9568.0],
+        };
+
+        let test_pixels: &[(f64, f64)] = &[
+            (3190.0, 4784.0), // center (crpix)
+            (0.0, 0.0),       // top-left corner
+            (6380.0, 9568.0), // bottom-right corner
+            (6380.0, 0.0),    // top-right corner
+            (0.0, 9568.0),    // bottom-left corner
+            (1000.0, 2000.0), // arbitrary interior point
+            (5000.0, 7000.0), // another interior point
+        ];
+
+        println!(
+            "=== Pixel scale: {:.6e} rad/px = {:.4} arcsec/px ===",
+            ps,
+            ps.to_degrees() * 3600.0
+        );
+        println!(
+            "=== CRVAL: RA={:.4} deg, Dec={:.4} deg ===",
+            crval_ra.to_degrees(),
+            crval_dec.to_degrees()
+        );
+        println!();
+
+        // Test round-trip for negative CD matrix
+        println!("--- Negative CD matrix: cd = [[-ps, 0], [0, -ps]] ---");
+        for &(px, py) in test_pixels {
+            let (ra, dec) = wcs_neg.pixel_to_radec(px, py);
+            let (px2, py2) = wcs_neg.radec_to_pixel(ra, dec).unwrap();
+            let err_px = (px - px2).abs();
+            let err_py = (py - py2).abs();
+            println!(
+                "  pixel ({:7.1}, {:7.1}) -> RA={:10.6} Dec={:10.6} deg -> pixel ({:11.6}, {:11.6})  err=({:.2e}, {:.2e})",
+                px,
+                py,
+                ra.to_degrees(),
+                dec.to_degrees(),
+                px2,
+                py2,
+                err_px,
+                err_py,
+            );
+            assert_close(px, px2, 1e-4);
+            assert_close(py, py2, 1e-4);
+        }
+        println!();
+
+        // Test round-trip for positive CD matrix
+        println!("--- Positive CD matrix: cd = [[ps, 0], [0, ps]] ---");
+        for &(px, py) in test_pixels {
+            let (ra, dec) = wcs_pos.pixel_to_radec(px, py);
+            let (px2, py2) = wcs_pos.radec_to_pixel(ra, dec).unwrap();
+            let err_px = (px - px2).abs();
+            let err_py = (py - py2).abs();
+            println!(
+                "  pixel ({:7.1}, {:7.1}) -> RA={:10.6} Dec={:10.6} deg -> pixel ({:11.6}, {:11.6})  err=({:.2e}, {:.2e})",
+                px,
+                py,
+                ra.to_degrees(),
+                dec.to_degrees(),
+                px2,
+                py2,
+                err_px,
+                err_py,
+            );
+            assert_close(px, px2, 1e-4);
+            assert_close(py, py2, 1e-4);
+        }
+        println!();
+
+        // Compare RA/Dec at the same pixel positions under both conventions
+        println!("--- RA/Dec comparison: negative vs positive CD at same pixel positions ---");
+        println!(
+            "  {:>15}  {:>18} {:>18}  {:>18} {:>18}",
+            "pixel", "RA_neg (deg)", "Dec_neg (deg)", "RA_pos (deg)", "Dec_pos (deg)"
+        );
+        for &(px, py) in test_pixels {
+            let (ra_neg, dec_neg) = wcs_neg.pixel_to_radec(px, py);
+            let (ra_pos, dec_pos) = wcs_pos.pixel_to_radec(px, py);
+            println!(
+                "  ({:7.1},{:6.1})  {:18.10} {:18.10}  {:18.10} {:18.10}",
+                px,
+                py,
+                ra_neg.to_degrees(),
+                dec_neg.to_degrees(),
+                ra_pos.to_degrees(),
+                dec_pos.to_degrees(),
+            );
+
+            // At crpix both should map to crval
+            if (px - 3190.0).abs() < 0.1 && (py - 4784.0).abs() < 0.1 {
+                println!("    ^ center pixel: both should equal CRVAL");
+                assert_close(ra_neg, crval_ra, 1e-10);
+                assert_close(dec_neg, crval_dec, 1e-10);
+                assert_close(ra_pos, crval_ra, 1e-10);
+                assert_close(dec_pos, crval_dec, 1e-10);
+            }
+        }
+        println!();
+
+        // Verify that negative CD flips the direction relative to positive CD
+        // For pixel offset (+dx, 0) from crpix:
+        //   negative CD -> RA should decrease (move west)
+        //   positive CD -> RA should increase (move east)
+        let dx = 500.0;
+        let (ra_neg_right, _) = wcs_neg.pixel_to_radec(3190.0 + dx, 4784.0);
+        let (ra_pos_right, _) = wcs_pos.pixel_to_radec(3190.0 + dx, 4784.0);
+        println!(
+            "--- Direction check: pixel offset +{} in x from crpix ---",
+            dx
+        );
+        println!(
+            "  Negative CD: RA = {:.10} deg (delta from crval: {:.6e} deg)",
+            ra_neg_right.to_degrees(),
+            (ra_neg_right - crval_ra).to_degrees(),
+        );
+        println!(
+            "  Positive CD: RA = {:.10} deg (delta from crval: {:.6e} deg)",
+            ra_pos_right.to_degrees(),
+            (ra_pos_right - crval_ra).to_degrees(),
+        );
+
+        // With negative cd[0][0], moving +x in pixel space should decrease RA
+        // (because IWC x = cd[0][0]*u = -ps*u, and then iwc_to_xyz negates x again,
+        //  so the net effect on the sphere depends on the full chain)
+        let ra_delta_neg = ra_neg_right - crval_ra;
+        let ra_delta_pos = ra_pos_right - crval_ra;
+        println!("  Neg CD: RA delta = {:.6e} rad", ra_delta_neg);
+        println!("  Pos CD: RA delta = {:.6e} rad", ra_delta_pos);
+        println!(
+            "  These should have opposite signs: neg={:.6e}, pos={:.6e}",
+            ra_delta_neg, ra_delta_pos
+        );
+
+        // The two deltas should be opposite in sign (the CD sign flips the mapping)
+        assert!(
+            ra_delta_neg * ra_delta_pos < 0.0,
+            "Expected opposite RA directions for opposite CD signs, got neg={}, pos={}",
+            ra_delta_neg,
+            ra_delta_pos,
+        );
+
+        println!();
+        println!("All round-trip and sign-convention tests passed.");
+    }
 }

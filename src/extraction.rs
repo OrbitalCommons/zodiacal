@@ -15,9 +15,21 @@ pub struct ExtractionConfig {
     /// Gaussian PSF sigma in pixels (not FWHM).
     pub psf_sigma: f64,
     /// Detection threshold in units of background sigma.
+    /// Used only when `use_otsu` is false.
     pub threshold_sigma: f64,
     /// Maximum number of sources to return (brightest first).
     pub max_sources: usize,
+    /// Use Otsu's automatic thresholding instead of sigma-based.
+    pub use_otsu: bool,
+    /// Maximum aspect ratio for a valid star (eigenvalue ratio).
+    /// Components more elongated than this are rejected.
+    pub max_aspect_ratio: f64,
+    /// Maximum number of pixels in a connected component.
+    /// Larger blobs are rejected as non-stellar.
+    pub max_component_size: usize,
+    /// Maximum fraction of a component's flux that a single pixel may contain.
+    /// Set to 1.0 to disable.
+    pub max_peak_fraction: f64,
 }
 
 impl Default for ExtractionConfig {
@@ -26,8 +38,79 @@ impl Default for ExtractionConfig {
             psf_sigma: 1.5,
             threshold_sigma: 5.0,
             max_sources: 200,
+            use_otsu: false,
+            max_aspect_ratio: f64::MAX,
+            max_component_size: usize::MAX,
+            max_peak_fraction: 1.0,
         }
     }
+}
+
+/// Compute optimal threshold using Otsu's method.
+///
+/// Works on arbitrary-range f32 images by mapping into a 4096-bin histogram
+/// clipped at p99.9 to avoid extreme outliers dominating the bin range.
+/// Returns the threshold in the image's native value range.
+fn otsu_threshold(image: &Array2<f32>) -> f32 {
+    if image.is_empty() {
+        return 0.0;
+    }
+
+    // Find the histogram range using clipped percentiles to avoid
+    // extreme values (like saturated star peaks) dominating the bins.
+    let mut sorted: Vec<f32> = image.iter().copied().collect();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let n = sorted.len();
+    let min_val = sorted[0];
+    let clip_hi = sorted[(n as f64 * 0.999) as usize]; // p99.9
+
+    let range = clip_hi - min_val;
+    if range <= 0.0 {
+        return min_val;
+    }
+
+    let n_bins = 4096;
+    let mut histogram = vec![0u64; n_bins];
+    let total_pixels = n as f64;
+
+    for &v in image.iter() {
+        let v_clipped = v.min(clip_hi);
+        let bin = (((v_clipped - min_val) / range) * (n_bins - 1) as f32) as usize;
+        histogram[bin.min(n_bins - 1)] += 1;
+    }
+
+    let mut sum = 0.0_f64;
+    for (i, &count) in histogram.iter().enumerate() {
+        sum += i as f64 * count as f64;
+    }
+
+    let mut sum_b = 0.0_f64;
+    let mut weight_b = 0.0_f64;
+    let mut max_variance = 0.0_f64;
+    let mut best_bin = 0;
+
+    for (i, &count) in histogram.iter().enumerate() {
+        weight_b += count as f64;
+        if weight_b < 1.0 {
+            continue;
+        }
+        let weight_f = total_pixels - weight_b;
+        if weight_f < 1.0 {
+            break;
+        }
+
+        sum_b += i as f64 * count as f64;
+        let mean_b = sum_b / weight_b;
+        let mean_f = (sum - sum_b) / weight_f;
+
+        let variance = weight_b * weight_f * (mean_b - mean_f).powi(2);
+        if variance > max_variance {
+            max_variance = variance;
+            best_bin = i;
+        }
+    }
+
+    min_val + (best_bin as f32 / (n_bins - 1) as f32) * range
 }
 
 /// Compute the median of a slice of f32 values.
@@ -102,12 +185,74 @@ fn find_connected_components(mask: &Array2<bool>) -> Vec<Vec<(usize, usize)>> {
     components
 }
 
+/// Compute aspect ratio from second central moments of a component.
+///
+/// Returns the ratio of major to minor axis lengths (eigenvalue ratio),
+/// or `None` if the component is degenerate.
+fn component_aspect_ratio(comp: &[(usize, usize)], image: &Array2<f32>, background: f32) -> f64 {
+    if comp.len() < 3 {
+        return 1.0;
+    }
+
+    // Compute flux-weighted centroid first.
+    let mut sum_flux = 0.0_f64;
+    let mut sum_x = 0.0_f64;
+    let mut sum_y = 0.0_f64;
+
+    for &(y, x) in comp {
+        let flux = (image[[y, x]] - background).max(0.0) as f64;
+        sum_flux += flux;
+        sum_x += x as f64 * flux;
+        sum_y += y as f64 * flux;
+    }
+
+    if sum_flux <= 0.0 {
+        return 1.0;
+    }
+
+    let cx = sum_x / sum_flux;
+    let cy = sum_y / sum_flux;
+
+    // Compute second central moments.
+    let mut m_xx = 0.0_f64;
+    let mut m_yy = 0.0_f64;
+    let mut m_xy = 0.0_f64;
+
+    for &(y, x) in comp {
+        let flux = (image[[y, x]] - background).max(0.0) as f64;
+        let dx = x as f64 - cx;
+        let dy = y as f64 - cy;
+        m_xx += flux * dx * dx;
+        m_yy += flux * dy * dy;
+        m_xy += flux * dx * dy;
+    }
+
+    m_xx /= sum_flux;
+    m_yy /= sum_flux;
+    m_xy /= sum_flux;
+
+    // Eigenvalues of the 2x2 covariance matrix.
+    let trace = m_xx + m_yy;
+    let det = m_xx * m_yy - m_xy * m_xy;
+    let discriminant = (trace * trace - 4.0 * det).max(0.0);
+    let sqrt_disc = discriminant.sqrt();
+
+    let lambda1 = (trace + sqrt_disc) / 2.0;
+    let lambda2 = (trace - sqrt_disc) / 2.0;
+
+    if lambda2 > 1e-10 {
+        (lambda1 / lambda2).sqrt()
+    } else {
+        f64::MAX
+    }
+}
+
 /// Extract point sources from a 2D image.
 ///
 /// Algorithm:
-/// 1. Estimate background level and noise (median and MAD-based sigma)
-/// 2. Find pixels above threshold (background + threshold_sigma * noise)
-/// 3. Connected-component labeling to group adjacent bright pixels
+/// 1. Threshold using Otsu's method (or background + sigma * noise)
+/// 2. Connected-component labeling to group adjacent bright pixels
+/// 3. Filter by size, shape (aspect ratio)
 /// 4. For each component, compute flux-weighted centroid
 /// 5. Sort by flux (brightest first), truncate to max_sources
 pub fn extract_sources(image: &Array2<f32>, config: &ExtractionConfig) -> Vec<DetectedSource> {
@@ -118,9 +263,9 @@ pub fn extract_sources(image: &Array2<f32>, config: &ExtractionConfig) -> Vec<De
 
     let (background, sigma) = estimate_background(image);
 
-    // When sigma is zero the image is uniform; any pixel above
-    // background is a real source so use a tiny threshold offset.
-    let threshold = if sigma > 0.0 {
+    let threshold = if config.use_otsu {
+        otsu_threshold(image)
+    } else if sigma > 0.0 {
         background + config.threshold_sigma as f32 * sigma
     } else {
         background + f32::EPSILON
@@ -131,9 +276,14 @@ pub fn extract_sources(image: &Array2<f32>, config: &ExtractionConfig) -> Vec<De
 
     let mut sources: Vec<DetectedSource> = components
         .into_iter()
-        .filter(|comp| comp.len() >= 3)
+        .filter(|comp| comp.len() >= 3 && comp.len() <= config.max_component_size)
+        .filter(|comp| {
+            config.max_aspect_ratio == f64::MAX
+                || component_aspect_ratio(comp, image, background) < config.max_aspect_ratio
+        })
         .filter_map(|comp| {
             let mut sum_flux = 0.0_f64;
+            let mut max_pixel_flux = 0.0_f64;
             let mut sum_x = 0.0_f64;
             let mut sum_y = 0.0_f64;
 
@@ -141,12 +291,22 @@ pub fn extract_sources(image: &Array2<f32>, config: &ExtractionConfig) -> Vec<De
                 let flux = (image[[y, x]] - background) as f64;
                 if flux > 0.0 {
                     sum_flux += flux;
+                    if flux > max_pixel_flux {
+                        max_pixel_flux = flux;
+                    }
                     sum_x += x as f64 * flux;
                     sum_y += y as f64 * flux;
                 }
             }
 
             if sum_flux <= 0.0 {
+                return None;
+            }
+
+            // Reject sources where a single pixel dominates the flux.
+            if config.max_peak_fraction < 1.0
+                && max_pixel_flux / sum_flux > config.max_peak_fraction
+            {
                 return None;
             }
 
@@ -193,10 +353,17 @@ mod tests {
         }
     }
 
+    fn sigma_config() -> ExtractionConfig {
+        ExtractionConfig {
+            use_otsu: false,
+            ..ExtractionConfig::default()
+        }
+    }
+
     #[test]
     fn empty_image() {
         let image = Array2::<f32>::zeros((100, 100));
-        let config = ExtractionConfig::default();
+        let config = sigma_config();
         let sources = extract_sources(&image, &config);
         assert!(sources.is_empty());
     }
@@ -210,6 +377,9 @@ mod tests {
             psf_sigma: 2.0,
             threshold_sigma: 3.0,
             max_sources: 10,
+            use_otsu: false,
+            max_component_size: 100_000,
+            ..ExtractionConfig::default()
         };
 
         let sources = extract_sources(&image, &config);
@@ -233,6 +403,9 @@ mod tests {
             psf_sigma: 2.0,
             threshold_sigma: 3.0,
             max_sources: 10,
+            use_otsu: false,
+            max_component_size: 100_000,
+            ..ExtractionConfig::default()
         };
 
         let sources = extract_sources(&image, &config);
@@ -256,6 +429,8 @@ mod tests {
             psf_sigma: 1.5,
             threshold_sigma: 3.0,
             max_sources: 10,
+            use_otsu: false,
+            ..ExtractionConfig::default()
         };
 
         let sources = extract_sources(&image, &config);
@@ -304,6 +479,9 @@ mod tests {
             psf_sigma: 2.0,
             threshold_sigma: 3.0,
             max_sources: 5,
+            use_otsu: false,
+            max_component_size: 100_000,
+            ..ExtractionConfig::default()
         };
 
         let sources = extract_sources(&image, &config);
@@ -333,6 +511,8 @@ mod tests {
             psf_sigma: 2.0,
             threshold_sigma: 5.0,
             max_sources: 10,
+            use_otsu: false,
+            ..ExtractionConfig::default()
         };
 
         let sources = extract_sources(&image, &config);
@@ -352,5 +532,74 @@ mod tests {
 
         assert!(has_source_near_40_40, "missing source near (40, 40)");
         assert!(has_source_near_90_90, "missing source near (90, 90)");
+    }
+
+    #[test]
+    fn otsu_detects_stars_on_low_background() {
+        // Simulate realistic astronomical image: low background with sparse bright stars
+        let mut image = Array2::<f32>::from_elem((200, 200), 10.0);
+
+        // Add some background noise
+        let (ny, nx) = image.dim();
+        for y in 0..ny {
+            for x in 0..nx {
+                let hash = ((x * 7919 + y * 104729 + 1) % 1000) as f32 / 1000.0;
+                image[[y, x]] += hash * 5.0; // background 10-15 ADU
+            }
+        }
+
+        // Place bright stars
+        make_gaussian(&mut image, 50.0, 50.0, 1.5, 500.0);
+        make_gaussian(&mut image, 120.0, 80.0, 1.5, 200.0);
+        make_gaussian(&mut image, 80.0, 150.0, 1.5, 300.0);
+
+        let config = ExtractionConfig {
+            max_sources: 10,
+            ..ExtractionConfig::default()
+        };
+
+        let sources = extract_sources(&image, &config);
+        assert!(
+            sources.len() >= 3,
+            "Otsu should detect at least 3 stars, got {}",
+            sources.len()
+        );
+    }
+
+    #[test]
+    fn otsu_threshold_basic() {
+        // Bimodal image: background at ~10, stars at ~1000
+        let mut image = Array2::<f32>::from_elem((100, 100), 10.0);
+        make_gaussian(&mut image, 50.0, 50.0, 3.0, 1000.0);
+
+        let thresh = otsu_threshold(&image);
+        // Threshold should be between background (10) and star peak (1010)
+        assert!(thresh > 10.0, "Otsu threshold too low: {}", thresh);
+        assert!(thresh < 500.0, "Otsu threshold too high: {}", thresh);
+    }
+
+    #[test]
+    fn aspect_ratio_rejects_elongated() {
+        let mut image = Array2::<f32>::zeros((64, 64));
+        // Create a highly elongated feature (horizontal line)
+        for x in 10..50 {
+            image[[30, x]] = 500.0;
+            image[[31, x]] = 500.0;
+        }
+
+        let config = ExtractionConfig {
+            max_aspect_ratio: 2.5,
+            use_otsu: false,
+            threshold_sigma: 3.0,
+            ..ExtractionConfig::default()
+        };
+
+        let sources = extract_sources(&image, &config);
+        // The elongated feature should be rejected
+        assert!(
+            sources.is_empty(),
+            "elongated feature should be rejected, got {} sources",
+            sources.len()
+        );
     }
 }

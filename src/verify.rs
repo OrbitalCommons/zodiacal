@@ -24,6 +24,8 @@ pub struct VerifyConfig {
     pub log_odds_accept: f64,
     /// Log-odds threshold to bail early (definitely wrong).
     pub log_odds_bail: f64,
+    /// Minimum number of matched stars to accept a solution.
+    pub min_matches: usize,
 }
 
 impl Default for VerifyConfig {
@@ -33,6 +35,7 @@ impl Default for VerifyConfig {
             distractor_fraction: 0.25,
             log_odds_accept: 20.0,
             log_odds_bail: -20.0,
+            min_matches: 10,
         }
     }
 }
@@ -55,7 +58,7 @@ pub struct VerifyResult {
 impl VerifyResult {
     /// Check whether a verify result represents an accepted solution.
     pub fn is_accepted(&self, config: &VerifyConfig) -> bool {
-        self.log_odds >= config.log_odds_accept
+        self.log_odds >= config.log_odds_accept && self.n_matched >= config.min_matches
     }
 }
 
@@ -112,13 +115,19 @@ pub fn verify_solution(
     }
 
     // 3. Build a 2D KD-tree over projected reference star pixel positions.
+    let n_ref = proj_points.len() as f64;
     let ref_tree = KdTree::<2>::build(proj_points, proj_indices);
 
     // 4. Score each field source.
     let image_area = wcs.image_size[0] * wcs.image_size[1];
+    let match_area = PI * config.match_radius_pix * config.match_radius_pix;
+    // Probability of a match under the "correct WCS" hypothesis:
+    // the star is within match_radius of its true projected position.
     let sigma_sq = config.match_radius_pix * config.match_radius_pix / 4.0;
     let p_match = 1.0 / (PI * sigma_sq);
-    let p_distractor = 1.0 / image_area;
+    // Probability of a random match under the "wrong WCS" hypothesis:
+    // a field source randomly lands within match_radius of ANY reference star.
+    let p_distractor = (n_ref * match_area / image_area).max(1.0 / image_area);
     let match_radius_sq = config.match_radius_pix * config.match_radius_pix;
 
     let mut log_odds = 0.0;
@@ -158,7 +167,7 @@ pub fn verify_solution(
             n_distractor += field_sources.len() - field_idx - 1;
             break;
         }
-        if log_odds >= config.log_odds_accept {
+        if log_odds >= config.log_odds_accept && n_matched >= config.min_matches {
             // Count remaining as distractors for bookkeeping (conservative).
             n_distractor += field_sources.len() - field_idx - 1;
             break;
@@ -371,12 +380,15 @@ mod tests {
             });
         }
 
-        let config = VerifyConfig::default();
+        let config = VerifyConfig {
+            min_matches: 3,
+            ..VerifyConfig::default()
+        };
         let result = verify_solution(&wcs, &field_sources, &index, &config);
 
         assert!(
-            result.n_matched >= 2,
-            "Expected at least 2 matches, got {}",
+            result.n_matched >= 3,
+            "Expected at least 3 matches, got {}",
             result.n_matched
         );
         assert!(
@@ -475,7 +487,7 @@ mod tests {
 
         let borderline = VerifyResult {
             log_odds: 10.0,
-            n_matched: 5,
+            n_matched: 10,
             n_distractor: 5,
             n_conflict: 0,
             matched_pairs: vec![],
