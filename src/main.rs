@@ -72,7 +72,91 @@ enum Commands {
     },
 }
 
-fn load_image(path: &Path) -> Array2<f32> {
+#[cfg(feature = "fits")]
+fn load_fits(path: &Path) -> Array2<f32> {
+    use fitsrs::Fits;
+    use fitsrs::card::Value;
+    use fitsrs::hdu::HDU;
+    use fitsrs::hdu::data::image::Pixels;
+    use std::fs::File;
+    use std::io::BufReader;
+
+    let f = File::open(path).unwrap_or_else(|e| {
+        eprintln!("Failed to open FITS file {}: {e}", path.display());
+        process::exit(1);
+    });
+    let reader = BufReader::new(f);
+    let mut hdu_list = Fits::from_reader(reader);
+
+    let hdu = match hdu_list.next() {
+        Some(Ok(HDU::Primary(hdu))) => hdu,
+        Some(Ok(_)) => {
+            eprintln!("First HDU is not a primary image HDU");
+            process::exit(1);
+        }
+        Some(Err(e)) => {
+            eprintln!("Failed to read FITS HDU: {e}");
+            process::exit(1);
+        }
+        None => {
+            eprintln!("FITS file contains no HDUs");
+            process::exit(1);
+        }
+    };
+
+    let xtension = hdu.get_header().get_xtension();
+    let naxis = xtension.get_naxis();
+    if naxis.len() < 2 {
+        eprintln!("FITS image has fewer than 2 axes");
+        process::exit(1);
+    }
+    let naxis1 = naxis[0] as usize; // width
+    let naxis2 = naxis[1] as usize; // height
+
+    let header = hdu.get_header();
+    let bzero: f64 = match header.get("BZERO") {
+        Some(Value::Float { value, .. }) => *value,
+        Some(Value::Integer { value, .. }) => *value as f64,
+        _ => 0.0,
+    };
+    let bscale: f64 = match header.get("BSCALE") {
+        Some(Value::Float { value, .. }) => *value,
+        Some(Value::Integer { value, .. }) => *value as f64,
+        _ => 1.0,
+    };
+
+    let image_data = hdu_list.get_data(&hdu);
+    let pixels = image_data.pixels();
+
+    let raw: Vec<f32> = match pixels {
+        Pixels::U8(it) => it.map(|v| (v as f64 * bscale + bzero) as f32).collect(),
+        Pixels::I16(it) => it.map(|v| (v as f64 * bscale + bzero) as f32).collect(),
+        Pixels::I32(it) => it.map(|v| (v as f64 * bscale + bzero) as f32).collect(),
+        Pixels::I64(it) => it.map(|v| (v as f64 * bscale + bzero) as f32).collect(),
+        Pixels::F32(it) => it.map(|v| (v as f64 * bscale + bzero) as f32).collect(),
+        Pixels::F64(it) => it.map(|v| (v * bscale + bzero) as f32).collect(),
+    };
+
+    let expected = naxis1 * naxis2;
+    if raw.len() != expected {
+        eprintln!(
+            "FITS pixel count mismatch: expected {} ({}x{}), got {}",
+            expected,
+            naxis1,
+            naxis2,
+            raw.len()
+        );
+        process::exit(1);
+    }
+
+    // FITS: NAXIS1=width, NAXIS2=height, row-major
+    Array2::from_shape_vec((naxis2, naxis1), raw).unwrap_or_else(|e| {
+        eprintln!("Failed to reshape FITS data: {e}");
+        process::exit(1);
+    })
+}
+
+fn load_png(path: &Path) -> Array2<f32> {
     let img = image::open(path).unwrap_or_else(|e| {
         eprintln!("Failed to load image {}: {e}", path.display());
         process::exit(1);
@@ -84,6 +168,19 @@ fn load_image(path: &Path) -> Array2<f32> {
         eprintln!("Failed to reshape image data: {e}");
         process::exit(1);
     })
+}
+
+fn load_image(path: &Path) -> Array2<f32> {
+    match path.extension().and_then(|e| e.to_str()) {
+        #[cfg(feature = "fits")]
+        Some("fits" | "fit" | "fts") => load_fits(path),
+        #[cfg(not(feature = "fits"))]
+        Some("fits" | "fit" | "fts") => {
+            eprintln!("FITS support not enabled. Build with --features fits");
+            process::exit(1);
+        }
+        _ => load_png(path),
+    }
 }
 
 fn parse_scale_range(s: &str) -> (f64, f64) {
