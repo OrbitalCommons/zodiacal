@@ -10,4 +10,5 @@ pub mod geom;
 pub mod index;
 pub mod kdtree;
 pub mod quads;
+pub mod solver;
 pub mod verify;

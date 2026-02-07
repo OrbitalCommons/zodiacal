@@ -4,6 +4,7 @@ use super::sphere;
 ///
 /// Maps between pixel coordinates and celestial positions using the
 /// standard FITS TAN projection.
+#[derive(Debug, Clone)]
 pub struct TanWcs {
     /// Reference point on sky (RA, Dec) in radians.
     pub crval: [f64; 2],
