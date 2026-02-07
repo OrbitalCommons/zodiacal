@@ -478,13 +478,207 @@ pub fn build_index_from_catalog(
         ),
     );
 
-    build_index_from_stars(
+    // --- Phase 2: Build star KD-tree ---
+    let pb_tree = mp.add(ProgressBar::new_spinner());
+    pb_tree.set_style(spinner_style());
+    pb_tree.set_prefix("✦ Star tree");
+    pb_tree.set_message("building 3D KD-tree...");
+    pb_tree.enable_steady_tick(std::time::Duration::from_millis(80));
+
+    let xyzs: Vec<[f64; 3]> = stars.iter().map(|s| radec_to_xyz(s.ra, s.dec)).collect();
+    let star_points = xyzs.clone();
+    let star_indices: Vec<usize> = (0..xyzs.len()).collect();
+    let star_tree = KdTree::<3>::build(star_points, star_indices);
+
+    finish_spinner(&pb_tree, &format!("✓ KD-tree built ({} nodes)", xyzs.len()));
+
+    // --- Phase 3: Per-cell quad building ---
+    let quad_depth = config
+        .quad_depth
+        .unwrap_or_else(|| healpix::depth_for_scale(config.scale_upper * 2.0));
+    let n_quad_cells = healpix::npix(quad_depth);
+    let quads_per_cell = (config.max_quads as u64 / n_quad_cells).max(1) as usize;
+
+    let pb_quads = mp.add(ProgressBar::new(n_quad_cells));
+    pb_quads.set_style(bar_style());
+    pb_quads.set_prefix("✦ Quads");
+    pb_quads.set_message(format!(
+        "per-cell quad building (depth {}, {} cells, {} per cell)...",
+        quad_depth, n_quad_cells, quads_per_cell
+    ));
+    pb_quads.enable_steady_tick(std::time::Duration::from_millis(80));
+
+    // Assign each star to its quad-depth cell.
+    let mut cell_stars: HashMap<u64, Vec<usize>> = HashMap::new();
+    for (idx, star) in stars.iter().enumerate() {
+        let cell = healpix::lon_lat_to_nested(star.ra, star.dec, quad_depth);
+        cell_stars.entry(cell).or_default().push(idx);
+    }
+
+    // Track how many times each star is used in quads (for max_reuse).
+    let star_use_count: Vec<AtomicUsize> = (0..stars.len()).map(|_| AtomicUsize::new(0)).collect();
+
+    // Process cells in parallel.
+    let cell_ids: Vec<u64> = (0..n_quad_cells).collect();
+    let all_cell_quads: Vec<Vec<(Quad, [f64; DIMCODES])>> = cell_ids
+        .par_iter()
+        .map(|&cell_id| {
+            pb_quads.inc(1);
+
+            // Gather star indices from this cell + neighbors.
+            let mut neighbor_cells = healpix::neighbours(cell_id, quad_depth);
+            neighbor_cells.push(cell_id);
+
+            let mut local_star_indices: Vec<usize> = Vec::new();
+            for &nc in &neighbor_cells {
+                if let Some(indices) = cell_stars.get(&nc) {
+                    local_star_indices.extend_from_slice(indices);
+                }
+            }
+            local_star_indices.sort_unstable();
+            local_star_indices.dedup();
+
+            if local_star_indices.len() < DIMQUADS {
+                return Vec::new();
+            }
+
+            let mut cell_quads: Vec<(Quad, [f64; DIMCODES])> = Vec::new();
+            let mut seen: HashSet<[usize; DIMQUADS]> = HashSet::new();
+
+            // Try to build quads from pairs (A, B) where A is in this cell.
+            let this_cell_stars: Vec<usize> = cell_stars.get(&cell_id).cloned().unwrap_or_default();
+
+            'outer: for &a_idx in &this_cell_stars {
+                if cell_quads.len() >= quads_per_cell {
+                    break;
+                }
+
+                let a_xyz = xyzs[a_idx];
+
+                for &b_idx in &local_star_indices {
+                    if b_idx == a_idx {
+                        continue;
+                    }
+
+                    let b_xyz = xyzs[b_idx];
+                    let ab_dist = angular_distance(a_xyz, b_xyz);
+                    if ab_dist < config.scale_lower || ab_dist > config.scale_upper {
+                        continue;
+                    }
+
+                    let mid = star_midpoint(a_xyz, b_xyz);
+                    let cd_radius_sq = angular_to_chord_sq(ab_dist);
+                    let candidates: Vec<usize> = local_star_indices
+                        .iter()
+                        .copied()
+                        .filter(|&idx| {
+                            idx != a_idx && idx != b_idx && {
+                                let d = xyzs[idx];
+                                let dx = d[0] - mid[0];
+                                let dy = d[1] - mid[1];
+                                let dz = d[2] - mid[2];
+                                dx * dx + dy * dy + dz * dz < cd_radius_sq
+                            }
+                        })
+                        .collect();
+
+                    for ci in 0..candidates.len() {
+                        for di in (ci + 1)..candidates.len() {
+                            let c_idx = candidates[ci];
+                            let d_idx = candidates[di];
+
+                            let mut key = [a_idx, b_idx, c_idx, d_idx];
+                            key.sort();
+                            if !seen.insert(key) {
+                                continue;
+                            }
+
+                            // Check reuse limits.
+                            let can_use = [a_idx, b_idx, c_idx, d_idx].iter().all(|&idx| {
+                                star_use_count[idx].load(Ordering::Relaxed) < config.max_reuse
+                            });
+                            if !can_use {
+                                continue;
+                            }
+
+                            let raw_xyz = [a_xyz, b_xyz, xyzs[c_idx], xyzs[d_idx]];
+                            let raw_ids = [a_idx, b_idx, c_idx, d_idx];
+                            let (ordered_xyz, ordered_ids) =
+                                canonical_quad_order(&raw_xyz, raw_ids);
+                            let (code, canonical_ids, _) =
+                                compute_canonical_code(&ordered_xyz, ordered_ids);
+
+                            for &idx in &canonical_ids {
+                                star_use_count[idx].fetch_add(1, Ordering::Relaxed);
+                            }
+
+                            cell_quads.push((
+                                Quad {
+                                    star_ids: canonical_ids,
+                                },
+                                code,
+                            ));
+
+                            if cell_quads.len() >= quads_per_cell {
+                                break 'outer;
+                            }
+                        }
+                    }
+                }
+            }
+
+            cell_quads
+        })
+        .collect();
+
+    // Merge all cell quads.
+    let mut quads: Vec<Quad> = Vec::new();
+    let mut codes: Vec<[f64; DIMCODES]> = Vec::new();
+    let mut global_seen: HashSet<[usize; DIMQUADS]> = HashSet::new();
+
+    for cell_batch in all_cell_quads {
+        for (quad, code) in cell_batch {
+            let mut key = quad.star_ids;
+            key.sort();
+            if global_seen.insert(key) {
+                quads.push(quad);
+                codes.push(code);
+            }
+        }
+    }
+
+    finish_bar(
+        &pb_quads,
+        &format!("✓ {} unique quads from {} cells", quads.len(), n_quad_cells),
+    );
+
+    // --- Phase 4: Build code KD-tree ---
+    let pb_code_tree = mp.add(ProgressBar::new_spinner());
+    pb_code_tree.set_style(spinner_style());
+    pb_code_tree.set_prefix("✦ Code tree");
+    pb_code_tree.set_message(format!(
+        "building {}D KD-tree over {} codes...",
+        DIMCODES,
+        codes.len()
+    ));
+    pb_code_tree.enable_steady_tick(std::time::Duration::from_millis(80));
+
+    let code_indices: Vec<usize> = (0..codes.len()).collect();
+    let code_tree = KdTree::<{ DIMCODES }>::build(codes, code_indices);
+
+    finish_spinner(
+        &pb_code_tree,
+        &format!("✓ code KD-tree built ({} entries)", quads.len()),
+    );
+
+    Index {
+        star_tree,
         stars,
-        config.scale_lower,
-        config.scale_upper,
-        config.max_quads,
-        &mp,
-    )
+        code_tree,
+        quads,
+        scale_lower: config.scale_lower,
+        scale_upper: config.scale_upper,
+    }
 }
 
 /// Build an index from pre-collected `StarData` entries.

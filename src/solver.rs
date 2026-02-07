@@ -244,7 +244,6 @@ pub fn solve(
                                             continue;
                                         }
                                     }
-
                                     // Quick sanity check: the 4 quad stars should
                                     // project back close to their field positions.
                                     let quad_residual_limit = 10.0;

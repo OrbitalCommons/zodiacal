@@ -82,6 +82,36 @@ enum Commands {
         #[arg(long, default_value = "8")]
         max_reuse: usize,
     },
+
+    /// Diagnose extraction by comparing detected sources to index stars.
+    Diagnose {
+        /// Path to the image file
+        image: PathBuf,
+
+        /// Path to the index file
+        #[arg(short, long)]
+        index: PathBuf,
+
+        /// Known RA of field center (degrees)
+        #[arg(long)]
+        ra: f64,
+
+        /// Known Dec of field center (degrees)
+        #[arg(long)]
+        dec: f64,
+
+        /// Known pixel scale (arcsec/pixel)
+        #[arg(long)]
+        scale: f64,
+
+        /// Detection threshold in sigma units
+        #[arg(long, default_value = "5.0")]
+        threshold_sigma: f64,
+
+        /// Max sources to extract
+        #[arg(long, default_value = "200")]
+        max_sources: usize,
+    },
 }
 
 #[cfg(feature = "fits")]
@@ -172,11 +202,16 @@ fn load_fits(path: &Path) -> Array2<f32> {
         process::exit(1);
     }
 
-    // FITS data: row-major, NAXIS1=columns (width), NAXIS2=rows (height)
-    Array2::from_shape_vec((naxis2, naxis1), raw).unwrap_or_else(|e| {
+    // The test FITS files are written by meter-sim's fitsio which passes
+    // ndarray dimensions as [rows, cols] to FITS, mapping them to
+    // NAXIS1=rows and NAXIS2=cols (non-standard). The data is also flipped
+    // vertically on write (FITS origin is bottom-left). We reshape as
+    // (naxis1, naxis2) = (rows, cols) and flip vertically to undo both.
+    let arr = Array2::from_shape_vec((naxis1, naxis2), raw).unwrap_or_else(|e| {
         eprintln!("Failed to reshape FITS data: {e}");
         process::exit(1);
-    })
+    });
+    arr.slice(ndarray::s![..;-1, ..]).to_owned()
 }
 
 fn load_png(path: &Path) -> Array2<f32> {
@@ -309,6 +344,327 @@ fn cmd_build_index(catalog_path: &Path, output_path: &Path, config: &CatalogBuil
     eprintln!("Saved index to {}", output_path.display());
 }
 
+fn cmd_diagnose(
+    image_path: &Path,
+    index_path: &Path,
+    ra_deg: f64,
+    dec_deg: f64,
+    scale_arcsec: f64,
+    threshold_sigma: f64,
+    max_sources: usize,
+) {
+    use zodiacal::extraction::extract_sources;
+    use zodiacal::geom::sphere::{angular_distance, radec_to_xyz};
+    use zodiacal::geom::tan::TanWcs;
+
+    let array = load_image(image_path);
+    let (h, w) = array.dim();
+    eprintln!("Image: {w} x {h} pixels");
+
+    let index = Index::load(index_path).unwrap_or_else(|e| {
+        eprintln!("Failed to load index: {e}");
+        process::exit(1);
+    });
+    eprintln!(
+        "Index: {} stars, {} quads",
+        index.stars.len(),
+        index.quads.len()
+    );
+
+    // Extract sources.
+    let config = ExtractionConfig {
+        threshold_sigma,
+        max_sources,
+        ..ExtractionConfig::default()
+    };
+    let sources = extract_sources(&array, &config);
+    eprintln!("Extracted sources: {}", sources.len());
+    for (i, src) in sources.iter().take(10).enumerate() {
+        eprintln!(
+            "  src[{i:3}] ({:7.1}, {:7.1}) flux={:.0}",
+            src.x, src.y, src.flux
+        );
+    }
+
+    // Try all 8 CD matrix sign/axis combinations to find the correct WCS.
+    let scale_deg = scale_arcsec / 3600.0;
+    let scale_rad = scale_deg.to_radians();
+    let cd_combos: Vec<([[f64; 2]; 2], &str)> = vec![
+        ([[scale_rad, 0.0], [0.0, scale_rad]], "RA+ Dec+"),
+        ([[scale_rad, 0.0], [0.0, -scale_rad]], "RA+ Dec-"),
+        ([[-scale_rad, 0.0], [0.0, scale_rad]], "RA- Dec+"),
+        ([[-scale_rad, 0.0], [0.0, -scale_rad]], "RA- Dec-"),
+        ([[0.0, scale_rad], [scale_rad, 0.0]], "swapped RA+ Dec+"),
+        ([[0.0, scale_rad], [-scale_rad, 0.0]], "swapped RA+ Dec-"),
+        ([[0.0, -scale_rad], [scale_rad, 0.0]], "swapped RA- Dec+"),
+        ([[0.0, -scale_rad], [-scale_rad, 0.0]], "swapped RA- Dec-"),
+    ];
+
+    eprintln!("\nCD matrix matching (50px radius, top 50 sources):");
+    for (cd, name) in &cd_combos {
+        let wcs = TanWcs {
+            crval: [ra_deg.to_radians(), dec_deg.to_radians()],
+            crpix: [w as f64 / 2.0, h as f64 / 2.0],
+            cd: *cd,
+            image_size: [w as f64, h as f64],
+        };
+
+        let (center_ra, center_dec) = wcs.field_center();
+        let center_xyz = radec_to_xyz(center_ra, center_dec);
+        let field_radius = wcs.field_radius();
+        let radius_sq = 2.0 * (1.0 - field_radius.cos());
+
+        let nearby = index.star_tree.range_search(&center_xyz, radius_sq);
+        let mut ref_pixels: Vec<(f64, f64)> = Vec::new();
+        for result in &nearby {
+            let star = &index.stars[result.index];
+            if let Some((px, py)) = wcs.radec_to_pixel(star.ra, star.dec) {
+                if px >= 0.0 && px <= w as f64 && py >= 0.0 && py <= h as f64 {
+                    ref_pixels.push((px, py));
+                }
+            }
+        }
+
+        let match_radius = 50.0;
+        let mut n_matched = 0;
+        let mut total_dist = 0.0;
+        for src in sources.iter().take(50) {
+            let mut best_dist = f64::MAX;
+            for &(rx, ry) in &ref_pixels {
+                let d = ((src.x - rx).powi(2) + (src.y - ry).powi(2)).sqrt();
+                if d < best_dist {
+                    best_dist = d;
+                }
+            }
+            if best_dist < match_radius {
+                n_matched += 1;
+                total_dist += best_dist;
+            }
+        }
+
+        let avg = if n_matched > 0 {
+            total_dist / n_matched as f64
+        } else {
+            0.0
+        };
+        eprintln!(
+            "  {name:20}: {n_matched:2}/50 matched ({} refs), avg dist {avg:.1}px",
+            ref_pixels.len()
+        );
+    }
+
+    // Reverse match: try all 8 CD combos and y-flip, projecting sources to sky
+    // and searching for nearest index stars.
+    let search_radius_rad: f64 = 0.0003; // ~1 arcmin
+    let search_radius_sq = 2.0 * (1.0 - search_radius_rad.cos());
+    let n_check = sources.len().min(30);
+
+    // Try different axis conventions: (x,y), (x,h-1-y), (y,x), (y,w-1-x)
+    // with different CD sign combos
+    struct WcsCombo {
+        cd: [[f64; 2]; 2],
+        swap_xy: bool,
+        flip_y: bool,
+        name: &'static str,
+    }
+    let ps = scale_rad;
+    let wcs_combos: Vec<WcsCombo> = vec![
+        // Standard (x,y) with various CD signs
+        WcsCombo {
+            cd: [[-ps, 0.0], [0.0, ps]],
+            swap_xy: false,
+            flip_y: false,
+            name: "cd[-,+] xy",
+        },
+        WcsCombo {
+            cd: [[-ps, 0.0], [0.0, -ps]],
+            swap_xy: false,
+            flip_y: false,
+            name: "cd[-,-] xy",
+        },
+        WcsCombo {
+            cd: [[ps, 0.0], [0.0, ps]],
+            swap_xy: false,
+            flip_y: false,
+            name: "cd[+,+] xy",
+        },
+        WcsCombo {
+            cd: [[ps, 0.0], [0.0, -ps]],
+            swap_xy: false,
+            flip_y: false,
+            name: "cd[+,-] xy",
+        },
+        // Swapped axes (y,x)
+        WcsCombo {
+            cd: [[-ps, 0.0], [0.0, ps]],
+            swap_xy: true,
+            flip_y: false,
+            name: "cd[-,+] yx",
+        },
+        WcsCombo {
+            cd: [[-ps, 0.0], [0.0, -ps]],
+            swap_xy: true,
+            flip_y: false,
+            name: "cd[-,-] yx",
+        },
+        WcsCombo {
+            cd: [[ps, 0.0], [0.0, ps]],
+            swap_xy: true,
+            flip_y: false,
+            name: "cd[+,+] yx",
+        },
+        WcsCombo {
+            cd: [[ps, 0.0], [0.0, -ps]],
+            swap_xy: true,
+            flip_y: false,
+            name: "cd[+,-] yx",
+        },
+        // y-flipped
+        WcsCombo {
+            cd: [[-ps, 0.0], [0.0, ps]],
+            swap_xy: false,
+            flip_y: true,
+            name: "cd[-,+] xy yf",
+        },
+        WcsCombo {
+            cd: [[-ps, 0.0], [0.0, -ps]],
+            swap_xy: false,
+            flip_y: true,
+            name: "cd[-,-] xy yf",
+        },
+        // Swapped + y-flipped
+        WcsCombo {
+            cd: [[-ps, 0.0], [0.0, ps]],
+            swap_xy: true,
+            flip_y: true,
+            name: "cd[-,+] yx yf",
+        },
+        WcsCombo {
+            cd: [[-ps, 0.0], [0.0, -ps]],
+            swap_xy: true,
+            flip_y: true,
+            name: "cd[-,-] yx yf",
+        },
+        WcsCombo {
+            cd: [[ps, 0.0], [0.0, ps]],
+            swap_xy: true,
+            flip_y: true,
+            name: "cd[+,+] yx yf",
+        },
+        WcsCombo {
+            cd: [[ps, 0.0], [0.0, -ps]],
+            swap_xy: true,
+            flip_y: true,
+            name: "cd[+,-] yx yf",
+        },
+    ];
+
+    eprintln!(
+        "\nReverse match: source pixel -> sky -> nearest index star (search={:.1} arcmin)",
+        search_radius_rad.to_degrees() * 60.0
+    );
+    for combo in &wcs_combos {
+        // For swapped axes, crpix and image_size also swap
+        let (crpx, crpy, iw, ih) = if combo.swap_xy {
+            (h as f64 / 2.0, w as f64 / 2.0, h as f64, w as f64)
+        } else {
+            (w as f64 / 2.0, h as f64 / 2.0, w as f64, h as f64)
+        };
+        let wcs = TanWcs {
+            crval: [ra_deg.to_radians(), dec_deg.to_radians()],
+            crpix: [crpx, crpy],
+            cd: combo.cd,
+            image_size: [iw, ih],
+        };
+
+        let mut n_with_neighbor = 0;
+        let mut total_sep = 0.0;
+        for src in sources.iter().take(n_check) {
+            let (px, py) = if combo.swap_xy {
+                let y = if combo.flip_y {
+                    (h as f64 - 1.0) - src.y
+                } else {
+                    src.y
+                };
+                (y, src.x)
+            } else {
+                let y = if combo.flip_y {
+                    (h as f64 - 1.0) - src.y
+                } else {
+                    src.y
+                };
+                (src.x, y)
+            };
+            let (src_ra, src_dec) = wcs.pixel_to_radec(px, py);
+            let src_xyz = radec_to_xyz(src_ra, src_dec);
+            let nearby = index.star_tree.range_search(&src_xyz, search_radius_sq);
+            if !nearby.is_empty() {
+                let best = nearby
+                    .iter()
+                    .min_by(|a, b| a.dist_sq.partial_cmp(&b.dist_sq).unwrap())
+                    .unwrap();
+                let star = &index.stars[best.index];
+                let sep_rad = angular_distance(src_xyz, radec_to_xyz(star.ra, star.dec));
+                total_sep += sep_rad.to_degrees() * 3600.0;
+                n_with_neighbor += 1;
+            }
+        }
+        let avg_sep = if n_with_neighbor > 0 {
+            total_sep / n_with_neighbor as f64
+        } else {
+            0.0
+        };
+        eprintln!(
+            "  {:20}: {:2}/{n_check} matched, avg sep {avg_sep:.1}\"",
+            combo.name, n_with_neighbor
+        );
+    }
+
+    // Print detailed results for cd[-,+] xy (standard, no swap/flip)
+    eprintln!("\nDetailed reverse match (cd=[[-ps,0],[0,+ps]] xy):");
+    let wcs_best = TanWcs {
+        crval: [ra_deg.to_radians(), dec_deg.to_radians()],
+        crpix: [w as f64 / 2.0, h as f64 / 2.0],
+        cd: [[-scale_rad, 0.0], [0.0, scale_rad]],
+        image_size: [w as f64, h as f64],
+    };
+    for (i, src) in sources.iter().take(n_check).enumerate() {
+        let (px, py) = (src.x, src.y);
+        let (src_ra, src_dec) = wcs_best.pixel_to_radec(px, py);
+        let src_xyz = radec_to_xyz(src_ra, src_dec);
+        let nearby = index.star_tree.range_search(&src_xyz, search_radius_sq);
+        if nearby.is_empty() {
+            eprintln!(
+                "  {:3}  ({:7.1},{:7.1})  RA={:9.4} Dec={:+9.4}  no match",
+                i,
+                src.x,
+                src.y,
+                src_ra.to_degrees(),
+                src_dec.to_degrees()
+            );
+        } else {
+            let best = nearby
+                .iter()
+                .min_by(|a, b| a.dist_sq.partial_cmp(&b.dist_sq).unwrap())
+                .unwrap();
+            let star = &index.stars[best.index];
+            let sep_rad = angular_distance(src_xyz, radec_to_xyz(star.ra, star.dec));
+            let sep_arcsec = sep_rad.to_degrees() * 3600.0;
+            eprintln!(
+                "  {:3}  ({:7.1},{:7.1})  RA={:9.4} Dec={:+9.4}  idx RA={:9.4} Dec={:+9.4}  sep={:.1}\"",
+                i,
+                src.x,
+                src.y,
+                src_ra.to_degrees(),
+                src_dec.to_degrees(),
+                star.ra.to_degrees(),
+                star.dec.to_degrees(),
+                sep_arcsec
+            );
+        }
+    }
+}
+
 fn main() {
     let cli = Cli::parse();
 
@@ -353,6 +709,25 @@ fn main() {
                 max_reuse: *max_reuse,
             };
             cmd_build_index(catalog, output, &config);
+        }
+        Commands::Diagnose {
+            image,
+            index,
+            ra,
+            dec,
+            scale,
+            threshold_sigma,
+            max_sources,
+        } => {
+            cmd_diagnose(
+                image,
+                index,
+                *ra,
+                *dec,
+                *scale,
+                *threshold_sigma,
+                *max_sources,
+            );
         }
     }
 }
