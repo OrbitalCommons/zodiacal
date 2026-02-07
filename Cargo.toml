@@ -10,5 +10,7 @@ categories = ["science"]
 exclude = ["external/", "PLAN.md"]
 
 [dependencies]
+clap = { version = "4.5.57", features = ["derive"] }
+image = "0.25.9"
 ndarray = "0.17.2"
 starfield = "0.9.1"

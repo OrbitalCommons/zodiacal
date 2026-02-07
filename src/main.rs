@@ -1,0 +1,246 @@
+use std::path::{Path, PathBuf};
+use std::process;
+
+use clap::{Parser, Subcommand};
+use ndarray::Array2;
+
+use zodiacal::extraction::ExtractionConfig;
+use zodiacal::index::Index;
+use zodiacal::index::builder::{IndexBuilderConfig, build_index_from_catalog};
+use zodiacal::solver::{SolverConfig, solve_image};
+
+#[derive(Parser)]
+#[command(name = "zodiacal", about = "Blind astrometry plate solver")]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Solve a PNG image against prebuilt star indexes.
+    Solve {
+        /// Path to the image file (PNG, JPEG, etc.)
+        image: PathBuf,
+
+        /// Path to index file(s). Can be repeated.
+        #[arg(short, long, required = true)]
+        index: Vec<PathBuf>,
+
+        /// Max sources to extract from image.
+        #[arg(long, default_value = "200")]
+        max_sources: usize,
+
+        /// Detection threshold in sigma units.
+        #[arg(long, default_value = "5.0")]
+        threshold_sigma: f64,
+
+        /// Pixel scale range hint in arcsec/pixel (e.g. "0.5,5.0").
+        #[arg(long)]
+        scale_range: Option<String>,
+
+        /// Code matching tolerance (squared L2 in code space).
+        #[arg(long, default_value = "0.01")]
+        code_tolerance: f64,
+    },
+
+    /// Build a star index from a starfield binary catalog.
+    BuildIndex {
+        /// Path to a starfield binary catalog file.
+        #[arg(short, long)]
+        catalog: PathBuf,
+
+        /// Output path for the zodiacal index file.
+        #[arg(short, long)]
+        output: PathBuf,
+
+        /// Minimum quad scale in arcseconds.
+        #[arg(long, default_value = "30.0")]
+        scale_lower: f64,
+
+        /// Maximum quad scale in arcseconds.
+        #[arg(long, default_value = "1800.0")]
+        scale_upper: f64,
+
+        /// Maximum number of catalog stars to use.
+        #[arg(long, default_value = "1000")]
+        max_stars: usize,
+
+        /// Maximum number of quads to generate.
+        #[arg(long, default_value = "10000")]
+        max_quads: usize,
+    },
+}
+
+fn load_image(path: &Path) -> Array2<f32> {
+    let img = image::open(path).unwrap_or_else(|e| {
+        eprintln!("Failed to load image {}: {e}", path.display());
+        process::exit(1);
+    });
+    let gray = img.to_luma32f();
+    let (width, height) = gray.dimensions();
+    let raw: Vec<f32> = gray.into_raw();
+    Array2::from_shape_vec((height as usize, width as usize), raw).unwrap_or_else(|e| {
+        eprintln!("Failed to reshape image data: {e}");
+        process::exit(1);
+    })
+}
+
+fn parse_scale_range(s: &str) -> (f64, f64) {
+    let parts: Vec<&str> = s.split(',').collect();
+    if parts.len() != 2 {
+        eprintln!("scale-range must be two comma-separated values (e.g. \"0.5,5.0\")");
+        process::exit(1);
+    }
+    let lo: f64 = parts[0].trim().parse().unwrap_or_else(|_| {
+        eprintln!("Invalid scale-range lower bound: {}", parts[0]);
+        process::exit(1);
+    });
+    let hi: f64 = parts[1].trim().parse().unwrap_or_else(|_| {
+        eprintln!("Invalid scale-range upper bound: {}", parts[1]);
+        process::exit(1);
+    });
+    (lo, hi)
+}
+
+fn cmd_solve(
+    image_path: &Path,
+    index_paths: &[PathBuf],
+    max_sources: usize,
+    threshold_sigma: f64,
+    scale_range: Option<(f64, f64)>,
+    code_tolerance: f64,
+) {
+    let array = load_image(image_path);
+    let (h, w) = array.dim();
+    eprintln!("Loaded image: {w} x {h} pixels");
+
+    let indexes: Vec<Index> = index_paths
+        .iter()
+        .map(|p| {
+            Index::load(p).unwrap_or_else(|e| {
+                eprintln!("Failed to load index {}: {e}", p.display());
+                process::exit(1);
+            })
+        })
+        .collect();
+    let index_refs: Vec<&Index> = indexes.iter().collect();
+    eprintln!("Loaded {} index(es)", indexes.len());
+
+    let extraction_config = ExtractionConfig {
+        threshold_sigma,
+        max_sources,
+        ..ExtractionConfig::default()
+    };
+    let solver_config = SolverConfig {
+        scale_range,
+        code_tolerance,
+        ..SolverConfig::default()
+    };
+
+    match solve_image(&array, &index_refs, &extraction_config, &solver_config) {
+        Some(solution) => {
+            let (ra, dec) = solution.wcs.field_center();
+            let scale_arcsec = solution.wcs.pixel_scale() * 3600.0;
+            let rotation = f64::atan2(solution.wcs.cd[1][0], solution.wcs.cd[0][0]).to_degrees();
+
+            println!("Solved!");
+            println!(
+                "  Field center: RA = {:.4} deg, Dec = {:+.4} deg",
+                ra.to_degrees(),
+                dec.to_degrees()
+            );
+            println!("  Pixel scale: {:.3} arcsec/pixel", scale_arcsec);
+            println!("  Rotation: {:.1} deg", rotation);
+            println!(
+                "  Matched: {}, Distractors: {}, Log-odds: {:.1}",
+                solution.verify_result.n_matched,
+                solution.verify_result.n_distractor,
+                solution.verify_result.log_odds
+            );
+        }
+        None => {
+            eprintln!("No solution found.");
+            process::exit(1);
+        }
+    }
+}
+
+fn cmd_build_index(
+    catalog_path: &Path,
+    output_path: &Path,
+    scale_lower_arcsec: f64,
+    scale_upper_arcsec: f64,
+    max_stars: usize,
+    max_quads: usize,
+) {
+    use starfield::catalogs::MinimalCatalog;
+
+    let catalog = MinimalCatalog::load(catalog_path).unwrap_or_else(|e| {
+        eprintln!("Failed to load catalog {}: {e}", catalog_path.display());
+        process::exit(1);
+    });
+    eprintln!("Loaded catalog: {} stars", catalog.len());
+
+    let config = IndexBuilderConfig {
+        scale_lower: (scale_lower_arcsec / 3600.0).to_radians(),
+        scale_upper: (scale_upper_arcsec / 3600.0).to_radians(),
+        max_stars,
+        max_quads,
+    };
+
+    let index = build_index_from_catalog(&catalog, &config);
+    eprintln!(
+        "Built index: {} stars, {} quads",
+        index.stars.len(),
+        index.quads.len()
+    );
+
+    index.save(output_path).unwrap_or_else(|e| {
+        eprintln!("Failed to save index {}: {e}", output_path.display());
+        process::exit(1);
+    });
+    eprintln!("Saved index to {}", output_path.display());
+}
+
+fn main() {
+    let cli = Cli::parse();
+
+    match &cli.command {
+        Commands::Solve {
+            image,
+            index,
+            max_sources,
+            threshold_sigma,
+            scale_range,
+            code_tolerance,
+        } => {
+            let sr = scale_range.as_ref().map(|s| parse_scale_range(s));
+            cmd_solve(
+                image,
+                index,
+                *max_sources,
+                *threshold_sigma,
+                sr,
+                *code_tolerance,
+            );
+        }
+        Commands::BuildIndex {
+            catalog,
+            output,
+            scale_lower,
+            scale_upper,
+            max_stars,
+            max_quads,
+        } => {
+            cmd_build_index(
+                catalog,
+                output,
+                *scale_lower,
+                *scale_upper,
+                *max_stars,
+                *max_quads,
+            );
+        }
+    }
+}
