@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::process;
+use std::time::{Duration, Instant};
 
 use clap::{Parser, Subcommand};
 use ndarray::Array2;
@@ -7,7 +8,8 @@ use ndarray::Array2;
 use zodiacal::extraction::ExtractionConfig;
 use zodiacal::index::Index;
 use zodiacal::index::builder::{CatalogBuilderConfig, build_index_from_catalog};
-use zodiacal::solver::{SolverConfig, solve_image};
+use zodiacal::solver::{SolveStats, SolverConfig, solve_image};
+use zodiacal::verify::VerifyConfig;
 
 #[derive(Parser)]
 #[command(name = "zodiacal", about = "Blind astrometry plate solver")]
@@ -42,6 +44,60 @@ enum Commands {
         /// Code matching tolerance (squared L2 in code space).
         #[arg(long, default_value = "0.01")]
         code_tolerance: f64,
+
+        /// Timeout per image in seconds (no limit if omitted).
+        #[arg(long)]
+        timeout: Option<f64>,
+
+        /// Minimum number of matched stars to accept a solution.
+        #[arg(long, default_value = "10")]
+        min_matches: usize,
+
+        /// Log-odds threshold to accept a solution.
+        #[arg(long, default_value = "20.0")]
+        log_odds_accept: f64,
+    },
+
+    /// Solve multiple images against prebuilt star indexes.
+    BatchSolve {
+        /// Directory containing image files (PNG or FITS).
+        dir: PathBuf,
+
+        /// Path to index file(s). Can be repeated.
+        #[arg(short, long, required = true)]
+        index: Vec<PathBuf>,
+
+        /// Max sources to extract from each image.
+        #[arg(long, default_value = "200")]
+        max_sources: usize,
+
+        /// Detection threshold in sigma units.
+        #[arg(long, default_value = "5.0")]
+        threshold_sigma: f64,
+
+        /// Pixel scale range hint in arcsec/pixel (e.g. "0.5,5.0").
+        #[arg(long)]
+        scale_range: Option<String>,
+
+        /// Code matching tolerance (squared L2 in code space).
+        #[arg(long, default_value = "0.01")]
+        code_tolerance: f64,
+
+        /// Timeout per image in seconds (no limit if omitted).
+        #[arg(long)]
+        timeout: Option<f64>,
+
+        /// Glob pattern for files within the directory (default: "*_data_raw.fits").
+        #[arg(long, default_value = "*_data_raw.fits")]
+        pattern: String,
+
+        /// Minimum number of matched stars to accept a solution.
+        #[arg(long, default_value = "10")]
+        min_matches: usize,
+
+        /// Log-odds threshold to accept a solution.
+        #[arg(long, default_value = "20.0")]
+        log_odds_accept: f64,
     },
 
     /// Build a star index from a starfield binary catalog.
@@ -258,6 +314,25 @@ fn parse_scale_range(s: &str) -> (f64, f64) {
     (lo, hi)
 }
 
+fn print_solve_stats(stats: &SolveStats) {
+    eprintln!(
+        "Stats: verified={}, accepted={}",
+        stats.n_verified,
+        if stats.accepted_log_odds.is_some() {
+            "yes"
+        } else {
+            "no"
+        }
+    );
+    if let Some((lo, nm)) = stats.best_rejected {
+        eprintln!("  Best rejected: lo={:.1}, matches={}", lo, nm);
+    }
+    if let Some(lo) = stats.accepted_log_odds {
+        eprintln!("  Accepted log-odds: {:.1}", lo);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn cmd_solve(
     image_path: &Path,
     index_paths: &[PathBuf],
@@ -265,6 +340,9 @@ fn cmd_solve(
     threshold_sigma: f64,
     scale_range: Option<(f64, f64)>,
     code_tolerance: f64,
+    timeout: Option<Duration>,
+    min_matches: usize,
+    log_odds_accept: f64,
 ) {
     let array = load_image(image_path);
     let (h, w) = array.dim();
@@ -290,10 +368,18 @@ fn cmd_solve(
     let solver_config = SolverConfig {
         scale_range,
         code_tolerance,
+        timeout,
+        verify: VerifyConfig {
+            min_matches,
+            log_odds_accept,
+            ..VerifyConfig::default()
+        },
         ..SolverConfig::default()
     };
 
-    match solve_image(&array, &index_refs, &extraction_config, &solver_config) {
+    let (result, stats) = solve_image(&array, &index_refs, &extraction_config, &solver_config);
+    print_solve_stats(&stats);
+    match result {
         Some(solution) => {
             let (ra, dec) = solution.wcs.field_center();
             let scale_arcsec = solution.wcs.pixel_scale() * 3600.0;
@@ -318,6 +404,164 @@ fn cmd_solve(
             eprintln!("No solution found.");
             process::exit(1);
         }
+    }
+}
+
+fn cmd_batch_solve(
+    dir: &Path,
+    index_paths: &[PathBuf],
+    extraction_config: &ExtractionConfig,
+    solver_config: &SolverConfig,
+    pattern: &str,
+) {
+    let indexes: Vec<Index> = index_paths
+        .iter()
+        .map(|p| {
+            Index::load(p).unwrap_or_else(|e| {
+                eprintln!("Failed to load index {}: {e}", p.display());
+                process::exit(1);
+            })
+        })
+        .collect();
+    let index_refs: Vec<&Index> = indexes.iter().collect();
+    eprintln!("Loaded {} index(es)", indexes.len());
+
+    let glob_pattern = dir.join(pattern);
+    let mut files: Vec<PathBuf> = glob::glob(glob_pattern.to_str().unwrap())
+        .unwrap_or_else(|e| {
+            eprintln!("Invalid glob pattern: {e}");
+            process::exit(1);
+        })
+        .filter_map(|r| r.ok())
+        .collect();
+    files.sort();
+
+    if files.is_empty() {
+        eprintln!("No files matched pattern '{}'", glob_pattern.display());
+        process::exit(1);
+    }
+    eprintln!("Found {} images to solve\n", files.len());
+
+    let mut n_solved = 0;
+    let mut n_failed = 0;
+    let mut solve_times: Vec<f64> = Vec::new();
+    let mut all_accepted_log_odds: Vec<f64> = Vec::new();
+    let mut best_rejected_overall: Option<(f64, usize)> = None;
+    let mut all_n_verified: Vec<usize> = Vec::new();
+
+    for (i, file) in files.iter().enumerate() {
+        let name = file.file_name().unwrap().to_string_lossy();
+        eprint!("[{:3}/{}] {}: ", i + 1, files.len(), name);
+
+        let array = load_image(file);
+        let t0 = Instant::now();
+        let (result, stats) = solve_image(&array, &index_refs, extraction_config, solver_config);
+        let elapsed = t0.elapsed().as_secs_f64();
+
+        all_n_verified.push(stats.n_verified);
+        if let Some((lo, nm)) = stats.best_rejected {
+            match best_rejected_overall {
+                None => best_rejected_overall = Some((lo, nm)),
+                Some((best_lo, _)) if lo > best_lo => {
+                    best_rejected_overall = Some((lo, nm));
+                }
+                _ => {}
+            }
+        }
+        if let Some(lo) = stats.accepted_log_odds {
+            all_accepted_log_odds.push(lo);
+        }
+
+        match result {
+            Some(solution) => {
+                let (ra, dec) = solution.wcs.field_center();
+                let best_reject_lo = stats.best_rejected.map(|(lo, _)| lo).unwrap_or(0.0);
+                eprintln!(
+                    "SOLVED in {:.1}s  RA={:.4} Dec={:+.4}  matched={}  verified={}  accept_lo={:.1}  best_reject_lo={:.1}",
+                    elapsed,
+                    ra.to_degrees(),
+                    dec.to_degrees(),
+                    solution.verify_result.n_matched,
+                    stats.n_verified,
+                    solution.verify_result.log_odds,
+                    best_reject_lo,
+                );
+                n_solved += 1;
+                solve_times.push(elapsed);
+            }
+            None => {
+                let (best_lo, best_nm) = stats.best_rejected.unwrap_or((0.0, 0));
+                eprintln!(
+                    "FAILED in {:.1}s  verified={}  best_lo={:.1}({}m){}",
+                    elapsed,
+                    stats.n_verified,
+                    best_lo,
+                    best_nm,
+                    if stats.timed_out { "  TIMEOUT" } else { "" },
+                );
+                n_failed += 1;
+            }
+        }
+    }
+
+    let total = n_solved + n_failed;
+    eprintln!("\n========== RESULTS ==========");
+    eprintln!(
+        "Solved: {}/{} ({:.0}%)",
+        n_solved,
+        total,
+        100.0 * n_solved as f64 / total as f64
+    );
+    eprintln!("Failed: {}/{}", n_failed, total);
+
+    if !solve_times.is_empty() {
+        solve_times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let min = solve_times[0];
+        let max = solve_times[solve_times.len() - 1];
+        let median = solve_times[solve_times.len() / 2];
+        let mean = solve_times.iter().sum::<f64>() / solve_times.len() as f64;
+        eprintln!("\nSolve time distribution:");
+        eprintln!("  Min:    {:.2}s", min);
+        eprintln!("  Median: {:.2}s", median);
+        eprintln!("  Mean:   {:.2}s", mean);
+        eprintln!("  Max:    {:.2}s", max);
+
+        let buckets = [1.0, 5.0, 10.0, 30.0, 60.0];
+        eprintln!("\n  Cumulative:");
+        for &b in &buckets {
+            let count = solve_times.iter().filter(|&&t| t <= b).count();
+            eprintln!(
+                "    <= {:4.0}s: {:3} ({:.0}%)",
+                b,
+                count,
+                100.0 * count as f64 / solve_times.len() as f64
+            );
+        }
+    }
+
+    let total_verified: usize = all_n_verified.iter().sum();
+    let mean_verified = total_verified as f64 / total as f64;
+    eprintln!("\n--- Verification stats ---");
+    eprintln!(
+        "Total verifications: {} (mean {:.0}/image)",
+        total_verified, mean_verified
+    );
+
+    if !all_accepted_log_odds.is_empty() {
+        all_accepted_log_odds.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let min = all_accepted_log_odds[0];
+        let max = all_accepted_log_odds[all_accepted_log_odds.len() - 1];
+        let median = all_accepted_log_odds[all_accepted_log_odds.len() / 2];
+        eprintln!(
+            "Accepted log-odds (n={}): min={:.1}, median={:.1}, max={:.1}",
+            all_accepted_log_odds.len(),
+            min,
+            median,
+            max,
+        );
+    }
+    if let Some((lo, nm)) = best_rejected_overall {
+        eprintln!("Best rejected overall: lo={:.1}, matches={}", lo, nm);
     }
 }
 
@@ -473,8 +717,6 @@ fn cmd_diagnose(
     let search_radius_sq = 2.0 * (1.0 - search_radius_rad.cos());
     let n_check = sources.len().min(30);
 
-    // Try different axis conventions: (x,y), (x,h-1-y), (y,x), (y,w-1-x)
-    // with different CD sign combos
     struct WcsCombo {
         cd: [[f64; 2]; 2],
         swap_xy: bool,
@@ -483,7 +725,6 @@ fn cmd_diagnose(
     }
     let ps = scale_rad;
     let wcs_combos: Vec<WcsCombo> = vec![
-        // Standard (x,y) with various CD signs
         WcsCombo {
             cd: [[-ps, 0.0], [0.0, ps]],
             swap_xy: false,
@@ -508,7 +749,6 @@ fn cmd_diagnose(
             flip_y: false,
             name: "cd[+,-] xy",
         },
-        // Swapped axes (y,x)
         WcsCombo {
             cd: [[-ps, 0.0], [0.0, ps]],
             swap_xy: true,
@@ -533,7 +773,6 @@ fn cmd_diagnose(
             flip_y: false,
             name: "cd[+,-] yx",
         },
-        // y-flipped
         WcsCombo {
             cd: [[-ps, 0.0], [0.0, ps]],
             swap_xy: false,
@@ -546,7 +785,6 @@ fn cmd_diagnose(
             flip_y: true,
             name: "cd[-,-] xy yf",
         },
-        // Swapped + y-flipped
         WcsCombo {
             cd: [[-ps, 0.0], [0.0, ps]],
             swap_xy: true,
@@ -578,7 +816,6 @@ fn cmd_diagnose(
         search_radius_rad.to_degrees() * 60.0
     );
     for combo in &wcs_combos {
-        // For swapped axes, crpix and image_size also swap
         let (crpx, crpy, iw, ih) = if combo.swap_xy {
             (h as f64 / 2.0, w as f64 / 2.0, h as f64, w as f64)
         } else {
@@ -690,8 +927,12 @@ fn main() {
             threshold_sigma,
             scale_range,
             code_tolerance,
+            timeout,
+            min_matches,
+            log_odds_accept,
         } => {
             let sr = scale_range.as_ref().map(|s| parse_scale_range(s));
+            let dur = timeout.map(Duration::from_secs_f64);
             cmd_solve(
                 image,
                 index,
@@ -699,7 +940,42 @@ fn main() {
                 *threshold_sigma,
                 sr,
                 *code_tolerance,
+                dur,
+                *min_matches,
+                *log_odds_accept,
             );
+        }
+        Commands::BatchSolve {
+            dir,
+            index,
+            max_sources,
+            threshold_sigma,
+            scale_range,
+            code_tolerance,
+            timeout,
+            pattern,
+            min_matches,
+            log_odds_accept,
+        } => {
+            let sr = scale_range.as_ref().map(|s| parse_scale_range(s));
+            let dur = timeout.map(Duration::from_secs_f64);
+            let extraction_config = ExtractionConfig {
+                threshold_sigma: *threshold_sigma,
+                max_sources: *max_sources,
+                ..ExtractionConfig::default()
+            };
+            let solver_config = SolverConfig {
+                scale_range: sr,
+                code_tolerance: *code_tolerance,
+                timeout: dur,
+                verify: VerifyConfig {
+                    min_matches: *min_matches,
+                    log_odds_accept: *log_odds_accept,
+                    ..VerifyConfig::default()
+                },
+                ..SolverConfig::default()
+            };
+            cmd_batch_solve(dir, index, &extraction_config, &solver_config, pattern);
         }
         Commands::BuildIndex {
             catalog,

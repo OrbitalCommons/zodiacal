@@ -1,6 +1,8 @@
 //! Main blind plate solver that ties together quad building, code matching,
 //! WCS fitting, and verification.
 
+use std::time::{Duration, Instant};
+
 use crate::extraction::DetectedSource;
 use crate::fitting::{FitError, fit_tan_wcs};
 use crate::geom::sphere::radec_to_xyz;
@@ -19,6 +21,8 @@ pub struct SolverConfig {
     pub code_tolerance: f64,
     /// Verification configuration.
     pub verify: VerifyConfig,
+    /// Maximum time to spend solving before giving up.
+    pub timeout: Option<Duration>,
 }
 
 impl Default for SolverConfig {
@@ -28,6 +32,7 @@ impl Default for SolverConfig {
             max_field_stars: 50,
             code_tolerance: 0.01,
             verify: VerifyConfig::default(),
+            timeout: None,
         }
     }
 }
@@ -38,6 +43,19 @@ pub struct Solution {
     pub wcs: TanWcs,
     pub verify_result: VerifyResult,
     pub quad_match: QuadMatch,
+}
+
+/// Statistics collected during a solve attempt.
+#[derive(Debug, Clone)]
+pub struct SolveStats {
+    /// Total number of WCS candidates that passed cheap filters and reached verification.
+    pub n_verified: usize,
+    /// Best rejected candidate: (log_odds, n_matched). None if no rejections.
+    pub best_rejected: Option<(f64, usize)>,
+    /// Log-odds of the accepted candidate (if any).
+    pub accepted_log_odds: Option<f64>,
+    /// Whether the solve timed out.
+    pub timed_out: bool,
 }
 
 /// Information about the quad that produced the solution.
@@ -108,10 +126,19 @@ pub fn solve(
     indexes: &[&Index],
     image_size: (f64, f64),
     config: &SolverConfig,
-) -> Option<Solution> {
+) -> (Option<Solution>, SolveStats) {
+    let mut stats = SolveStats {
+        n_verified: 0,
+        best_rejected: None,
+        accepted_log_odds: None,
+        timed_out: false,
+    };
+
     if sources.len() < DIMQUADS || indexes.is_empty() {
-        return None;
+        return (None, stats);
     }
+
+    let deadline = config.timeout.map(|d| Instant::now() + d);
 
     // 1. Sort sources by flux (descending = brightest first).
     let mut sorted: Vec<(usize, &DetectedSource)> = sources.iter().enumerate().collect();
@@ -131,6 +158,12 @@ pub fn solve(
 
     // 2. For each "new" field star N, for each pair (A, B) where A < B < N:
     for n in 2..sorted.len() {
+        if let Some(dl) = deadline
+            && Instant::now() > dl
+        {
+            stats.timed_out = true;
+            return (None, stats);
+        }
         for a in 0..n {
             for b in (a + 1)..n {
                 let (a_orig, sa) = sorted[a];
@@ -264,16 +297,31 @@ pub fn solve(
                                     // Verify the WCS.
                                     let verify_result =
                                         verify_solution(&wcs, sources, index, &config.verify);
+                                    stats.n_verified += 1;
 
                                     if verify_result.is_accepted(&config.verify) {
-                                        return Some(Solution {
-                                            wcs,
-                                            verify_result,
-                                            quad_match: QuadMatch {
-                                                field_indices: reordered_orig,
-                                                index_indices: quad.star_ids,
-                                            },
-                                        });
+                                        stats.accepted_log_odds = Some(verify_result.log_odds);
+                                        return (
+                                            Some(Solution {
+                                                wcs,
+                                                verify_result,
+                                                quad_match: QuadMatch {
+                                                    field_indices: reordered_orig,
+                                                    index_indices: quad.star_ids,
+                                                },
+                                            }),
+                                            stats,
+                                        );
+                                    } else {
+                                        let lo = verify_result.log_odds;
+                                        let nm = verify_result.n_matched;
+                                        match stats.best_rejected {
+                                            None => stats.best_rejected = Some((lo, nm)),
+                                            Some((best_lo, _)) if lo > best_lo => {
+                                                stats.best_rejected = Some((lo, nm));
+                                            }
+                                            _ => {}
+                                        }
                                     }
                                 }
                             }
@@ -284,7 +332,7 @@ pub fn solve(
         }
     }
 
-    None
+    (None, stats)
 }
 
 /// Solve from an image directly.
@@ -295,7 +343,7 @@ pub fn solve_image(
     indexes: &[&Index],
     extraction_config: &crate::extraction::ExtractionConfig,
     solver_config: &SolverConfig,
-) -> Option<Solution> {
+) -> (Option<Solution>, SolveStats) {
     let sources = crate::extraction::extract_sources(image, extraction_config);
     let (h, w) = image.dim();
     solve(&sources, indexes, (w as f64, h as f64), solver_config)
@@ -387,10 +435,12 @@ mod tests {
                 min_matches: 3,
                 ..VerifyConfig::default()
             },
+            ..SolverConfig::default()
         };
 
-        let solution = solve(&sources, &[&index], (512.0, 512.0), &config);
+        let (solution, stats) = solve(&sources, &[&index], (512.0, 512.0), &config);
         assert!(solution.is_some(), "solver should find a solution");
+        assert!(stats.accepted_log_odds.is_some());
 
         let solution = solution.unwrap();
 
@@ -472,8 +522,9 @@ mod tests {
             ..SolverConfig::default()
         };
 
-        let solution = solve(&sources, &[&index], (1024.0, 1024.0), &config);
+        let (solution, stats) = solve(&sources, &[&index], (1024.0, 1024.0), &config);
         assert!(solution.is_none(), "random sources should not solve");
+        assert!(stats.accepted_log_odds.is_none());
     }
 
     #[test]
@@ -491,9 +542,10 @@ mod tests {
                 min_matches: 3,
                 ..VerifyConfig::default()
             },
+            ..SolverConfig::default()
         };
 
-        let solution = solve(&sources, &[&index], (512.0, 512.0), &config);
+        let (solution, _stats) = solve(&sources, &[&index], (512.0, 512.0), &config);
         assert!(
             solution.is_none(),
             "wrong scale range should prevent solving"
@@ -529,9 +581,10 @@ mod tests {
                 min_matches: 3,
                 ..VerifyConfig::default()
             },
+            ..SolverConfig::default()
         };
 
-        let solution = solve(
+        let (solution, _stats) = solve(
             &sources,
             &[&decoy_index, &correct_index],
             (512.0, 512.0),
@@ -589,7 +642,7 @@ mod tests {
         ];
 
         let config = SolverConfig::default();
-        let solution = solve(&sources, &[&index], (512.0, 512.0), &config);
+        let (solution, _stats) = solve(&sources, &[&index], (512.0, 512.0), &config);
         assert!(solution.is_none(), "fewer than 4 sources should not solve");
     }
 
@@ -597,7 +650,7 @@ mod tests {
     fn no_indexes() {
         let (sources, _, _) = make_synthetic_scenario();
         let config = SolverConfig::default();
-        let solution = solve(&sources, &[], (512.0, 512.0), &config);
+        let (solution, _stats) = solve(&sources, &[], (512.0, 512.0), &config);
         assert!(solution.is_none(), "no indexes should return None");
     }
 
@@ -751,9 +804,10 @@ mod tests {
                 min_matches: 3,
                 ..VerifyConfig::default()
             },
+            ..SolverConfig::default()
         };
 
-        let solution = solve(&sources, &[&index], image_size, &config);
+        let (solution, _stats) = solve(&sources, &[&index], image_size, &config);
         assert!(
             solution.is_some(),
             "solver should find a solution with rotated WCS"
