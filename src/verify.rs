@@ -116,19 +116,32 @@ pub fn verify_solution(
 
     // 3. Build a 2D KD-tree over projected reference star pixel positions.
     let n_ref = proj_points.len() as f64;
+    if n_ref < 1.0 {
+        return VerifyResult {
+            log_odds: f64::NEG_INFINITY,
+            n_matched: 0,
+            n_distractor: field_sources.len(),
+            n_conflict: 0,
+            matched_pairs: Vec::new(),
+        };
+    }
     let ref_tree = KdTree::<2>::build(proj_points, proj_indices);
 
-    // 4. Score each field source.
+    // 4. Score each field source following astrometry.net's verify.c.
+    //
+    // Every source contributes to the log-odds:
+    //   match:    contribution = max(log_fg, log_distractor) - log_bg
+    //   no match: contribution = log_distractor - log_bg  (negative)
+    //
+    // log_fg = log((1-d)/(2πσ²·NR)) - dist²/(2σ²)     [Gaussian]
+    // log_distractor = log(d + (1-d)·mu/NR) + log_bg    [dynamic]
+    // log_bg = log(1/image_area)                         [uniform]
     let image_area = wcs.image_size[0] * wcs.image_size[1];
-    let match_area = PI * config.match_radius_pix * config.match_radius_pix;
-    // Probability of a match under the "correct WCS" hypothesis:
-    // the star is within match_radius of its true projected position.
     let sigma_sq = config.match_radius_pix * config.match_radius_pix / 4.0;
-    let p_match = 1.0 / (PI * sigma_sq);
-    // Probability of a random match under the "wrong WCS" hypothesis:
-    // a field source randomly lands within match_radius of ANY reference star.
-    let p_distractor = (n_ref * match_area / image_area).max(1.0 / image_area);
     let match_radius_sq = config.match_radius_pix * config.match_radius_pix;
+    let distractors = config.distractor_fraction;
+    let log_gauss_peak = ((1.0 - distractors) / (2.0 * PI * sigma_sq * n_ref)).ln();
+    let log_bg = (1.0_f64 / image_area).ln();
 
     let mut log_odds = 0.0;
     let mut n_matched = 0;
@@ -140,8 +153,16 @@ pub fn verify_solution(
         let query = [source.x, source.y];
         let matches = ref_tree.range_search(&query, match_radius_sq);
 
+        // Distractor log-density (updated with matches found so far).
+        let log_distractor = (distractors
+            + (1.0 - distractors) * n_matched as f64 / n_ref)
+            .ln()
+            + log_bg;
+
         if matches.is_empty() {
+            // Non-match: evidence against correct WCS.
             n_distractor += 1;
+            log_odds += log_distractor - log_bg;
         } else {
             if matches.len() > 1 {
                 n_conflict += 1;
@@ -152,13 +173,19 @@ pub fn verify_solution(
                 .min_by(|a, b| a.dist_sq.partial_cmp(&b.dist_sq).unwrap())
                 .unwrap();
 
-            n_matched += 1;
-            matched_pairs.push((field_idx, best.index));
+            // Foreground Gaussian log-density at this distance.
+            let log_fg = log_gauss_peak - best.dist_sq / (2.0 * sigma_sq);
 
-            let contribution = ((1.0 - config.distractor_fraction) / config.distractor_fraction
-                * (p_match / p_distractor))
-                .ln_1p();
-            log_odds += contribution;
+            if log_fg >= log_distractor {
+                // Treat as real match.
+                n_matched += 1;
+                matched_pairs.push((field_idx, best.index));
+                log_odds += log_fg - log_bg;
+            } else {
+                // Gaussian weaker than distractor — treat as distractor.
+                n_distractor += 1;
+                log_odds += log_distractor - log_bg;
+            }
         }
 
         // Early termination.
