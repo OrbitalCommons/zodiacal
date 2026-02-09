@@ -127,6 +127,8 @@ fn try_quad(
     image_size: (f64, f64),
     config: &SolverConfig,
     stats: &mut SolveStats,
+    ab_dist_px: f64,
+    scale_rad: Option<(f64, f64)>,
 ) -> Option<Solution> {
     let (a_orig, sa) = sorted[a];
     let (b_orig, sb) = sorted[b];
@@ -144,6 +146,16 @@ fn try_quad(
             std::array::from_fn(|i| positions[reordered[i]]);
 
         for index in indexes {
+            // Skip this index if the backbone angular scale can't overlap
+            // with the index's quad scale band.
+            if let Some((pix_lo_rad, pix_hi_rad)) = scale_rad {
+                let ang_lo = ab_dist_px * pix_lo_rad;
+                let ang_hi = ab_dist_px * pix_hi_rad;
+                if ang_lo > index.scale_upper || ang_hi < index.scale_lower {
+                    continue;
+                }
+            }
+
             let matches = index
                 .code_tree
                 .range_search(field_code, config.code_tolerance);
@@ -338,6 +350,7 @@ pub fn solve(
                     let d = candidates[di];
                     if let Some(sol) = try_quad(
                         &sorted, a, b, c, d, indexes, sources, image_size, config, &mut stats,
+                        dist, scale_rad,
                     ) {
                         return (Some(sol), stats);
                     }
@@ -388,6 +401,7 @@ pub fn solve(
                     }
                     if let Some(sol) = try_quad(
                         &sorted, a, b, c, d, indexes, sources, image_size, config, &mut stats,
+                        dist, scale_rad,
                     ) {
                         return (Some(sol), stats);
                     }

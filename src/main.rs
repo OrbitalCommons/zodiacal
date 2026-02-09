@@ -139,6 +139,45 @@ enum Commands {
         max_reuse: usize,
     },
 
+    /// Build a series of narrow-band indexes (astrometry.net style).
+    BuildIndexSeries {
+        /// Path to a starfield binary catalog file.
+        #[arg(short, long)]
+        catalog: PathBuf,
+
+        /// Output prefix for index files (e.g. "my_index" -> "my_index_00.zdcl", ...).
+        #[arg(short, long)]
+        output_prefix: PathBuf,
+
+        /// Minimum quad scale in arcseconds.
+        #[arg(long, default_value = "10.0")]
+        scale_lower: f64,
+
+        /// Maximum quad scale in arcseconds.
+        #[arg(long, default_value = "600.0")]
+        scale_upper: f64,
+
+        /// Scale factor between bands (default: sqrt(2) ≈ 1.414).
+        #[arg(long, default_value = "1.4142135623730951")]
+        scale_factor: f64,
+
+        /// Maximum brightest stars per HEALPix cell.
+        #[arg(long, default_value = "30")]
+        max_stars_per_cell: usize,
+
+        /// Number of quad-building passes per cell.
+        #[arg(long, default_value = "16")]
+        passes: usize,
+
+        /// Maximum times a star can appear in quads.
+        #[arg(long, default_value = "8")]
+        max_reuse: usize,
+
+        /// Maximum HEALPix depth (caps memory usage for fine-scale bands).
+        #[arg(long, default_value = "8")]
+        max_depth: u8,
+    },
+
     /// Diagnose extraction by comparing detected sources to index stars.
     Diagnose {
         /// Path to the image file
@@ -599,6 +638,98 @@ fn cmd_build_index(catalog_path: &Path, output_path: &Path, config: &CatalogBuil
     eprintln!("Saved index to {}", output_path.display());
 }
 
+#[allow(clippy::too_many_arguments)]
+fn cmd_build_index_series(
+    catalog_path: &Path,
+    output_prefix: &Path,
+    scale_lower: f64,
+    scale_upper: f64,
+    scale_factor: f64,
+    max_stars_per_cell: usize,
+    passes: usize,
+    max_reuse: usize,
+    max_depth: u8,
+) {
+    use starfield::catalogs::MinimalCatalog;
+
+    // Compute bands: each band covers [lo, lo * scale_factor].
+    let mut bands: Vec<(f64, f64)> = Vec::new();
+    let mut lo = scale_lower;
+    while lo < scale_upper {
+        let hi = (lo * scale_factor).min(scale_upper);
+        bands.push((lo, hi));
+        lo = hi;
+        if (hi - scale_upper).abs() < 1e-10 {
+            break;
+        }
+    }
+
+    eprintln!(
+        "Building {} narrow-band indexes from {:.1}\" to {:.1}\" (factor {:.4}, max_depth={})",
+        bands.len(),
+        scale_lower,
+        scale_upper,
+        scale_factor,
+        max_depth,
+    );
+    for (i, (lo, hi)) in bands.iter().enumerate() {
+        eprintln!("  Band {:2}: {:8.2}\" - {:8.2}\"", i, lo, hi);
+    }
+
+    let catalog = MinimalCatalog::load(catalog_path).unwrap_or_else(|e| {
+        eprintln!("Failed to load catalog {}: {e}", catalog_path.display());
+        process::exit(1);
+    });
+    eprintln!("Loaded catalog: {} stars", catalog.len());
+
+    for (i, (lo, hi)) in bands.iter().enumerate() {
+        let output_path = PathBuf::from(format!("{}_{:02}.zdcl", output_prefix.display(), i));
+
+        // Cap the auto-computed depth to max_depth.
+        let auto_depth = zodiacal::healpix::depth_for_scale((*hi / 3600.0_f64).to_radians() * 2.0);
+        let depth = auto_depth.min(max_depth);
+
+        let config = CatalogBuilderConfig {
+            scale_lower: (*lo / 3600.0).to_radians(),
+            scale_upper: (*hi / 3600.0).to_radians(),
+            max_stars_per_cell,
+            max_quads: None,
+            uniformize_depth: Some(depth),
+            quad_depth: Some(depth),
+            passes,
+            max_reuse,
+        };
+
+        let n_cells = zodiacal::healpix::npix(depth);
+        let max_quads = config.effective_max_quads();
+        eprintln!(
+            "\n[Band {:2}/{:2}] {:.1}\"-{:.1}\"  depth={} cells={} max_quads={}",
+            i + 1,
+            bands.len(),
+            lo,
+            hi,
+            depth,
+            n_cells,
+            max_quads
+        );
+
+        let index = build_index_from_catalog(&catalog, &config);
+        eprintln!(
+            "  Built: {} stars, {} quads",
+            index.stars.len(),
+            index.quads.len()
+        );
+
+        index.save(&output_path).unwrap_or_else(|e| {
+            eprintln!("Failed to save index {}: {e}", output_path.display());
+            process::exit(1);
+        });
+        eprintln!("  Saved to {}", output_path.display());
+    }
+
+    eprintln!("\nDone! Built {} index files.", bands.len());
+}
+
 fn cmd_diagnose(
     image_path: &Path,
     index_path: &Path,
@@ -999,6 +1130,29 @@ fn main() {
                 max_reuse: *max_reuse,
             };
             cmd_build_index(catalog, output, &config);
+        }
+        Commands::BuildIndexSeries {
+            catalog,
+            output_prefix,
+            scale_lower,
+            scale_upper,
+            scale_factor,
+            max_stars_per_cell,
+            passes,
+            max_reuse,
+            max_depth,
+        } => {
+            cmd_build_index_series(
+                catalog,
+                output_prefix,
+                *scale_lower,
+                *scale_upper,
+                *scale_factor,
+                *max_stars_per_cell,
+                *passes,
+                *max_reuse,
+                *max_depth,
+            );
         }
         Commands::Diagnose {
             image,
