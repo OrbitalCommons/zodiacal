@@ -8,7 +8,8 @@ use ndarray::Array2;
 use zodiacal::extraction::ExtractionConfig;
 use zodiacal::index::Index;
 use zodiacal::index::builder::{CatalogBuilderConfig, build_index_from_catalog};
-use zodiacal::solver::{SolverConfig, solve_image};
+use zodiacal::solver::{SolveStats, SolverConfig, solve_image};
+use zodiacal::verify::VerifyConfig;
 
 #[derive(Parser)]
 #[command(name = "zodiacal", about = "Blind astrometry plate solver")]
@@ -47,6 +48,14 @@ enum Commands {
         /// Timeout per image in seconds (no limit if omitted).
         #[arg(long)]
         timeout: Option<f64>,
+
+        /// Minimum number of matched stars to accept a solution.
+        #[arg(long, default_value = "10")]
+        min_matches: usize,
+
+        /// Log-odds threshold to accept a solution.
+        #[arg(long, default_value = "20.0")]
+        log_odds_accept: f64,
     },
 
     /// Solve multiple images against prebuilt star indexes.
@@ -81,6 +90,14 @@ enum Commands {
         /// Glob pattern for files within the directory (default: "*_data_raw.fits").
         #[arg(long, default_value = "*_data_raw.fits")]
         pattern: String,
+
+        /// Minimum number of matched stars to accept a solution.
+        #[arg(long, default_value = "10")]
+        min_matches: usize,
+
+        /// Log-odds threshold to accept a solution.
+        #[arg(long, default_value = "20.0")]
+        log_odds_accept: f64,
     },
 
     /// Build a star index from a starfield binary catalog.
@@ -120,6 +137,45 @@ enum Commands {
         /// Maximum times a star can appear in quads.
         #[arg(long, default_value = "8")]
         max_reuse: usize,
+    },
+
+    /// Build a series of narrow-band indexes (astrometry.net style).
+    BuildIndexSeries {
+        /// Path to a starfield binary catalog file.
+        #[arg(short, long)]
+        catalog: PathBuf,
+
+        /// Output prefix for index files (e.g. "my_index" -> "my_index_00.zdcl", ...).
+        #[arg(short, long)]
+        output_prefix: PathBuf,
+
+        /// Minimum quad scale in arcseconds.
+        #[arg(long, default_value = "10.0")]
+        scale_lower: f64,
+
+        /// Maximum quad scale in arcseconds.
+        #[arg(long, default_value = "600.0")]
+        scale_upper: f64,
+
+        /// Scale factor between bands (default: sqrt(2) ≈ 1.414).
+        #[arg(long, default_value = "1.4142135623730951")]
+        scale_factor: f64,
+
+        /// Maximum brightest stars per HEALPix cell.
+        #[arg(long, default_value = "30")]
+        max_stars_per_cell: usize,
+
+        /// Number of quad-building passes per cell.
+        #[arg(long, default_value = "16")]
+        passes: usize,
+
+        /// Maximum times a star can appear in quads.
+        #[arg(long, default_value = "8")]
+        max_reuse: usize,
+
+        /// Maximum HEALPix depth (caps memory usage for fine-scale bands).
+        #[arg(long, default_value = "8")]
+        max_depth: u8,
     },
 
     /// Diagnose extraction by comparing detected sources to index stars.
@@ -297,6 +353,25 @@ fn parse_scale_range(s: &str) -> (f64, f64) {
     (lo, hi)
 }
 
+fn print_solve_stats(stats: &SolveStats) {
+    eprintln!(
+        "Stats: verified={}, accepted={}",
+        stats.n_verified,
+        if stats.accepted_log_odds.is_some() {
+            "yes"
+        } else {
+            "no"
+        }
+    );
+    if let Some((lo, nm)) = stats.best_rejected {
+        eprintln!("  Best rejected: lo={:.1}, matches={}", lo, nm);
+    }
+    if let Some(lo) = stats.accepted_log_odds {
+        eprintln!("  Accepted log-odds: {:.1}", lo);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn cmd_solve(
     image_path: &Path,
     index_paths: &[PathBuf],
@@ -305,6 +380,8 @@ fn cmd_solve(
     scale_range: Option<(f64, f64)>,
     code_tolerance: f64,
     timeout: Option<Duration>,
+    min_matches: usize,
+    log_odds_accept: f64,
 ) {
     let array = load_image(image_path);
     let (h, w) = array.dim();
@@ -331,10 +408,17 @@ fn cmd_solve(
         scale_range,
         code_tolerance,
         timeout,
+        verify: VerifyConfig {
+            min_matches,
+            log_odds_accept,
+            ..VerifyConfig::default()
+        },
         ..SolverConfig::default()
     };
 
-    match solve_image(&array, &index_refs, &extraction_config, &solver_config) {
+    let (result, stats) = solve_image(&array, &index_refs, &extraction_config, &solver_config);
+    print_solve_stats(&stats);
+    match result {
         Some(solution) => {
             let (ra, dec) = solution.wcs.field_center();
             let scale_arcsec = solution.wcs.pixel_scale() * 3600.0;
@@ -400,7 +484,9 @@ fn cmd_batch_solve(
     let mut n_solved = 0;
     let mut n_failed = 0;
     let mut solve_times: Vec<f64> = Vec::new();
-    let mut fail_times: Vec<f64> = Vec::new();
+    let mut all_accepted_log_odds: Vec<f64> = Vec::new();
+    let mut best_rejected_overall: Option<(f64, usize)> = None;
+    let mut all_n_verified: Vec<usize> = Vec::new();
 
     for (i, file) in files.iter().enumerate() {
         let name = file.file_name().unwrap().to_string_lossy();
@@ -408,26 +494,51 @@ fn cmd_batch_solve(
 
         let array = load_image(file);
         let t0 = Instant::now();
-        let result = solve_image(&array, &index_refs, extraction_config, solver_config);
+        let (result, stats) = solve_image(&array, &index_refs, extraction_config, solver_config);
         let elapsed = t0.elapsed().as_secs_f64();
+
+        all_n_verified.push(stats.n_verified);
+        if let Some((lo, nm)) = stats.best_rejected {
+            match best_rejected_overall {
+                None => best_rejected_overall = Some((lo, nm)),
+                Some((best_lo, _)) if lo > best_lo => {
+                    best_rejected_overall = Some((lo, nm));
+                }
+                _ => {}
+            }
+        }
+        if let Some(lo) = stats.accepted_log_odds {
+            all_accepted_log_odds.push(lo);
+        }
 
         match result {
             Some(solution) => {
                 let (ra, dec) = solution.wcs.field_center();
+                let best_reject_lo = stats.best_rejected.map(|(lo, _)| lo).unwrap_or(0.0);
                 eprintln!(
-                    "SOLVED in {:.1}s  RA={:.4} Dec={:+.4}  matched={}",
+                    "SOLVED in {:.1}s  RA={:.4} Dec={:+.4}  matched={}  verified={}  accept_lo={:.1}  best_reject_lo={:.1}",
                     elapsed,
                     ra.to_degrees(),
                     dec.to_degrees(),
-                    solution.verify_result.n_matched
+                    solution.verify_result.n_matched,
+                    stats.n_verified,
+                    solution.verify_result.log_odds,
+                    best_reject_lo,
                 );
                 n_solved += 1;
                 solve_times.push(elapsed);
             }
             None => {
-                eprintln!("FAILED in {:.1}s", elapsed);
+                let (best_lo, best_nm) = stats.best_rejected.unwrap_or((0.0, 0));
+                eprintln!(
+                    "FAILED in {:.1}s  verified={}  best_lo={:.1}({}m){}",
+                    elapsed,
+                    stats.n_verified,
+                    best_lo,
+                    best_nm,
+                    if stats.timed_out { "  TIMEOUT" } else { "" },
+                );
                 n_failed += 1;
-                fail_times.push(elapsed);
             }
         }
     }
@@ -454,7 +565,6 @@ fn cmd_batch_solve(
         eprintln!("  Mean:   {:.2}s", mean);
         eprintln!("  Max:    {:.2}s", max);
 
-        // Histogram buckets
         let buckets = [1.0, 5.0, 10.0, 30.0, 60.0];
         eprintln!("\n  Cumulative:");
         for &b in &buckets {
@@ -466,6 +576,31 @@ fn cmd_batch_solve(
                 100.0 * count as f64 / solve_times.len() as f64
             );
         }
+    }
+
+    let total_verified: usize = all_n_verified.iter().sum();
+    let mean_verified = total_verified as f64 / total as f64;
+    eprintln!("\n--- Verification stats ---");
+    eprintln!(
+        "Total verifications: {} (mean {:.0}/image)",
+        total_verified, mean_verified
+    );
+
+    if !all_accepted_log_odds.is_empty() {
+        all_accepted_log_odds.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let min = all_accepted_log_odds[0];
+        let max = all_accepted_log_odds[all_accepted_log_odds.len() - 1];
+        let median = all_accepted_log_odds[all_accepted_log_odds.len() / 2];
+        eprintln!(
+            "Accepted log-odds (n={}): min={:.1}, median={:.1}, max={:.1}",
+            all_accepted_log_odds.len(),
+            min,
+            median,
+            max,
+        );
+    }
+    if let Some((lo, nm)) = best_rejected_overall {
+        eprintln!("Best rejected overall: lo={:.1}, matches={}", lo, nm);
     }
 }
 
@@ -501,6 +636,98 @@ fn cmd_build_index(catalog_path: &Path, output_path: &Path, config: &CatalogBuil
         process::exit(1);
     });
     eprintln!("Saved index to {}", output_path.display());
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cmd_build_index_series(
+    catalog_path: &Path,
+    output_prefix: &Path,
+    scale_lower: f64,
+    scale_upper: f64,
+    scale_factor: f64,
+    max_stars_per_cell: usize,
+    passes: usize,
+    max_reuse: usize,
+    max_depth: u8,
+) {
+    use starfield::catalogs::MinimalCatalog;
+
+    // Compute bands: each band covers [lo, lo * scale_factor].
+    let mut bands: Vec<(f64, f64)> = Vec::new();
+    let mut lo = scale_lower;
+    while lo < scale_upper {
+        let hi = (lo * scale_factor).min(scale_upper);
+        bands.push((lo, hi));
+        lo = hi;
+        if (hi - scale_upper).abs() < 1e-10 {
+            break;
+        }
+    }
+
+    eprintln!(
+        "Building {} narrow-band indexes from {:.1}\" to {:.1}\" (factor {:.4}, max_depth={})",
+        bands.len(),
+        scale_lower,
+        scale_upper,
+        scale_factor,
+        max_depth,
+    );
+    for (i, (lo, hi)) in bands.iter().enumerate() {
+        eprintln!("  Band {:2}: {:8.2}\" - {:8.2}\"", i, lo, hi);
+    }
+
+    let catalog = MinimalCatalog::load(catalog_path).unwrap_or_else(|e| {
+        eprintln!("Failed to load catalog {}: {e}", catalog_path.display());
+        process::exit(1);
+    });
+    eprintln!("Loaded catalog: {} stars", catalog.len());
+
+    for (i, (lo, hi)) in bands.iter().enumerate() {
+        let output_path = PathBuf::from(format!("{}_{:02}.zdcl", output_prefix.display(), i));
+
+        // Cap the auto-computed depth to max_depth.
+        let auto_depth = zodiacal::healpix::depth_for_scale((*hi / 3600.0_f64).to_radians() * 2.0);
+        let depth = auto_depth.min(max_depth);
+
+        let config = CatalogBuilderConfig {
+            scale_lower: (*lo / 3600.0).to_radians(),
+            scale_upper: (*hi / 3600.0).to_radians(),
+            max_stars_per_cell,
+            max_quads: None,
+            uniformize_depth: Some(depth),
+            quad_depth: Some(depth),
+            passes,
+            max_reuse,
+        };
+
+        let n_cells = zodiacal::healpix::npix(depth);
+        let max_quads = config.effective_max_quads();
+        eprintln!(
+            "\n[Band {:2}/{:2}] {:.1}\"-{:.1}\"  depth={} cells={} max_quads={}",
+            i + 1,
+            bands.len(),
+            lo,
+            hi,
+            depth,
+            n_cells,
+            max_quads
+        );
+
+        let index = build_index_from_catalog(&catalog, &config);
+        eprintln!(
+            "  Built: {} stars, {} quads",
+            index.stars.len(),
+            index.quads.len()
+        );
+
+        index.save(&output_path).unwrap_or_else(|e| {
+            eprintln!("Failed to save index {}: {e}", output_path.display());
+            process::exit(1);
+        });
+        eprintln!("  Saved to {}", output_path.display());
+    }
+
+    eprintln!("\nDone! Built {} index files.", bands.len());
 }
 
 fn cmd_diagnose(
@@ -621,8 +848,6 @@ fn cmd_diagnose(
     let search_radius_sq = 2.0 * (1.0 - search_radius_rad.cos());
     let n_check = sources.len().min(30);
 
-    // Try different axis conventions: (x,y), (x,h-1-y), (y,x), (y,w-1-x)
-    // with different CD sign combos
     struct WcsCombo {
         cd: [[f64; 2]; 2],
         swap_xy: bool,
@@ -631,7 +856,6 @@ fn cmd_diagnose(
     }
     let ps = scale_rad;
     let wcs_combos: Vec<WcsCombo> = vec![
-        // Standard (x,y) with various CD signs
         WcsCombo {
             cd: [[-ps, 0.0], [0.0, ps]],
             swap_xy: false,
@@ -656,7 +880,6 @@ fn cmd_diagnose(
             flip_y: false,
             name: "cd[+,-] xy",
         },
-        // Swapped axes (y,x)
         WcsCombo {
             cd: [[-ps, 0.0], [0.0, ps]],
             swap_xy: true,
@@ -681,7 +904,6 @@ fn cmd_diagnose(
             flip_y: false,
             name: "cd[+,-] yx",
         },
-        // y-flipped
         WcsCombo {
             cd: [[-ps, 0.0], [0.0, ps]],
             swap_xy: false,
@@ -694,7 +916,6 @@ fn cmd_diagnose(
             flip_y: true,
             name: "cd[-,-] xy yf",
         },
-        // Swapped + y-flipped
         WcsCombo {
             cd: [[-ps, 0.0], [0.0, ps]],
             swap_xy: true,
@@ -726,7 +947,6 @@ fn cmd_diagnose(
         search_radius_rad.to_degrees() * 60.0
     );
     for combo in &wcs_combos {
-        // For swapped axes, crpix and image_size also swap
         let (crpx, crpy, iw, ih) = if combo.swap_xy {
             (h as f64 / 2.0, w as f64 / 2.0, h as f64, w as f64)
         } else {
@@ -839,6 +1059,8 @@ fn main() {
             scale_range,
             code_tolerance,
             timeout,
+            min_matches,
+            log_odds_accept,
         } => {
             let sr = scale_range.as_ref().map(|s| parse_scale_range(s));
             let dur = timeout.map(Duration::from_secs_f64);
@@ -850,6 +1072,8 @@ fn main() {
                 sr,
                 *code_tolerance,
                 dur,
+                *min_matches,
+                *log_odds_accept,
             );
         }
         Commands::BatchSolve {
@@ -861,6 +1085,8 @@ fn main() {
             code_tolerance,
             timeout,
             pattern,
+            min_matches,
+            log_odds_accept,
         } => {
             let sr = scale_range.as_ref().map(|s| parse_scale_range(s));
             let dur = timeout.map(Duration::from_secs_f64);
@@ -873,6 +1099,11 @@ fn main() {
                 scale_range: sr,
                 code_tolerance: *code_tolerance,
                 timeout: dur,
+                verify: VerifyConfig {
+                    min_matches: *min_matches,
+                    log_odds_accept: *log_odds_accept,
+                    ..VerifyConfig::default()
+                },
                 ..SolverConfig::default()
             };
             cmd_batch_solve(dir, index, &extraction_config, &solver_config, pattern);
@@ -899,6 +1130,29 @@ fn main() {
                 max_reuse: *max_reuse,
             };
             cmd_build_index(catalog, output, &config);
+        }
+        Commands::BuildIndexSeries {
+            catalog,
+            output_prefix,
+            scale_lower,
+            scale_upper,
+            scale_factor,
+            max_stars_per_cell,
+            passes,
+            max_reuse,
+            max_depth,
+        } => {
+            cmd_build_index_series(
+                catalog,
+                output_prefix,
+                *scale_lower,
+                *scale_upper,
+                *scale_factor,
+                *max_stars_per_cell,
+                *passes,
+                *max_reuse,
+                *max_depth,
+            );
         }
         Commands::Diagnose {
             image,
