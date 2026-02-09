@@ -1,8 +1,11 @@
+use std::io::{Read, Write};
+
 use ndarray::Array2;
+use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 
 /// A detected source in an image.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DetectedSource {
     pub x: f64,
     pub y: f64,
@@ -335,6 +338,43 @@ pub fn sources_from_points(points: &[(f64, f64)]) -> Vec<DetectedSource> {
         .iter()
         .map(|&(x, y)| DetectedSource { x, y, flux: 1.0 })
         .collect()
+}
+
+/// JSON representation of detected sources with image metadata.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SourcesJson {
+    pub image_width: f64,
+    pub image_height: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ra_deg: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dec_deg: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plate_scale_arcsec: Option<f64>,
+    pub sources: Vec<DetectedSource>,
+}
+
+/// Write detected sources to JSON format.
+pub fn write_sources_json(
+    sources: &[DetectedSource],
+    image_size: (f64, f64),
+    writer: &mut impl Write,
+) -> std::io::Result<()> {
+    let data = SourcesJson {
+        image_width: image_size.0,
+        image_height: image_size.1,
+        ra_deg: None,
+        dec_deg: None,
+        plate_scale_arcsec: None,
+        sources: sources.to_vec(),
+    };
+    serde_json::to_writer_pretty(writer, &data).map_err(std::io::Error::other)
+}
+
+/// Read detected sources from JSON format.
+pub fn read_sources_json(reader: impl Read) -> std::io::Result<SourcesJson> {
+    serde_json::from_reader(reader)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
 }
 
 #[cfg(test)]

@@ -207,6 +207,24 @@ enum Commands {
         #[arg(long, default_value = "200")]
         max_sources: usize,
     },
+
+    /// Extract sources from an image and write them as JSON.
+    Extract {
+        /// Path to the image file (PNG, JPEG, FITS, etc.)
+        image: PathBuf,
+
+        /// Output JSON file (stdout if omitted).
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Detection threshold in sigma units.
+        #[arg(long, default_value = "5.0")]
+        threshold_sigma: f64,
+
+        /// Max sources to extract.
+        #[arg(long, default_value = "200")]
+        max_sources: usize,
+    },
 }
 
 #[cfg(feature = "fits")]
@@ -1047,6 +1065,51 @@ fn cmd_diagnose(
     }
 }
 
+fn cmd_extract(image_path: &Path, output: Option<&Path>, threshold_sigma: f64, max_sources: usize) {
+    let image = load_image(image_path);
+    let (h, w) = image.dim();
+    let image_size = (w as f64, h as f64);
+
+    let config = ExtractionConfig {
+        threshold_sigma,
+        max_sources,
+        ..ExtractionConfig::default()
+    };
+    let sources = zodiacal::extraction::extract_sources(&image, &config);
+    eprintln!(
+        "Extracted {} sources from {} ({}x{})",
+        sources.len(),
+        image_path.display(),
+        w,
+        h
+    );
+
+    let write_result = match output {
+        Some(path) => {
+            let file = std::fs::File::create(path).unwrap_or_else(|e| {
+                eprintln!("Failed to create {}: {e}", path.display());
+                process::exit(1);
+            });
+            let mut writer = std::io::BufWriter::new(file);
+            zodiacal::extraction::write_sources_json(&sources, image_size, &mut writer)
+        }
+        None => {
+            let stdout = std::io::stdout();
+            let mut writer = stdout.lock();
+            zodiacal::extraction::write_sources_json(&sources, image_size, &mut writer)
+        }
+    };
+
+    write_result.unwrap_or_else(|e| {
+        eprintln!("Failed to write sources: {e}");
+        process::exit(1);
+    });
+
+    if let Some(path) = output {
+        eprintln!("Wrote sources to {}", path.display());
+    }
+}
+
 fn main() {
     let cli = Cli::parse();
 
@@ -1172,6 +1235,14 @@ fn main() {
                 *threshold_sigma,
                 *max_sources,
             );
+        }
+        Commands::Extract {
+            image,
+            output,
+            threshold_sigma,
+            max_sources,
+        } => {
+            cmd_extract(image, output.as_deref(), *threshold_sigma, *max_sources);
         }
     }
 }
