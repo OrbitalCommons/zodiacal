@@ -113,6 +113,113 @@ fn compute_field_codes(
     results
 }
 
+/// Try a single field quad (a, b, c, d) against all indexes.
+/// Returns Some(Solution) if a verified match is found.
+#[allow(clippy::too_many_arguments)]
+fn try_quad(
+    sorted: &[(usize, &DetectedSource)],
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+    indexes: &[&Index],
+    sources: &[DetectedSource],
+    image_size: (f64, f64),
+    config: &SolverConfig,
+    stats: &mut SolveStats,
+) -> Option<Solution> {
+    let (a_orig, sa) = sorted[a];
+    let (b_orig, sb) = sorted[b];
+    let (c_orig, sc) = sorted[c];
+    let (d_orig, sd) = sorted[d];
+
+    let positions: [(f64, f64); DIMQUADS] =
+        [(sa.x, sa.y), (sb.x, sb.y), (sc.x, sc.y), (sd.x, sd.y)];
+    let codes = compute_field_codes(&positions);
+    let orig_indices = [a_orig, b_orig, c_orig, d_orig];
+
+    for (field_code, reordered, _) in &codes {
+        let reordered_orig: [usize; DIMQUADS] = std::array::from_fn(|i| orig_indices[reordered[i]]);
+        let reordered_positions: [(f64, f64); DIMQUADS] =
+            std::array::from_fn(|i| positions[reordered[i]]);
+
+        for index in indexes {
+            let matches = index
+                .code_tree
+                .range_search(field_code, config.code_tolerance);
+
+            for code_match in &matches {
+                let quad = &index.quads[code_match.index];
+
+                let star_xyz: [[f64; 3]; DIMQUADS] = std::array::from_fn(|i| {
+                    let s = &index.stars[quad.star_ids[i]];
+                    radec_to_xyz(s.ra, s.dec)
+                });
+
+                let field_xy: [(f64, f64); DIMQUADS] = reordered_positions;
+
+                let fit_result = fit_tan_wcs(star_xyz.as_slice(), field_xy.as_slice(), image_size);
+
+                let wcs = match fit_result {
+                    Ok(wcs) => wcs,
+                    Err(FitError::TooFewCorrespondences)
+                    | Err(FitError::SingularMatrix)
+                    | Err(FitError::ProjectionFailed) => continue,
+                };
+
+                if let Some((lo, hi)) = config.scale_range {
+                    let scale_arcsec = wcs.pixel_scale() * 3600.0;
+                    if scale_arcsec < lo || scale_arcsec > hi {
+                        continue;
+                    }
+                }
+
+                let quad_residual_limit = 10.0;
+                let max_residual_sq = quad_residual_limit * quad_residual_limit;
+                let quad_ok = (0..DIMQUADS).all(|i| {
+                    if let Some((px, py)) = wcs.xyz_to_pixel(star_xyz[i]) {
+                        let dx = px - field_xy[i].0;
+                        let dy = py - field_xy[i].1;
+                        dx * dx + dy * dy < max_residual_sq
+                    } else {
+                        false
+                    }
+                });
+                if !quad_ok {
+                    continue;
+                }
+
+                let verify_result = verify_solution(&wcs, sources, index, &config.verify);
+                stats.n_verified += 1;
+
+                if verify_result.is_accepted(&config.verify) {
+                    stats.accepted_log_odds = Some(verify_result.log_odds);
+                    return Some(Solution {
+                        wcs,
+                        verify_result,
+                        quad_match: QuadMatch {
+                            field_indices: reordered_orig,
+                            index_indices: quad.star_ids,
+                        },
+                    });
+                } else {
+                    let lo = verify_result.log_odds;
+                    let nm = verify_result.n_matched;
+                    match stats.best_rejected {
+                        None => stats.best_rejected = Some((lo, nm)),
+                        Some((best_lo, _)) if lo > best_lo => {
+                            stats.best_rejected = Some((lo, nm));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
 /// Attempt to blindly solve a field of detected sources against one or more indexes.
 ///
 /// This is the main entry point for plate solving. It:
@@ -156,7 +263,38 @@ pub fn solve(
         (lo_rad, hi_rad)
     });
 
-    // 2. For each "new" field star N, for each pair (A, B) where A < B < N:
+    // Helper: check if backbone distance passes scale filtering.
+    let ab_scale_ok = |dist: f64| -> bool {
+        if let Some((pix_lo_rad, pix_hi_rad)) = scale_rad {
+            for index in indexes {
+                let ang_lo = dist * pix_lo_rad;
+                let ang_hi = dist * pix_hi_rad;
+                if ang_lo <= index.scale_upper && ang_hi >= index.scale_lower {
+                    return true;
+                }
+            }
+            false
+        } else {
+            true
+        }
+    };
+
+    // Helper: check if star i is inside the bounding circle for backbone (a, b).
+    let in_bbox = |sorted: &[(usize, &DetectedSource)],
+                   i: usize,
+                   mid_x: f64,
+                   mid_y: f64,
+                   dist_sq: f64|
+     -> bool {
+        let (_, si) = sorted[i];
+        let cdx = si.x - mid_x;
+        let cdy = si.y - mid_y;
+        cdx * cdx + cdy * cdy <= dist_sq
+    };
+
+    // 2. Incremental "new star" loop following astrometry.net's two-phase approach.
+    //    Star n must participate in every quad tried at this iteration.
+    //    This ensures each unique quad is tried exactly once.
     for n in 2..sorted.len() {
         if let Some(dl) = deadline
             && Instant::now() > dl
@@ -164,168 +302,94 @@ pub fn solve(
             stats.timed_out = true;
             return (None, stats);
         }
-        for a in 0..n {
-            for b in (a + 1)..n {
-                let (a_orig, sa) = sorted[a];
-                let (b_orig, sb) = sorted[b];
 
-                // a. Compute pixel distance between A and B.
+        // Phase 1: n is on the backbone (B = n).
+        // Try all A < n with B = n, then find C, D from [0..n).
+        for a in 0..n {
+            let b = n;
+            let (_, sa) = sorted[a];
+            let (_, sb) = sorted[b];
+
+            let dx = sb.x - sa.x;
+            let dy = sb.y - sa.y;
+            let dist_sq = dx * dx + dy * dy;
+            let dist = dist_sq.sqrt();
+            if dist < 1e-10 {
+                continue;
+            }
+            if !ab_scale_ok(dist) {
+                continue;
+            }
+
+            let mid_x = (sa.x + sb.x) / 2.0;
+            let mid_y = (sa.y + sb.y) / 2.0;
+
+            // C and D candidates from [0..n), excluding a.
+            let candidates: Vec<usize> = (0..n)
+                .filter(|&i| i != a && in_bbox(&sorted, i, mid_x, mid_y, dist_sq))
+                .collect();
+            if candidates.len() < 2 {
+                continue;
+            }
+
+            for ci in 0..candidates.len() {
+                for di in (ci + 1)..candidates.len() {
+                    let c = candidates[ci];
+                    let d = candidates[di];
+                    if let Some(sol) = try_quad(
+                        &sorted, a, b, c, d, indexes, sources, image_size, config, &mut stats,
+                    ) {
+                        return (Some(sol), stats);
+                    }
+                }
+            }
+        }
+
+        // Phase 2: n is off-diagonal (C = n).
+        // Try all backbone pairs A < B < n, with C = n and D from [0..n).
+        for a in 0..n {
+            if let Some(dl) = deadline
+                && Instant::now() > dl
+            {
+                stats.timed_out = true;
+                return (None, stats);
+            }
+            for b in (a + 1)..n {
+                let (_, sa) = sorted[a];
+                let (_, sb) = sorted[b];
+
                 let dx = sb.x - sa.x;
                 let dy = sb.y - sa.y;
                 let dist_sq = dx * dx + dy * dy;
                 let dist = dist_sq.sqrt();
-
                 if dist < 1e-10 {
                     continue;
                 }
-
-                // b. Scale filtering.
-                if let Some((pix_lo_rad, pix_hi_rad)) = scale_rad {
-                    let mut skip = true;
-                    for index in indexes {
-                        let ang_lo = dist * pix_lo_rad;
-                        let ang_hi = dist * pix_hi_rad;
-                        if ang_lo <= index.scale_upper && ang_hi >= index.scale_lower {
-                            skip = false;
-                            break;
-                        }
-                    }
-                    if skip {
-                        continue;
-                    }
-                }
-
-                // d. Find candidate C, D stars (index < N, not A or B,
-                //    within distance d(A,B) from midpoint of A,B).
-                let mid_x = (sa.x + sb.x) / 2.0;
-                let mid_y = (sa.y + sb.y) / 2.0;
-
-                let candidates: Vec<usize> = (0..n)
-                    .filter(|&i| {
-                        if i == a || i == b {
-                            return false;
-                        }
-                        let (_, si) = sorted[i];
-                        let cdx = si.x - mid_x;
-                        let cdy = si.y - mid_y;
-                        let cdist_sq = cdx * cdx + cdy * cdy;
-                        cdist_sq <= dist_sq
-                    })
-                    .collect();
-
-                // e. Skip if fewer than 2 candidates.
-                if candidates.len() < 2 {
+                if !ab_scale_ok(dist) {
                     continue;
                 }
 
-                // f. For each pair (C, D) from candidates.
-                for ci in 0..candidates.len() {
-                    for di in (ci + 1)..candidates.len() {
-                        let c = candidates[ci];
-                        let d = candidates[di];
-                        let (c_orig, sc) = sorted[c];
-                        let (d_orig, sd) = sorted[d];
+                let mid_x = (sa.x + sb.x) / 2.0;
+                let mid_y = (sa.y + sb.y) / 2.0;
 
-                        // i. Compute field quad codes for both parity orientations.
-                        let positions: [(f64, f64); DIMQUADS] =
-                            [(sa.x, sa.y), (sb.x, sb.y), (sc.x, sc.y), (sd.x, sd.y)];
-                        let codes = compute_field_codes(&positions);
-                        let orig_indices = [a_orig, b_orig, c_orig, d_orig];
+                // Check if n is in the bounding circle for this backbone.
+                if !in_bbox(&sorted, n, mid_x, mid_y, dist_sq) {
+                    continue;
+                }
 
-                        for (field_code, reordered, _) in &codes {
-                            let reordered_orig: [usize; DIMQUADS] =
-                                std::array::from_fn(|i| orig_indices[reordered[i]]);
-                            let reordered_positions: [(f64, f64); DIMQUADS] =
-                                std::array::from_fn(|i| positions[reordered[i]]);
-
-                            // ii. For each index, search for code matches.
-                            for index in indexes {
-                                let matches = index
-                                    .code_tree
-                                    .range_search(field_code, config.code_tolerance);
-
-                                for code_match in &matches {
-                                    let quad = &index.quads[code_match.index];
-
-                                    // Retrieve the reference quad's star positions.
-                                    let star_xyz: [[f64; 3]; DIMQUADS] = std::array::from_fn(|i| {
-                                        let s = &index.stars[quad.star_ids[i]];
-                                        radec_to_xyz(s.ra, s.dec)
-                                    });
-
-                                    // Build correspondences: field_xy[i] <-> star_xyz[i].
-                                    let field_xy: [(f64, f64); DIMQUADS] = reordered_positions;
-
-                                    // Fit TAN WCS.
-                                    let fit_result = fit_tan_wcs(
-                                        star_xyz.as_slice(),
-                                        field_xy.as_slice(),
-                                        image_size,
-                                    );
-
-                                    let wcs = match fit_result {
-                                        Ok(wcs) => wcs,
-                                        Err(FitError::TooFewCorrespondences)
-                                        | Err(FitError::SingularMatrix)
-                                        | Err(FitError::ProjectionFailed) => continue,
-                                    };
-
-                                    // Check pixel scale against user-specified range.
-                                    if let Some((lo, hi)) = config.scale_range {
-                                        let scale_arcsec = wcs.pixel_scale() * 3600.0;
-                                        if scale_arcsec < lo || scale_arcsec > hi {
-                                            continue;
-                                        }
-                                    }
-                                    // Quick sanity check: the 4 quad stars should
-                                    // project back close to their field positions.
-                                    let quad_residual_limit = 10.0;
-                                    let max_residual_sq = quad_residual_limit * quad_residual_limit;
-                                    let quad_ok = (0..DIMQUADS).all(|i| {
-                                        if let Some((px, py)) = wcs.xyz_to_pixel(star_xyz[i]) {
-                                            let dx = px - field_xy[i].0;
-                                            let dy = py - field_xy[i].1;
-                                            dx * dx + dy * dy < max_residual_sq
-                                        } else {
-                                            false
-                                        }
-                                    });
-                                    if !quad_ok {
-                                        continue;
-                                    }
-
-                                    // Verify the WCS.
-                                    let verify_result =
-                                        verify_solution(&wcs, sources, index, &config.verify);
-                                    stats.n_verified += 1;
-
-                                    if verify_result.is_accepted(&config.verify) {
-                                        stats.accepted_log_odds = Some(verify_result.log_odds);
-                                        return (
-                                            Some(Solution {
-                                                wcs,
-                                                verify_result,
-                                                quad_match: QuadMatch {
-                                                    field_indices: reordered_orig,
-                                                    index_indices: quad.star_ids,
-                                                },
-                                            }),
-                                            stats,
-                                        );
-                                    } else {
-                                        let lo = verify_result.log_odds;
-                                        let nm = verify_result.n_matched;
-                                        match stats.best_rejected {
-                                            None => stats.best_rejected = Some((lo, nm)),
-                                            Some((best_lo, _)) if lo > best_lo => {
-                                                stats.best_rejected = Some((lo, nm));
-                                            }
-                                            _ => {}
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                // C = n, D from [0..n) excluding a, b.
+                let c = n;
+                for d in 0..n {
+                    if d == a || d == b {
+                        continue;
+                    }
+                    if !in_bbox(&sorted, d, mid_x, mid_y, dist_sq) {
+                        continue;
+                    }
+                    if let Some(sol) = try_quad(
+                        &sorted, a, b, c, d, indexes, sources, image_size, config, &mut stats,
+                    ) {
+                        return (Some(sol), stats);
                     }
                 }
             }

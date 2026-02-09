@@ -154,10 +154,8 @@ pub fn verify_solution(
         let matches = ref_tree.range_search(&query, match_radius_sq);
 
         // Distractor log-density (updated with matches found so far).
-        let log_distractor = (distractors
-            + (1.0 - distractors) * n_matched as f64 / n_ref)
-            .ln()
-            + log_bg;
+        let log_distractor =
+            (distractors + (1.0 - distractors) * n_matched as f64 / n_ref).ln() + log_bg;
 
         if matches.is_empty() {
             // Non-match: evidence against correct WCS.
