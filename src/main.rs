@@ -8,7 +8,7 @@ use ndarray::Array2;
 use zodiacal::extraction::ExtractionConfig;
 use zodiacal::index::Index;
 use zodiacal::index::builder::{CatalogBuilderConfig, build_index_from_catalog};
-use zodiacal::solver::{SolveStats, SolverConfig, solve_image};
+use zodiacal::solver::{SolveStats, SolverConfig, solve, solve_image};
 use zodiacal::verify::VerifyConfig;
 
 #[derive(Parser)]
@@ -209,6 +209,7 @@ enum Commands {
     },
 
     /// Extract sources from an image and write them as JSON.
+    #[command(allow_negative_numbers = true)]
     Extract {
         /// Path to the image file (PNG, JPEG, FITS, etc.)
         image: PathBuf,
@@ -224,6 +225,18 @@ enum Commands {
         /// Max sources to extract.
         #[arg(long, default_value = "200")]
         max_sources: usize,
+
+        /// Known RA of field center in degrees (stored in JSON metadata).
+        #[arg(long)]
+        ra: Option<f64>,
+
+        /// Known Dec of field center in degrees (stored in JSON metadata).
+        #[arg(long)]
+        dec: Option<f64>,
+
+        /// Known plate scale in arcsec/pixel (stored in JSON metadata).
+        #[arg(long)]
+        plate_scale: Option<f64>,
     },
 }
 
@@ -510,9 +523,26 @@ fn cmd_batch_solve(
         let name = file.file_name().unwrap().to_string_lossy();
         eprint!("[{:3}/{}] {}: ", i + 1, files.len(), name);
 
-        let array = load_image(file);
         let t0 = Instant::now();
-        let (result, stats) = solve_image(&array, &index_refs, extraction_config, solver_config);
+        let (result, stats) = if file.extension().is_some_and(|e| e == "json") {
+            let reader = std::fs::File::open(file).unwrap_or_else(|e| {
+                eprintln!("Failed to open {}: {e}", file.display());
+                process::exit(1);
+            });
+            let sj = zodiacal::extraction::read_sources_json(reader).unwrap_or_else(|e| {
+                eprintln!("Failed to parse {}: {e}", file.display());
+                process::exit(1);
+            });
+            solve(
+                &sj.sources,
+                &index_refs,
+                (sj.image_width, sj.image_height),
+                solver_config,
+            )
+        } else {
+            let array = load_image(file);
+            solve_image(&array, &index_refs, extraction_config, solver_config)
+        };
         let elapsed = t0.elapsed().as_secs_f64();
 
         all_n_verified.push(stats.n_verified);
@@ -1065,10 +1095,19 @@ fn cmd_diagnose(
     }
 }
 
-fn cmd_extract(image_path: &Path, output: Option<&Path>, threshold_sigma: f64, max_sources: usize) {
+fn cmd_extract(
+    image_path: &Path,
+    output: Option<&Path>,
+    threshold_sigma: f64,
+    max_sources: usize,
+    ra_deg: Option<f64>,
+    dec_deg: Option<f64>,
+    plate_scale_arcsec: Option<f64>,
+) {
+    use zodiacal::extraction::SourcesJson;
+
     let image = load_image(image_path);
     let (h, w) = image.dim();
-    let image_size = (w as f64, h as f64);
 
     let config = ExtractionConfig {
         threshold_sigma,
@@ -1084,19 +1123,28 @@ fn cmd_extract(image_path: &Path, output: Option<&Path>, threshold_sigma: f64, m
         h
     );
 
-    let write_result = match output {
+    let data = SourcesJson {
+        image_width: w as f64,
+        image_height: h as f64,
+        ra_deg,
+        dec_deg,
+        plate_scale_arcsec,
+        sources,
+    };
+
+    let write_result: std::io::Result<()> = match output {
         Some(path) => {
             let file = std::fs::File::create(path).unwrap_or_else(|e| {
                 eprintln!("Failed to create {}: {e}", path.display());
                 process::exit(1);
             });
-            let mut writer = std::io::BufWriter::new(file);
-            zodiacal::extraction::write_sources_json(&sources, image_size, &mut writer)
+            let writer = std::io::BufWriter::new(file);
+            serde_json::to_writer(writer, &data).map_err(std::io::Error::other)
         }
         None => {
             let stdout = std::io::stdout();
-            let mut writer = stdout.lock();
-            zodiacal::extraction::write_sources_json(&sources, image_size, &mut writer)
+            let writer = stdout.lock();
+            serde_json::to_writer_pretty(writer, &data).map_err(std::io::Error::other)
         }
     };
 
@@ -1241,8 +1289,19 @@ fn main() {
             output,
             threshold_sigma,
             max_sources,
+            ra,
+            dec,
+            plate_scale,
         } => {
-            cmd_extract(image, output.as_deref(), *threshold_sigma, *max_sources);
+            cmd_extract(
+                image,
+                output.as_deref(),
+                *threshold_sigma,
+                *max_sources,
+                *ra,
+                *dec,
+                *plate_scale,
+            );
         }
     }
 }
