@@ -7,9 +7,10 @@ use ndarray::Array2;
 
 use zodiacal::extraction::ExtractionConfig;
 use zodiacal::index::Index;
+use zodiacal::index::IndexStar;
 use zodiacal::index::builder::{CatalogBuilderConfig, build_index_from_catalog};
 use zodiacal::solver::{SolveStats, SolverConfig, solve, solve_image};
-use zodiacal::verify::VerifyConfig;
+use zodiacal::verify::{VerifyCatalog, VerifyConfig};
 
 #[derive(Parser)]
 #[command(name = "zodiacal", about = "Blind astrometry plate solver")]
@@ -56,6 +57,10 @@ enum Commands {
         /// Log-odds threshold to accept a solution.
         #[arg(long, default_value = "20.0")]
         log_odds_accept: f64,
+
+        /// Path to a starfield catalog for deeper verification (optional).
+        #[arg(long)]
+        verify_catalog: Option<PathBuf>,
     },
 
     /// Solve multiple images against prebuilt star indexes.
@@ -98,6 +103,10 @@ enum Commands {
         /// Log-odds threshold to accept a solution.
         #[arg(long, default_value = "20.0")]
         log_odds_accept: f64,
+
+        /// Path to a starfield catalog for deeper verification (optional).
+        #[arg(long)]
+        verify_catalog: Option<PathBuf>,
     },
 
     /// Build a star index from a starfield binary catalog.
@@ -402,6 +411,36 @@ fn print_solve_stats(stats: &SolveStats) {
     }
 }
 
+fn load_verify_catalog(path: Option<&Path>) -> Option<VerifyCatalog> {
+    let path = path?;
+    use starfield::catalogs::{MinimalCatalog, StarCatalog};
+    eprintln!("Loading verification catalog: {}", path.display());
+    let t0 = Instant::now();
+    let catalog = MinimalCatalog::load(path).unwrap_or_else(|e| {
+        eprintln!("Failed to load verify catalog {}: {e}", path.display());
+        process::exit(1);
+    });
+    let stars: Vec<IndexStar> = catalog
+        .star_data()
+        .map(|s| IndexStar {
+            catalog_id: s.id,
+            ra: s.position.ra,
+            dec: s.position.dec,
+            mag: s.magnitude,
+        })
+        .collect();
+    let n_stars = stars.len();
+    let t1 = Instant::now();
+    let vc = VerifyCatalog::new(stars);
+    eprintln!(
+        "  {} stars loaded in {:.1}s, KdTree built in {:.1}s",
+        n_stars,
+        t1.duration_since(t0).as_secs_f64(),
+        t1.elapsed().as_secs_f64(),
+    );
+    Some(vc)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn cmd_solve(
     image_path: &Path,
@@ -413,6 +452,7 @@ fn cmd_solve(
     timeout: Option<Duration>,
     min_matches: usize,
     log_odds_accept: f64,
+    verify_catalog: Option<&VerifyCatalog>,
 ) {
     let array = load_image(image_path);
     let (h, w) = array.dim();
@@ -447,7 +487,13 @@ fn cmd_solve(
         ..SolverConfig::default()
     };
 
-    let (result, stats) = solve_image(&array, &index_refs, &extraction_config, &solver_config);
+    let (result, stats) = solve_image(
+        &array,
+        &index_refs,
+        &extraction_config,
+        &solver_config,
+        verify_catalog,
+    );
     print_solve_stats(&stats);
     match result {
         Some(solution) => {
@@ -483,6 +529,7 @@ fn cmd_batch_solve(
     extraction_config: &ExtractionConfig,
     solver_config: &SolverConfig,
     pattern: &str,
+    verify_catalog: Option<&VerifyCatalog>,
 ) {
     let indexes: Vec<Index> = index_paths
         .iter()
@@ -538,10 +585,17 @@ fn cmd_batch_solve(
                 &index_refs,
                 (sj.image_width, sj.image_height),
                 solver_config,
+                verify_catalog,
             )
         } else {
             let array = load_image(file);
-            solve_image(&array, &index_refs, extraction_config, solver_config)
+            solve_image(
+                &array,
+                &index_refs,
+                extraction_config,
+                solver_config,
+                verify_catalog,
+            )
         };
         let elapsed = t0.elapsed().as_secs_f64();
 
@@ -1172,9 +1226,11 @@ fn main() {
             timeout,
             min_matches,
             log_odds_accept,
+            verify_catalog,
         } => {
             let sr = scale_range.as_ref().map(|s| parse_scale_range(s));
             let dur = timeout.map(Duration::from_secs_f64);
+            let vc = load_verify_catalog(verify_catalog.as_deref());
             cmd_solve(
                 image,
                 index,
@@ -1185,6 +1241,7 @@ fn main() {
                 dur,
                 *min_matches,
                 *log_odds_accept,
+                vc.as_ref(),
             );
         }
         Commands::BatchSolve {
@@ -1198,9 +1255,11 @@ fn main() {
             pattern,
             min_matches,
             log_odds_accept,
+            verify_catalog,
         } => {
             let sr = scale_range.as_ref().map(|s| parse_scale_range(s));
             let dur = timeout.map(Duration::from_secs_f64);
+            let vc = load_verify_catalog(verify_catalog.as_deref());
             let extraction_config = ExtractionConfig {
                 threshold_sigma: *threshold_sigma,
                 max_sources: *max_sources,
@@ -1217,7 +1276,14 @@ fn main() {
                 },
                 ..SolverConfig::default()
             };
-            cmd_batch_solve(dir, index, &extraction_config, &solver_config, pattern);
+            cmd_batch_solve(
+                dir,
+                index,
+                &extraction_config,
+                &solver_config,
+                pattern,
+                vc.as_ref(),
+            );
         }
         Commands::BuildIndex {
             catalog,

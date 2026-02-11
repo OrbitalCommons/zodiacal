@@ -10,8 +10,24 @@ use std::f64::consts::PI;
 use crate::extraction::DetectedSource;
 use crate::geom::sphere::radec_to_xyz;
 use crate::geom::tan::TanWcs;
-use crate::index::Index;
+use crate::index::{Index, IndexStar};
 use crate::kdtree::KdTree;
+
+/// A standalone star catalog used exclusively for verification.
+/// Contains more stars than the quad-building index for deeper matching.
+pub struct VerifyCatalog {
+    pub star_tree: KdTree<3>,
+    pub stars: Vec<IndexStar>,
+}
+
+impl VerifyCatalog {
+    pub fn new(stars: Vec<IndexStar>) -> Self {
+        let points: Vec<[f64; 3]> = stars.iter().map(|s| radec_to_xyz(s.ra, s.dec)).collect();
+        let indices: Vec<usize> = (0..stars.len()).collect();
+        let star_tree = KdTree::<3>::build(points, indices);
+        VerifyCatalog { star_tree, stars }
+    }
+}
 
 /// Configuration for verification.
 pub struct VerifyConfig {
@@ -77,6 +93,7 @@ pub fn verify_solution(
     field_sources: &[DetectedSource],
     index: &Index,
     config: &VerifyConfig,
+    verify_catalog: Option<&VerifyCatalog>,
 ) -> VerifyResult {
     if field_sources.is_empty() {
         return VerifyResult {
@@ -94,7 +111,11 @@ pub fn verify_solution(
     let field_radius = wcs.field_radius();
     let radius_sq = 2.0 * (1.0 - field_radius.cos());
 
-    let nearby_results = index.star_tree.range_search(&center_xyz, radius_sq);
+    let (search_tree, search_stars): (&KdTree<3>, &[IndexStar]) = match verify_catalog {
+        Some(vc) => (&vc.star_tree, &vc.stars),
+        None => (&index.star_tree, &index.stars),
+    };
+    let nearby_results = search_tree.range_search(&center_xyz, radius_sq);
 
     // 2. Project reference stars to pixels, keeping only those within bounds.
     let margin = config.match_radius_pix;
@@ -102,7 +123,7 @@ pub fn verify_solution(
     let mut proj_indices: Vec<usize> = Vec::new();
 
     for result in &nearby_results {
-        let star = &index.stars[result.index];
+        let star = &search_stars[result.index];
         if let Some((px, py)) = wcs.radec_to_pixel(star.ra, star.dec)
             && px >= -margin
             && px <= wcs.image_size[0] + margin
@@ -284,7 +305,7 @@ mod tests {
             .collect();
 
         let config = VerifyConfig::default();
-        let result = verify_solution(&wcs, &field_sources, &index, &config);
+        let result = verify_solution(&wcs, &field_sources, &index, &config, None);
 
         assert!(
             result.log_odds > 0.0,
@@ -325,7 +346,7 @@ mod tests {
             log_odds_bail: f64::NEG_INFINITY,
             ..VerifyConfig::default()
         };
-        let result = verify_solution(&wcs, &field_sources, &index, &config);
+        let result = verify_solution(&wcs, &field_sources, &index, &config, None);
 
         assert_eq!(result.n_matched, 20);
         assert_eq!(result.n_distractor, 0);
@@ -358,7 +379,7 @@ mod tests {
             .collect();
 
         let config = VerifyConfig::default();
-        let result = verify_solution(&wrong_wcs, &field_sources, &index, &config);
+        let result = verify_solution(&wrong_wcs, &field_sources, &index, &config, None);
 
         assert!(
             result.log_odds <= 0.0,
@@ -409,7 +430,7 @@ mod tests {
             min_matches: 3,
             ..VerifyConfig::default()
         };
-        let result = verify_solution(&wcs, &field_sources, &index, &config);
+        let result = verify_solution(&wcs, &field_sources, &index, &config, None);
 
         assert!(
             result.n_matched >= 3,
@@ -461,7 +482,7 @@ mod tests {
             .collect();
 
         let config = VerifyConfig::default();
-        let result = verify_solution(&wrong_wcs, &field_sources, &index, &config);
+        let result = verify_solution(&wrong_wcs, &field_sources, &index, &config, None);
 
         assert!(
             result.log_odds <= 0.0 || result.n_matched == 0,
@@ -485,7 +506,7 @@ mod tests {
         let field_sources: Vec<DetectedSource> = vec![];
 
         let config = VerifyConfig::default();
-        let result = verify_solution(&wcs, &field_sources, &index, &config);
+        let result = verify_solution(&wcs, &field_sources, &index, &config, None);
 
         assert_eq!(result.log_odds, 0.0);
         assert_eq!(result.n_matched, 0);
@@ -580,7 +601,7 @@ mod tests {
             ..VerifyConfig::default()
         };
 
-        let result = verify_solution(&wrong_wcs, &field_sources, &index, &config);
+        let result = verify_solution(&wrong_wcs, &field_sources, &index, &config, None);
 
         let total_examined = result.n_matched + result.n_distractor;
         assert!(

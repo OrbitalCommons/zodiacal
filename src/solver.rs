@@ -9,7 +9,7 @@ use crate::geom::sphere::radec_to_xyz;
 use crate::geom::tan::TanWcs;
 use crate::index::Index;
 use crate::quads::{DIMCODES, DIMQUADS};
-use crate::verify::{VerifyConfig, VerifyResult, verify_solution};
+use crate::verify::{VerifyCatalog, VerifyConfig, VerifyResult, verify_solution};
 
 /// Configuration for the solver.
 pub struct SolverConfig {
@@ -129,6 +129,7 @@ fn try_quad(
     stats: &mut SolveStats,
     ab_dist_px: f64,
     scale_rad: Option<(f64, f64)>,
+    verify_catalog: Option<&VerifyCatalog>,
 ) -> Option<Solution> {
     let (a_orig, sa) = sorted[a];
     let (b_orig, sb) = sorted[b];
@@ -201,7 +202,8 @@ fn try_quad(
                     continue;
                 }
 
-                let verify_result = verify_solution(&wcs, sources, index, &config.verify);
+                let verify_result =
+                    verify_solution(&wcs, sources, index, &config.verify, verify_catalog);
                 stats.n_verified += 1;
 
                 if verify_result.is_accepted(&config.verify) {
@@ -245,6 +247,7 @@ pub fn solve(
     indexes: &[&Index],
     image_size: (f64, f64),
     config: &SolverConfig,
+    verify_catalog: Option<&VerifyCatalog>,
 ) -> (Option<Solution>, SolveStats) {
     let mut stats = SolveStats {
         n_verified: 0,
@@ -349,8 +352,19 @@ pub fn solve(
                     let c = candidates[ci];
                     let d = candidates[di];
                     if let Some(sol) = try_quad(
-                        &sorted, a, b, c, d, indexes, sources, image_size, config, &mut stats,
-                        dist, scale_rad,
+                        &sorted,
+                        a,
+                        b,
+                        c,
+                        d,
+                        indexes,
+                        sources,
+                        image_size,
+                        config,
+                        &mut stats,
+                        dist,
+                        scale_rad,
+                        verify_catalog,
                     ) {
                         return (Some(sol), stats);
                     }
@@ -400,8 +414,19 @@ pub fn solve(
                         continue;
                     }
                     if let Some(sol) = try_quad(
-                        &sorted, a, b, c, d, indexes, sources, image_size, config, &mut stats,
-                        dist, scale_rad,
+                        &sorted,
+                        a,
+                        b,
+                        c,
+                        d,
+                        indexes,
+                        sources,
+                        image_size,
+                        config,
+                        &mut stats,
+                        dist,
+                        scale_rad,
+                        verify_catalog,
                     ) {
                         return (Some(sol), stats);
                     }
@@ -421,10 +446,17 @@ pub fn solve_image(
     indexes: &[&Index],
     extraction_config: &crate::extraction::ExtractionConfig,
     solver_config: &SolverConfig,
+    verify_catalog: Option<&VerifyCatalog>,
 ) -> (Option<Solution>, SolveStats) {
     let sources = crate::extraction::extract_sources(image, extraction_config);
     let (h, w) = image.dim();
-    solve(&sources, indexes, (w as f64, h as f64), solver_config)
+    solve(
+        &sources,
+        indexes,
+        (w as f64, h as f64),
+        solver_config,
+        verify_catalog,
+    )
 }
 
 #[cfg(test)]
@@ -516,7 +548,7 @@ mod tests {
             ..SolverConfig::default()
         };
 
-        let (solution, stats) = solve(&sources, &[&index], (512.0, 512.0), &config);
+        let (solution, stats) = solve(&sources, &[&index], (512.0, 512.0), &config, None);
         assert!(solution.is_some(), "solver should find a solution");
         assert!(stats.accepted_log_odds.is_some());
 
@@ -600,7 +632,7 @@ mod tests {
             ..SolverConfig::default()
         };
 
-        let (solution, stats) = solve(&sources, &[&index], (1024.0, 1024.0), &config);
+        let (solution, stats) = solve(&sources, &[&index], (1024.0, 1024.0), &config, None);
         assert!(solution.is_none(), "random sources should not solve");
         assert!(stats.accepted_log_odds.is_none());
     }
@@ -623,7 +655,7 @@ mod tests {
             ..SolverConfig::default()
         };
 
-        let (solution, _stats) = solve(&sources, &[&index], (512.0, 512.0), &config);
+        let (solution, _stats) = solve(&sources, &[&index], (512.0, 512.0), &config, None);
         assert!(
             solution.is_none(),
             "wrong scale range should prevent solving"
@@ -667,6 +699,7 @@ mod tests {
             &[&decoy_index, &correct_index],
             (512.0, 512.0),
             &config,
+            None,
         );
         assert!(
             solution.is_some(),
@@ -720,7 +753,7 @@ mod tests {
         ];
 
         let config = SolverConfig::default();
-        let (solution, _stats) = solve(&sources, &[&index], (512.0, 512.0), &config);
+        let (solution, _stats) = solve(&sources, &[&index], (512.0, 512.0), &config, None);
         assert!(solution.is_none(), "fewer than 4 sources should not solve");
     }
 
@@ -728,7 +761,7 @@ mod tests {
     fn no_indexes() {
         let (sources, _, _) = make_synthetic_scenario();
         let config = SolverConfig::default();
-        let (solution, _stats) = solve(&sources, &[], (512.0, 512.0), &config);
+        let (solution, _stats) = solve(&sources, &[], (512.0, 512.0), &config, None);
         assert!(solution.is_none(), "no indexes should return None");
     }
 
@@ -885,7 +918,7 @@ mod tests {
             ..SolverConfig::default()
         };
 
-        let (solution, _stats) = solve(&sources, &[&index], image_size, &config);
+        let (solution, _stats) = solve(&sources, &[&index], image_size, &config, None);
         assert!(
             solution.is_some(),
             "solver should find a solution with rotated WCS"
