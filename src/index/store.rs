@@ -6,10 +6,10 @@ use crate::geom::sphere::radec_to_xyz;
 use crate::kdtree::KdTree;
 use crate::quads::{Code, DIMCODES, DIMQUADS, Quad};
 
-use super::{Index, IndexStar};
+use super::{Index, IndexMetadata, IndexStar};
 
 const MAGIC: &[u8; 4] = b"ZDCL";
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 
 fn write_u32(w: &mut impl Write, v: u32) -> io::Result<()> {
     w.write_all(&v.to_le_bytes())
@@ -48,6 +48,17 @@ impl Index {
 
         w.write_all(MAGIC)?;
         write_u32(&mut w, VERSION)?;
+
+        // V2: length-prefixed JSON metadata (0 length if absent)
+        let meta_bytes = match &self.metadata {
+            Some(m) => serde_json::to_vec(m).map_err(io::Error::other)?,
+            None => Vec::new(),
+        };
+        write_u64(&mut w, meta_bytes.len() as u64)?;
+        if !meta_bytes.is_empty() {
+            w.write_all(&meta_bytes)?;
+        }
+
         write_u64(&mut w, self.stars.len() as u64)?;
         write_u64(&mut w, self.quads.len() as u64)?;
         write_f64(&mut w, self.scale_lower)?;
@@ -96,12 +107,28 @@ impl Index {
         }
 
         let version = read_u32(&mut r)?;
-        if version != VERSION {
+        if version != 1 && version != 2 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("unsupported version: {version}"),
             ));
         }
+
+        // V2: read length-prefixed JSON metadata
+        let metadata = if version >= 2 {
+            let meta_len = read_u64(&mut r)? as usize;
+            if meta_len > 0 {
+                let mut meta_bytes = vec![0u8; meta_len];
+                r.read_exact(&mut meta_bytes)?;
+                let m: IndexMetadata = serde_json::from_slice(&meta_bytes)
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+                Some(m)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
 
         let num_stars = read_u64(&mut r)? as usize;
         let num_quads = read_u64(&mut r)? as usize;
@@ -154,6 +181,7 @@ impl Index {
             quads,
             scale_lower,
             scale_upper,
+            metadata,
         })
     }
 }
@@ -204,6 +232,7 @@ mod tests {
             quads,
             scale_lower: 0.001,
             scale_upper: 0.01,
+            metadata: None,
         }
     }
 
@@ -273,6 +302,7 @@ mod tests {
             quads: vec![],
             scale_lower: 0.0,
             scale_upper: 0.0,
+            metadata: None,
         };
 
         let path = temp_path("empty");
@@ -307,5 +337,62 @@ mod tests {
         let results = loaded.star_tree.range_search(&query, 0.1);
         assert!(!results.is_empty());
         assert!(results.iter().any(|r| r.index == 0));
+    }
+
+    #[test]
+    fn metadata_round_trip() {
+        let mut idx = make_test_index(8, 3);
+        idx.metadata = Some(IndexMetadata {
+            scale_lower_arcsec: 30.0,
+            scale_upper_arcsec: 90.0,
+            n_stars: 8,
+            n_quads: 3,
+            max_stars_per_cell: 10,
+            uniformize_depth: 6,
+            quad_depth: 6,
+            passes: 16,
+            max_reuse: 8,
+            build_timestamp: 1700000000,
+            catalog_path: Some("test_catalog.bin".to_string()),
+            band_index: Some(1),
+            scale_factor: Some(3.0),
+            mag_range: Some((5.0, 15.0)),
+        });
+
+        let path = temp_path("metadata_rt");
+        idx.save(&path).unwrap();
+        let loaded = Index::load(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+
+        let meta = loaded.metadata.expect("metadata should be present");
+        assert_eq!(meta.scale_lower_arcsec, 30.0);
+        assert_eq!(meta.scale_upper_arcsec, 90.0);
+        assert_eq!(meta.n_stars, 8);
+        assert_eq!(meta.n_quads, 3);
+        assert_eq!(meta.max_stars_per_cell, 10);
+        assert_eq!(meta.uniformize_depth, 6);
+        assert_eq!(meta.quad_depth, 6);
+        assert_eq!(meta.passes, 16);
+        assert_eq!(meta.max_reuse, 8);
+        assert_eq!(meta.build_timestamp, 1700000000);
+        assert_eq!(meta.catalog_path.as_deref(), Some("test_catalog.bin"));
+        assert_eq!(meta.band_index, Some(1));
+        assert_eq!(meta.scale_factor, Some(3.0));
+        assert_eq!(meta.mag_range, Some((5.0, 15.0)));
+    }
+
+    #[test]
+    fn no_metadata_round_trip() {
+        let idx = make_test_index(8, 3);
+        assert!(idx.metadata.is_none());
+
+        let path = temp_path("no_metadata_rt");
+        idx.save(&path).unwrap();
+        let loaded = Index::load(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+
+        assert!(loaded.metadata.is_none());
+        assert_eq!(loaded.stars.len(), 8);
+        assert_eq!(loaded.quads.len(), 3);
     }
 }

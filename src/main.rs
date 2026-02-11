@@ -6,8 +6,8 @@ use clap::{Parser, Subcommand};
 use ndarray::Array2;
 
 use zodiacal::extraction::ExtractionConfig;
-use zodiacal::index::Index;
 use zodiacal::index::builder::{CatalogBuilderConfig, build_index_from_catalog};
+use zodiacal::index::{Index, IndexMetadata};
 use zodiacal::solver::{SolveStats, SolverConfig, solve, solve_image};
 use zodiacal::verify::VerifyConfig;
 
@@ -237,6 +237,12 @@ enum Commands {
         /// Known plate scale in arcsec/pixel (stored in JSON metadata).
         #[arg(long)]
         plate_scale: Option<f64>,
+    },
+
+    /// Display metadata and summary for a zodiacal index file.
+    Info {
+        /// Path to the index file (.zdcl).
+        index: PathBuf,
     },
 }
 
@@ -652,6 +658,50 @@ fn cmd_batch_solve(
     }
 }
 
+fn cmd_info(index_path: &Path) {
+    let index = Index::load(index_path).unwrap_or_else(|e| {
+        eprintln!("Failed to load index {}: {e}", index_path.display());
+        process::exit(1);
+    });
+
+    println!("Index: {}", index_path.display());
+    println!("  Stars: {}", index.stars.len());
+    println!("  Quads: {}", index.quads.len());
+    println!(
+        "  Scale: {:.2}\" - {:.2}\"",
+        index.scale_lower.to_degrees() * 3600.0,
+        index.scale_upper.to_degrees() * 3600.0
+    );
+
+    if let Some(meta) = &index.metadata {
+        println!("  Build metadata:");
+        println!(
+            "    Scale band: {:.2}\" - {:.2}\"",
+            meta.scale_lower_arcsec, meta.scale_upper_arcsec
+        );
+        println!("    Uniformize depth: {}", meta.uniformize_depth);
+        println!("    Quad depth: {}", meta.quad_depth);
+        println!("    Max stars/cell: {}", meta.max_stars_per_cell);
+        println!("    Passes: {}", meta.passes);
+        println!("    Max reuse: {}", meta.max_reuse);
+        println!("    Build timestamp: {}", meta.build_timestamp);
+        if let Some(cat) = &meta.catalog_path {
+            println!("    Catalog: {cat}");
+        }
+        if let Some(bi) = meta.band_index {
+            println!("    Band index: {bi}");
+        }
+        if let Some(sf) = meta.scale_factor {
+            println!("    Scale factor: {sf:.4}");
+        }
+        if let Some((lo, hi)) = meta.mag_range {
+            println!("    Magnitude range: {lo:.2} - {hi:.2}");
+        }
+    } else {
+        println!("  (no build metadata - v1 index)");
+    }
+}
+
 fn cmd_build_index(catalog_path: &Path, output_path: &Path, config: &CatalogBuilderConfig) {
     use starfield::catalogs::MinimalCatalog;
 
@@ -672,12 +722,47 @@ fn cmd_build_index(catalog_path: &Path, output_path: &Path, config: &CatalogBuil
     });
     eprintln!("Loaded catalog: {} stars", catalog.len());
 
-    let index = build_index_from_catalog(&catalog, config);
+    let mut index = build_index_from_catalog(&catalog, config);
     eprintln!(
         "Built index: {} stars, {} quads",
         index.stars.len(),
         index.quads.len()
     );
+
+    let mag_range = if index.stars.is_empty() {
+        None
+    } else {
+        let min = index
+            .stars
+            .iter()
+            .map(|s| s.mag)
+            .fold(f64::INFINITY, f64::min);
+        let max = index
+            .stars
+            .iter()
+            .map(|s| s.mag)
+            .fold(f64::NEG_INFINITY, f64::max);
+        Some((min, max))
+    };
+    index.metadata = Some(IndexMetadata {
+        scale_lower_arcsec: config.scale_lower.to_degrees() * 3600.0,
+        scale_upper_arcsec: config.scale_upper.to_degrees() * 3600.0,
+        n_stars: index.stars.len(),
+        n_quads: index.quads.len(),
+        max_stars_per_cell: config.max_stars_per_cell,
+        uniformize_depth: config.effective_uniformize_depth(),
+        quad_depth: config.effective_quad_depth(),
+        passes: config.passes,
+        max_reuse: config.max_reuse,
+        build_timestamp: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs(),
+        catalog_path: Some(catalog_path.display().to_string()),
+        band_index: None,
+        scale_factor: None,
+        mag_range,
+    });
 
     index.save(output_path).unwrap_or_else(|e| {
         eprintln!("Failed to save index {}: {e}", output_path.display());
@@ -761,12 +846,47 @@ fn cmd_build_index_series(
             max_quads
         );
 
-        let index = build_index_from_catalog(&catalog, &config);
+        let mut index = build_index_from_catalog(&catalog, &config);
         eprintln!(
             "  Built: {} stars, {} quads",
             index.stars.len(),
             index.quads.len()
         );
+
+        let mag_range = if index.stars.is_empty() {
+            None
+        } else {
+            let min = index
+                .stars
+                .iter()
+                .map(|s| s.mag)
+                .fold(f64::INFINITY, f64::min);
+            let max = index
+                .stars
+                .iter()
+                .map(|s| s.mag)
+                .fold(f64::NEG_INFINITY, f64::max);
+            Some((min, max))
+        };
+        index.metadata = Some(IndexMetadata {
+            scale_lower_arcsec: *lo,
+            scale_upper_arcsec: *hi,
+            n_stars: index.stars.len(),
+            n_quads: index.quads.len(),
+            max_stars_per_cell,
+            uniformize_depth: depth,
+            quad_depth: depth,
+            passes,
+            max_reuse,
+            build_timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+            catalog_path: Some(catalog_path.display().to_string()),
+            band_index: Some(i),
+            scale_factor: Some(scale_factor),
+            mag_range,
+        });
 
         index.save(&output_path).unwrap_or_else(|e| {
             eprintln!("Failed to save index {}: {e}", output_path.display());
@@ -1302,6 +1422,9 @@ fn main() {
                 *dec,
                 *plate_scale,
             );
+        }
+        Commands::Info { index } => {
+            cmd_info(index);
         }
     }
 }
