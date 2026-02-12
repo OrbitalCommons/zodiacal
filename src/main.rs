@@ -98,6 +98,10 @@ enum Commands {
         /// Log-odds threshold to accept a solution.
         #[arg(long, default_value = "20.0")]
         log_odds_accept: f64,
+
+        /// Directory to write diagnostic JSON for failed cases.
+        #[arg(long)]
+        failures_dir: Option<PathBuf>,
     },
 
     /// Build a star index from a starfield binary catalog.
@@ -489,6 +493,7 @@ fn cmd_batch_solve(
     extraction_config: &ExtractionConfig,
     solver_config: &SolverConfig,
     pattern: &str,
+    failures_dir: Option<&Path>,
 ) {
     let indexes: Vec<Index> = index_paths
         .iter()
@@ -592,6 +597,24 @@ fn cmd_batch_solve(
                     best_nm,
                     if stats.timed_out { "  TIMEOUT" } else { "" },
                 );
+                if let Some(fdir) = failures_dir {
+                    std::fs::create_dir_all(fdir).ok();
+                    let diag = serde_json::json!({
+                        "file": name.to_string(),
+                        "elapsed_s": elapsed,
+                        "timed_out": stats.timed_out,
+                        "n_verified": stats.n_verified,
+                        "best_rejected": stats.best_rejected.map(|(lo, nm)| {
+                            serde_json::json!({"log_odds": lo, "n_matched": nm})
+                        }),
+                        "best_rejected_wcs": stats.best_rejected_wcs,
+                    });
+                    let stem = file.file_stem().unwrap().to_string_lossy();
+                    let diag_path = fdir.join(format!("{stem}.diag.json"));
+                    if let Ok(f) = std::fs::File::create(&diag_path) {
+                        serde_json::to_writer_pretty(f, &diag).ok();
+                    }
+                }
                 n_failed += 1;
             }
         }
@@ -1318,6 +1341,7 @@ fn main() {
             pattern,
             min_matches,
             log_odds_accept,
+            failures_dir,
         } => {
             let sr = scale_range.as_ref().map(|s| parse_scale_range(s));
             let dur = timeout.map(Duration::from_secs_f64);
@@ -1337,7 +1361,14 @@ fn main() {
                 },
                 ..SolverConfig::default()
             };
-            cmd_batch_solve(dir, index, &extraction_config, &solver_config, pattern);
+            cmd_batch_solve(
+                dir,
+                index,
+                &extraction_config,
+                &solver_config,
+                pattern,
+                failures_dir.as_deref(),
+            );
         }
         Commands::BuildIndex {
             catalog,
