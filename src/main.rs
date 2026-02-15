@@ -252,88 +252,51 @@ enum Commands {
 
 #[cfg(feature = "fits")]
 fn load_fits(path: &Path) -> Array2<f32> {
-    use fitsrs::Fits;
-    use fitsrs::card::Value;
-    use fitsrs::hdu::HDU;
-    use fitsrs::hdu::data::image::Pixels;
-    use std::fs::File;
-    use std::io::BufReader;
+    use fitsio_pure::compat::fitsfile::FitsFile;
+    use fitsio_pure::compat::hdu::HduInfo;
+    use fitsio_pure::compat::images::ReadImage;
 
-    let f = File::open(path).unwrap_or_else(|e| {
+    let fitsfile = FitsFile::open(path).unwrap_or_else(|e| {
         eprintln!("Failed to open FITS file {}: {e}", path.display());
         process::exit(1);
     });
-    let reader = BufReader::new(f);
-    let mut hdu_list = Fits::from_reader(reader);
 
-    // Find the first image HDU with actual data (NAXIS >= 2).
-    // The primary HDU may be empty (NAXIS=0) with the image in an extension.
-    let hdu = loop {
-        match hdu_list.next() {
-            Some(Ok(HDU::Primary(hdu))) | Some(Ok(HDU::XImage(hdu))) => {
-                let naxis = hdu.get_header().get_xtension().get_naxis();
-                if naxis.len() >= 2 {
-                    break hdu;
-                }
-            }
-            Some(Ok(_)) => continue,
-            Some(Err(e)) => {
-                eprintln!("Failed to read FITS HDU: {e}");
-                process::exit(1);
-            }
-            None => {
-                eprintln!("No image HDU with data found in FITS file");
-                process::exit(1);
-            }
+    // Find first image HDU with 2+ axes. Try primary first, then extensions.
+    let num_hdus = fitsfile.num_hdus().unwrap_or(1);
+    let mut found = None;
+    for i in 0..num_hdus {
+        if let Ok(hdu) = fitsfile.hdu(i)
+            && let Ok(HduInfo::ImageInfo { ref shape, .. }) = hdu.info(&fitsfile)
+            && shape.len() >= 2
+        {
+            found = Some((hdu, shape.clone()));
+            break;
         }
-    };
+    }
 
-    let xtension = hdu.get_header().get_xtension();
-    let naxis = xtension.get_naxis();
-    let naxis1 = naxis[0] as usize;
-    let naxis2 = naxis[1] as usize;
+    let (hdu, shape) = found.unwrap_or_else(|| {
+        eprintln!("No image HDU with data found in FITS file");
+        process::exit(1);
+    });
 
-    let header = hdu.get_header();
-    let bzero: f64 = match header.get("BZERO") {
-        Some(Value::Float { value, .. }) => *value,
-        Some(Value::Integer { value, .. }) => *value as f64,
-        _ => 0.0,
-    };
-    let bscale: f64 = match header.get("BSCALE") {
-        Some(Value::Float { value, .. }) => *value,
-        Some(Value::Integer { value, .. }) => *value as f64,
-        _ => 1.0,
-    };
+    let naxis1 = shape[0];
+    let naxis2 = shape[1];
+    eprintln!("FITS: {}x{}", naxis1, naxis2);
 
-    eprintln!(
-        "FITS: {}x{} BITPIX={:?} BZERO={} BSCALE={}",
-        naxis1,
-        naxis2,
-        xtension.get_bitpix(),
-        bzero,
-        bscale
-    );
-
-    let image_data = hdu_list.get_data(&hdu);
-    let pixels = image_data.pixels();
-
-    let raw: Vec<f32> = match pixels {
-        Pixels::U8(it) => it.map(|v| (v as f64 * bscale + bzero) as f32).collect(),
-        Pixels::I16(it) => it.map(|v| (v as f64 * bscale + bzero) as f32).collect(),
-        Pixels::I32(it) => it.map(|v| (v as f64 * bscale + bzero) as f32).collect(),
-        Pixels::I64(it) => it.map(|v| (v as f64 * bscale + bzero) as f32).collect(),
-        Pixels::F32(it) => it.map(|v| (v as f64 * bscale + bzero) as f32).collect(),
-        Pixels::F64(it) => it.map(|v| (v * bscale + bzero) as f32).collect(),
-    };
+    // Read pixels as f32 (compat API handles BSCALE/BZERO automatically)
+    let pixels: Vec<f32> = f32::read_image(&fitsfile, &hdu).unwrap_or_else(|e| {
+        eprintln!("Failed to read FITS pixel data: {e}");
+        process::exit(1);
+    });
 
     let expected = naxis1 * naxis2;
-    if raw.len() != expected {
+    if pixels.len() != expected {
         eprintln!(
             "FITS pixel count mismatch: expected {} ({}x{}), got {}",
             expected,
             naxis1,
             naxis2,
-            raw.len()
+            pixels.len()
         );
         process::exit(1);
     }
@@ -343,7 +306,7 @@ fn load_fits(path: &Path) -> Array2<f32> {
     // NAXIS1=rows and NAXIS2=cols (non-standard). The data is also flipped
     // vertically on write (FITS origin is bottom-left). We reshape as
     // (naxis1, naxis2) = (rows, cols) and flip vertically to undo both.
-    let arr = Array2::from_shape_vec((naxis1, naxis2), raw).unwrap_or_else(|e| {
+    let arr = Array2::from_shape_vec((naxis1, naxis2), pixels).unwrap_or_else(|e| {
         eprintln!("Failed to reshape FITS data: {e}");
         process::exit(1);
     });
