@@ -52,6 +52,8 @@ pub struct SolveStats {
     pub n_verified: usize,
     /// Best rejected candidate: (log_odds, n_matched). None if no rejections.
     pub best_rejected: Option<(f64, usize)>,
+    /// WCS of the best rejected candidate (for failure diagnostics).
+    pub best_rejected_wcs: Option<TanWcs>,
     /// Log-odds of the accepted candidate (if any).
     pub accepted_log_odds: Option<f64>,
     /// Whether the solve timed out.
@@ -218,9 +220,13 @@ fn try_quad(
                     let lo = verify_result.log_odds;
                     let nm = verify_result.n_matched;
                     match stats.best_rejected {
-                        None => stats.best_rejected = Some((lo, nm)),
+                        None => {
+                            stats.best_rejected = Some((lo, nm));
+                            stats.best_rejected_wcs = Some(wcs);
+                        }
                         Some((best_lo, _)) if lo > best_lo => {
                             stats.best_rejected = Some((lo, nm));
+                            stats.best_rejected_wcs = Some(wcs);
                         }
                         _ => {}
                     }
@@ -249,6 +255,7 @@ pub fn solve(
     let mut stats = SolveStats {
         n_verified: 0,
         best_rejected: None,
+        best_rejected_wcs: None,
         accepted_log_odds: None,
         timed_out: false,
     };

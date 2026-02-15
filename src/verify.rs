@@ -244,6 +244,7 @@ mod tests {
             quads,
             scale_lower: 0.0,
             scale_upper: 1.0,
+            metadata: None,
         }
     }
 

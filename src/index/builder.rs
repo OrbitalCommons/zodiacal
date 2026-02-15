@@ -63,7 +63,7 @@ impl Default for CatalogBuilderConfig {
 
 impl CatalogBuilderConfig {
     /// Compute the effective uniformization depth (auto or explicit).
-    fn effective_uniformize_depth(&self) -> u8 {
+    pub fn effective_uniformize_depth(&self) -> u8 {
         self.uniformize_depth
             .unwrap_or_else(|| healpix::depth_for_scale(self.scale_upper * 2.0))
     }
@@ -226,6 +226,7 @@ fn build_index_from_stars(
             quads: vec![],
             scale_lower,
             scale_upper,
+            metadata: None,
         };
     }
 
@@ -379,6 +380,7 @@ fn build_index_from_stars(
         quads,
         scale_lower,
         scale_upper,
+        metadata: None,
     }
 }
 
@@ -699,6 +701,7 @@ pub fn build_index_from_catalog(
         quads,
         scale_lower: config.scale_lower,
         scale_upper: config.scale_upper,
+        metadata: None,
     }
 }
 
