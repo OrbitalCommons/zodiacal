@@ -325,23 +325,24 @@ fn build_index_from_stars(
     pb_dedup.set_message("merging and deduplicating quads...");
     pb_dedup.enable_steady_tick(std::time::Duration::from_millis(80));
 
-    let total_raw: usize = batches.iter().map(|b| b.len()).sum();
+    let mut all_candidates: Vec<([usize; DIMQUADS], Quad, Code)> =
+        batches.into_iter().flatten().collect();
+    let total_raw = all_candidates.len();
+
+    // Sort by key for deterministic output regardless of parallel scheduling.
+    all_candidates.sort_by(|a, b| a.0.cmp(&b.0));
+
     let mut seen: HashSet<[usize; DIMQUADS]> = HashSet::with_capacity(total_raw);
     let mut quads: Vec<Quad> = Vec::with_capacity(total_raw.min(max_quads));
     let mut codes: Vec<Code> = Vec::with_capacity(total_raw.min(max_quads));
 
-    for batch in batches {
-        for (key, quad, code) in batch {
-            if seen.insert(key) {
-                quads.push(quad);
-                codes.push(code);
-                if quads.len() >= max_quads {
-                    break;
-                }
+    for (key, quad, code) in all_candidates {
+        if seen.insert(key) {
+            quads.push(quad);
+            codes.push(code);
+            if quads.len() >= max_quads {
+                break;
             }
-        }
-        if quads.len() >= max_quads {
-            break;
         }
     }
 
