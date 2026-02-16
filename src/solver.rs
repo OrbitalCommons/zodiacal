@@ -498,7 +498,7 @@ mod tests {
             scale_lower: scale_rad * 10.0,
             scale_upper: max_angle,
             max_stars: 25,
-            max_quads: 5000,
+            max_quads: 50_000,
         };
 
         let index = build_index(&catalog, &index_config);
@@ -582,7 +582,7 @@ mod tests {
             scale_lower: 0.001,
             scale_upper: 0.02,
             max_stars: 10,
-            max_quads: 100,
+            max_quads: 1000,
         };
         let index = build_index(&catalog, &index_config);
 
@@ -652,7 +652,7 @@ mod tests {
             scale_lower: 0.001,
             scale_upper: 0.05,
             max_stars: 20,
-            max_quads: 1000,
+            max_quads: 50_000,
         };
         let decoy_index = build_index(&decoy_catalog, &decoy_config);
 
@@ -874,7 +874,7 @@ mod tests {
             scale_lower: scale_rad * 10.0,
             scale_upper: max_angle,
             max_stars: 30,
-            max_quads: 10000,
+            max_quads: 50_000,
         };
 
         let index = build_index(&catalog, &index_config);
