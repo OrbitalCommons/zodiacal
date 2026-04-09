@@ -408,17 +408,20 @@ fn cmd_solve(
         max_sources,
         ..ExtractionConfig::default()
     };
-    let solver_config = SolverConfig {
-        scale_range,
-        code_tolerance,
-        timeout,
-        verify: VerifyConfig {
-            min_matches,
-            log_odds_accept,
-            ..VerifyConfig::default()
-        },
-        ..SolverConfig::default()
+    let mut solver_config = SolverConfig::default();
+    solver_config.code_tolerance = code_tolerance;
+    solver_config.timeout = timeout;
+    solver_config.verify = VerifyConfig {
+        min_matches,
+        log_odds_accept,
+        ..VerifyConfig::default()
     };
+    if let Some((lo, hi)) = scale_range {
+        solver_config = solver_config.with_scale_range(lo, hi).unwrap_or_else(|e| {
+            eprintln!("Invalid scale range: {e}");
+            process::exit(1);
+        });
+    }
 
     let (result, stats) = solve_image(&array, &index_refs, &extraction_config, &solver_config);
     print_solve_stats(&stats);
@@ -1313,17 +1316,20 @@ fn main() {
                 max_sources: *max_sources,
                 ..ExtractionConfig::default()
             };
-            let solver_config = SolverConfig {
-                scale_range: sr,
-                code_tolerance: *code_tolerance,
-                timeout: dur,
-                verify: VerifyConfig {
-                    min_matches: *min_matches,
-                    log_odds_accept: *log_odds_accept,
-                    ..VerifyConfig::default()
-                },
-                ..SolverConfig::default()
+            let mut solver_config = SolverConfig::default();
+            solver_config.code_tolerance = *code_tolerance;
+            solver_config.timeout = dur;
+            solver_config.verify = VerifyConfig {
+                min_matches: *min_matches,
+                log_odds_accept: *log_odds_accept,
+                ..VerifyConfig::default()
             };
+            if let Some((lo, hi)) = sr {
+                solver_config = solver_config.with_scale_range(lo, hi).unwrap_or_else(|e| {
+                    eprintln!("Invalid scale range: {e}");
+                    process::exit(1);
+                });
+            }
             cmd_batch_solve(
                 dir,
                 index,

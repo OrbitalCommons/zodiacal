@@ -44,10 +44,23 @@ impl SkyRegion {
     }
 }
 
+/// Error returned when constructing a config with invalid parameters.
+#[derive(Debug, Clone)]
+pub struct ConfigError(String);
+
+impl std::fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "invalid config: {}", self.0)
+    }
+}
+
+impl std::error::Error for ConfigError {}
+
 /// Configuration for the solver.
 pub struct SolverConfig {
     /// Pixel scale range to search (arcsec/pixel). If None, try all scales.
-    pub scale_range: Option<(f64, f64)>,
+    /// Use [`with_scale_range`](Self::with_scale_range) to set with validation.
+    pub(crate) scale_range: Option<(f64, f64)>,
     /// Maximum number of field stars to use for quad building.
     pub max_field_stars: usize,
     /// Code matching tolerance (squared L2 distance in code space).
@@ -58,6 +71,26 @@ pub struct SolverConfig {
     pub timeout: Option<Duration>,
     /// Only accept solutions whose field center falls within this sky region.
     pub within: Option<SkyRegion>,
+}
+
+impl SolverConfig {
+    /// Set the pixel scale range to search (arcsec/pixel).
+    ///
+    /// Returns an error if `lo > hi`.
+    pub fn with_scale_range(mut self, lo: f64, hi: f64) -> Result<Self, ConfigError> {
+        if lo > hi {
+            return Err(ConfigError(format!(
+                "scale_range lower bound ({lo}) exceeds upper bound ({hi})"
+            )));
+        }
+        self.scale_range = Some((lo, hi));
+        Ok(self)
+    }
+
+    /// Get the current scale range, if set.
+    pub fn scale_range(&self) -> Option<(f64, f64)> {
+        self.scale_range
+    }
 }
 
 impl Default for SolverConfig {
@@ -555,7 +588,7 @@ mod tests {
         let (sources, index, known_wcs) = make_synthetic_scenario();
 
         let config = SolverConfig {
-            scale_range: None,
+
             max_field_stars: 25,
             code_tolerance: 0.002,
             verify: VerifyConfig {
@@ -662,7 +695,6 @@ mod tests {
 
         // Set a scale range that is way off from the actual pixel scale (2 arcsec/pixel).
         let config = SolverConfig {
-            scale_range: Some((100.0, 200.0)),
             max_field_stars: 30,
             code_tolerance: 0.01,
             verify: VerifyConfig {
@@ -672,7 +704,9 @@ mod tests {
                 ..VerifyConfig::default()
             },
             ..SolverConfig::default()
-        };
+        }
+        .with_scale_range(100.0, 200.0)
+        .unwrap();
 
         let (solution, _stats) = solve(&sources, &[&index], (512.0, 512.0), &config);
         assert!(
@@ -701,7 +735,7 @@ mod tests {
         let decoy_index = build_index(&decoy_catalog, &decoy_config);
 
         let config = SolverConfig {
-            scale_range: None,
+
             max_field_stars: 30,
             code_tolerance: 0.01,
             verify: VerifyConfig {
@@ -746,6 +780,21 @@ mod tests {
         assert!((config.verify.log_odds_accept - 20.0).abs() < 1e-15);
         assert!((config.verify.log_odds_bail - (-20.0)).abs() < 1e-15);
         assert_eq!(config.verify.min_matches, 10);
+    }
+
+    #[test]
+    fn scale_range_validation() {
+        // Valid range succeeds
+        let config = SolverConfig::default().with_scale_range(1.0, 5.0);
+        assert!(config.is_ok());
+        assert_eq!(config.unwrap().scale_range(), Some((1.0, 5.0)));
+
+        // Equal bounds are valid
+        assert!(SolverConfig::default().with_scale_range(3.0, 3.0).is_ok());
+
+        // Inverted range is an error
+        let err = SolverConfig::default().with_scale_range(10.0, 1.0);
+        assert!(err.is_err());
     }
 
     #[test]
@@ -924,7 +973,7 @@ mod tests {
         let index = build_index(&catalog, &index_config);
 
         let config = SolverConfig {
-            scale_range: None,
+
             max_field_stars: 30,
             code_tolerance: 0.002,
             verify: VerifyConfig {
