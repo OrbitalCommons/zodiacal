@@ -1,8 +1,6 @@
 use std::io::{Read, Write};
 
-use ndarray::Array2;
 use serde::{Deserialize, Serialize};
-use std::collections::VecDeque;
 
 /// A detected source in an image.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,11 +47,66 @@ impl Default for ExtractionConfig {
     }
 }
 
+/// Create sources from a list of (x, y) pixel coordinates.
+///
+/// All sources get flux = 1.0. Useful when source positions are already known.
+pub fn sources_from_points(points: &[(f64, f64)]) -> Vec<DetectedSource> {
+    points
+        .iter()
+        .map(|&(x, y)| DetectedSource { x, y, flux: 1.0 })
+        .collect()
+}
+
+/// JSON representation of detected sources with image metadata.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SourcesJson {
+    pub image_width: f64,
+    pub image_height: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ra_deg: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dec_deg: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plate_scale_arcsec: Option<f64>,
+    pub sources: Vec<DetectedSource>,
+}
+
+/// Write detected sources to JSON format.
+pub fn write_sources_json(
+    sources: &[DetectedSource],
+    image_size: (f64, f64),
+    writer: &mut impl Write,
+) -> std::io::Result<()> {
+    let data = SourcesJson {
+        image_width: image_size.0,
+        image_height: image_size.1,
+        ra_deg: None,
+        dec_deg: None,
+        plate_scale_arcsec: None,
+        sources: sources.to_vec(),
+    };
+    serde_json::to_writer_pretty(writer, &data).map_err(std::io::Error::other)
+}
+
+/// Read detected sources from JSON format.
+pub fn read_sources_json(reader: impl Read) -> std::io::Result<SourcesJson> {
+    serde_json::from_reader(reader)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+}
+
+// --- Image-processing functions (require ndarray) ---
+
+#[cfg(feature = "image-processing")]
+use ndarray::Array2;
+#[cfg(feature = "image-processing")]
+use std::collections::VecDeque;
+
 /// Compute optimal threshold using Otsu's method.
 ///
 /// Works on arbitrary-range f32 images by mapping into a 4096-bin histogram
 /// clipped at p99.9 to avoid extreme outliers dominating the bin range.
 /// Returns the threshold in the image's native value range.
+#[cfg(feature = "image-processing")]
 fn otsu_threshold(image: &Array2<f32>) -> f32 {
     if image.is_empty() {
         return 0.0;
@@ -117,6 +170,7 @@ fn otsu_threshold(image: &Array2<f32>) -> f32 {
 }
 
 /// Compute the median of a slice of f32 values.
+#[cfg(feature = "image-processing")]
 fn median(values: &[f32]) -> f32 {
     if values.is_empty() {
         return 0.0;
@@ -136,6 +190,7 @@ fn median(values: &[f32]) -> f32 {
 /// Returns `(background, sigma)` where background is the median pixel value
 /// and sigma is estimated from the median absolute deviation (MAD):
 /// `sigma = 1.4826 * MAD`.
+#[cfg(feature = "image-processing")]
 fn estimate_background(image: &Array2<f32>) -> (f32, f32) {
     let pixels: Vec<f32> = image.iter().copied().collect();
     if pixels.is_empty() {
@@ -149,6 +204,7 @@ fn estimate_background(image: &Array2<f32>) -> (f32, f32) {
 }
 
 /// Find connected components of pixels above threshold using 4-connectivity flood fill.
+#[cfg(feature = "image-processing")]
 fn find_connected_components(mask: &Array2<bool>) -> Vec<Vec<(usize, usize)>> {
     let (ny, nx) = mask.dim();
     let mut visited = Array2::<bool>::default((ny, nx));
@@ -192,6 +248,7 @@ fn find_connected_components(mask: &Array2<bool>) -> Vec<Vec<(usize, usize)>> {
 ///
 /// Returns the ratio of major to minor axis lengths (eigenvalue ratio),
 /// or `None` if the component is degenerate.
+#[cfg(feature = "image-processing")]
 fn component_aspect_ratio(comp: &[(usize, usize)], image: &Array2<f32>, background: f32) -> f64 {
     if comp.len() < 3 {
         return 1.0;
@@ -258,6 +315,7 @@ fn component_aspect_ratio(comp: &[(usize, usize)], image: &Array2<f32>, backgrou
 /// 3. Filter by size, shape (aspect ratio)
 /// 4. For each component, compute flux-weighted centroid
 /// 5. Sort by flux (brightest first), truncate to max_sources
+#[cfg(feature = "image-processing")]
 pub fn extract_sources(image: &Array2<f32>, config: &ExtractionConfig) -> Vec<DetectedSource> {
     let (ny, nx) = image.dim();
     if ny == 0 || nx == 0 {
@@ -330,56 +388,28 @@ pub fn extract_sources(image: &Array2<f32>, config: &ExtractionConfig) -> Vec<De
     sources
 }
 
-/// Create sources from a list of (x, y) pixel coordinates.
-///
-/// All sources get flux = 1.0. Useful when source positions are already known.
-pub fn sources_from_points(points: &[(f64, f64)]) -> Vec<DetectedSource> {
-    points
-        .iter()
-        .map(|&(x, y)| DetectedSource { x, y, flux: 1.0 })
-        .collect()
-}
-
-/// JSON representation of detected sources with image metadata.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct SourcesJson {
-    pub image_width: f64,
-    pub image_height: f64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ra_deg: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub dec_deg: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub plate_scale_arcsec: Option<f64>,
-    pub sources: Vec<DetectedSource>,
-}
-
-/// Write detected sources to JSON format.
-pub fn write_sources_json(
-    sources: &[DetectedSource],
-    image_size: (f64, f64),
-    writer: &mut impl Write,
-) -> std::io::Result<()> {
-    let data = SourcesJson {
-        image_width: image_size.0,
-        image_height: image_size.1,
-        ra_deg: None,
-        dec_deg: None,
-        plate_scale_arcsec: None,
-        sources: sources.to_vec(),
-    };
-    serde_json::to_writer_pretty(writer, &data).map_err(std::io::Error::other)
-}
-
-/// Read detected sources from JSON format.
-pub fn read_sources_json(reader: impl Read) -> std::io::Result<SourcesJson> {
-    serde_json::from_reader(reader)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sources_from_points_roundtrip() {
+        let points = vec![(10.5, 20.3), (30.1, 40.7), (50.0, 60.0)];
+        let sources = sources_from_points(&points);
+
+        assert_eq!(sources.len(), 3);
+        for (i, (px, py)) in points.iter().enumerate() {
+            assert_eq!(sources[i].x, *px);
+            assert_eq!(sources[i].y, *py);
+            assert_eq!(sources[i].flux, 1.0);
+        }
+    }
+}
+
+#[cfg(all(test, feature = "image-processing"))]
+mod image_tests {
+    use super::*;
+    use ndarray::Array2;
 
     fn make_gaussian(image: &mut Array2<f32>, cx: f64, cy: f64, sigma: f64, amplitude: f32) {
         let (ny, nx) = image.dim();
@@ -489,19 +519,6 @@ mod tests {
             s.y,
             true_y
         );
-    }
-
-    #[test]
-    fn sources_from_points_roundtrip() {
-        let points = vec![(10.5, 20.3), (30.1, 40.7), (50.0, 60.0)];
-        let sources = sources_from_points(&points);
-
-        assert_eq!(sources.len(), 3);
-        for (i, (px, py)) in points.iter().enumerate() {
-            assert_eq!(sources[i].x, *px);
-            assert_eq!(sources[i].y, *py);
-            assert_eq!(sources[i].flux, 1.0);
-        }
     }
 
     #[test]
