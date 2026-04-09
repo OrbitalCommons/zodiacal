@@ -3,13 +3,46 @@
 
 use std::time::{Duration, Instant};
 
+use starfield::Equatorial;
+
 use crate::extraction::DetectedSource;
 use crate::fitting::{FitError, fit_tan_wcs};
-use crate::geom::sphere::radec_to_xyz;
+use crate::geom::sphere::{angular_distance, radec_to_xyz};
 use crate::geom::tan::TanWcs;
 use crate::index::Index;
 use crate::quads::{DIMCODES, DIMQUADS};
 use crate::verify::{VerifyConfig, VerifyResult, verify_solution};
+
+/// A circular region on the sky, defined by a center and angular radius.
+#[derive(Debug, Clone)]
+pub struct SkyRegion {
+    /// Center of the region.
+    pub center: Equatorial,
+    /// Angular radius in radians.
+    pub radius_rad: f64,
+}
+
+impl SkyRegion {
+    /// Create a sky region from center coordinates and radius in radians.
+    pub fn from_radians(center: Equatorial, radius_rad: f64) -> Self {
+        Self { center, radius_rad }
+    }
+
+    /// Create a sky region from center coordinates and radius in degrees.
+    pub fn from_degrees(center: Equatorial, radius_deg: f64) -> Self {
+        Self {
+            center,
+            radius_rad: radius_deg.to_radians(),
+        }
+    }
+
+    /// Check whether a point (ra, dec in radians) falls within this region.
+    pub fn contains(&self, ra: f64, dec: f64) -> bool {
+        let center_xyz = radec_to_xyz(self.center.ra, self.center.dec);
+        let point_xyz = radec_to_xyz(ra, dec);
+        angular_distance(center_xyz, point_xyz) <= self.radius_rad
+    }
+}
 
 /// Configuration for the solver.
 pub struct SolverConfig {
@@ -23,6 +56,8 @@ pub struct SolverConfig {
     pub verify: VerifyConfig,
     /// Maximum time to spend solving before giving up.
     pub timeout: Option<Duration>,
+    /// Only accept solutions whose field center falls within this sky region.
+    pub within: Option<SkyRegion>,
 }
 
 impl Default for SolverConfig {
@@ -33,6 +68,7 @@ impl Default for SolverConfig {
             code_tolerance: 0.01,
             verify: VerifyConfig::default(),
             timeout: None,
+            within: None,
         }
     }
 }
@@ -184,6 +220,13 @@ fn try_quad(
                 if let Some((lo, hi)) = config.scale_range {
                     let scale_arcsec = wcs.pixel_scale() * 3600.0;
                     if scale_arcsec < lo || scale_arcsec > hi {
+                        continue;
+                    }
+                }
+
+                if let Some(ref region) = config.within {
+                    let (ra, dec) = wcs.field_center();
+                    if !region.contains(ra, dec) {
                         continue;
                     }
                 }
@@ -423,6 +466,7 @@ pub fn solve(
 /// Solve from an image directly.
 ///
 /// Extracts sources, then runs the solver.
+#[cfg(feature = "image-processing")]
 pub fn solve_image(
     image: &ndarray::Array2<f32>,
     indexes: &[&Index],
