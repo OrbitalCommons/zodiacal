@@ -1,6 +1,7 @@
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+#[cfg(feature = "cli")]
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use starfield::catalogs::{StarCatalog, StarData};
@@ -11,6 +12,49 @@ use crate::kdtree::KdTree;
 use crate::quads::{Code, DIMCODES, DIMQUADS, Quad, compute_canonical_code};
 
 use super::{Index, IndexStar};
+
+// No-op progress bar shims for when the `cli` feature is disabled.
+#[cfg(not(feature = "cli"))]
+mod progress_shim {
+    pub struct MultiProgress;
+    impl MultiProgress {
+        pub fn new() -> Self {
+            Self
+        }
+        pub fn add(&self, pb: ProgressBar) -> ProgressBar {
+            pb
+        }
+    }
+    pub struct ProgressBar;
+    impl ProgressBar {
+        pub fn new_spinner() -> Self {
+            Self
+        }
+        pub fn new(_len: u64) -> Self {
+            Self
+        }
+        pub fn set_style(&self, _: ProgressStyle) {}
+        pub fn set_prefix(&self, _: impl Into<String>) {}
+        pub fn set_message(&self, _: impl Into<String>) {}
+        pub fn enable_steady_tick(&self, _: std::time::Duration) {}
+        pub fn inc(&self, _: u64) {}
+        pub fn finish_with_message(&self, _: String) {}
+    }
+    pub struct ProgressStyle;
+    impl ProgressStyle {
+        pub fn with_template(_: &str) -> Result<Self, std::fmt::Error> {
+            Ok(Self)
+        }
+        pub fn progress_chars(self, _: &str) -> Self {
+            self
+        }
+        pub fn tick_chars(self, _: &str) -> Self {
+            self
+        }
+    }
+}
+#[cfg(not(feature = "cli"))]
+use progress_shim::{MultiProgress, ProgressBar, ProgressStyle};
 
 /// Configuration for building an index.
 pub struct IndexBuilderConfig {
