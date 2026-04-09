@@ -24,6 +24,9 @@ target
 external/
 
 
+# Local working data (indexes, test images, analysis)
+scratch/
+
 # Added by cargo
 
 /target
