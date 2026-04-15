@@ -692,7 +692,7 @@ fn cmd_build_index(catalog_path: &Path, output_path: &Path, config: &CatalogBuil
     use starfield::catalogs::MinimalCatalog;
 
     let quad_depth = config.effective_quad_depth();
-    let n_cells = zodiacal::healpix::npix(quad_depth);
+    let n_cells = cdshealpix::nested::n_hash(quad_depth);
     let max_quads = config.effective_max_quads();
     eprintln!(
         "Index params: depth={}, cells={}, quads_per_cell={}, max_quads={}",
@@ -819,7 +819,7 @@ fn cmd_build_index_series(
             max_reuse,
         };
 
-        let n_cells = zodiacal::healpix::npix(depth);
+        let n_cells = cdshealpix::nested::n_hash(depth);
         let max_quads = config.effective_max_quads();
         eprintln!(
             "\n[Band {:2}/{:2}] {:.1}\"-{:.1}\"  depth={} cells={} max_quads={}",
