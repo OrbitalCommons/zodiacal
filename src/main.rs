@@ -805,7 +805,7 @@ fn cmd_build_index_series(
         let output_path = PathBuf::from(format!("{}_{:02}.zdcl", output_prefix.display(), i));
 
         // Cap the auto-computed depth to max_depth.
-        let auto_depth = zodiacal::healpix::depth_for_scale((*hi / 3600.0_f64).to_radians() * 2.0);
+        let auto_depth = zodiacal::index::builder::depth_for_scale((*hi / 3600.0_f64).to_radians() * 2.0);
         let depth = auto_depth.min(max_depth);
 
         let config = CatalogBuilderConfig {

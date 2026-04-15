@@ -7,7 +7,6 @@ use rayon::prelude::*;
 use starfield::catalogs::{StarCatalog, StarData};
 
 use crate::geom::sphere::{angular_distance, radec_to_xyz, star_midpoint};
-use crate::healpix::depth_for_scale;
 use crate::kdtree::KdTree;
 use crate::quads::{Code, DIMCODES, DIMQUADS, Quad, compute_canonical_code};
 
@@ -55,6 +54,15 @@ mod progress_shim {
 }
 #[cfg(not(feature = "cli"))]
 use progress_shim::{MultiProgress, ProgressBar, ProgressStyle};
+
+/// Compute an appropriate HEALPix depth for a given angular scale (radians).
+///
+/// Returns the depth where each pixel is approximately the same angular size
+/// as the given scale.
+pub fn depth_for_scale(scale_rad: f64) -> u8 {
+    let nside_f = (std::f64::consts::PI / 3.0).sqrt() / scale_rad;
+    (nside_f.log2().ceil() as u8).min(29)
+}
 
 /// Configuration for building an index.
 pub struct IndexBuilderConfig {
@@ -980,5 +988,17 @@ mod tests {
         let index = build_index(&catalog, &config);
         assert_eq!(index.stars.len(), 5);
         assert_eq!(index.star_tree.len(), 5);
+    }
+
+    #[test]
+    fn depth_for_scale_reasonable() {
+        let d = depth_for_scale(0.0175);
+        assert!(d >= 4 && d <= 8, "depth_for_scale(1deg) = {d}, expected ~6");
+
+        let d2 = depth_for_scale(0.000291);
+        assert!(
+            d2 >= 10 && d2 <= 14,
+            "depth_for_scale(1arcmin) = {d2}, expected ~12"
+        );
     }
 }

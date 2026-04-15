@@ -7,7 +7,6 @@
 pub mod extraction;
 pub mod fitting;
 pub mod geom;
-pub mod healpix;
 pub mod index;
 pub mod kdtree;
 pub mod quads;
