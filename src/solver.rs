@@ -295,6 +295,25 @@ pub fn solve(
     image_size: (f64, f64),
     config: &SolverConfig,
 ) -> (Option<Solution>, SolveStats) {
+    solve_with_callback(sources, indexes, image_size, config, |_| {})
+}
+
+/// Like [`solve`], but calls `on_progress` after each candidate verification.
+///
+/// The callback receives a snapshot of the current [`SolveStats`], which includes
+/// the number of candidates verified, best rejected log-odds, and whether a
+/// timeout has occurred. This can be used for progress bars, logging, or
+/// adaptive termination.
+///
+/// The no-op callback `|_| {}` is optimized away by the compiler, so
+/// [`solve`] has zero overhead from this mechanism.
+pub fn solve_with_callback(
+    sources: &[DetectedSource],
+    indexes: &[&Index],
+    image_size: (f64, f64),
+    config: &SolverConfig,
+    mut on_progress: impl FnMut(&SolveStats),
+) -> (Option<Solution>, SolveStats) {
     let mut stats = SolveStats {
         n_verified: 0,
         best_rejected: None,
@@ -402,8 +421,10 @@ pub fn solve(
                         &sorted, a, b, c, d, indexes, sources, image_size, config, &mut stats,
                         dist, scale_rad,
                     ) {
+                        on_progress(&stats);
                         return (Some(sol), stats);
                     }
+                    on_progress(&stats);
                 }
             }
         }
@@ -453,8 +474,10 @@ pub fn solve(
                         &sorted, a, b, c, d, indexes, sources, image_size, config, &mut stats,
                         dist, scale_rad,
                     ) {
+                        on_progress(&stats);
                         return (Some(sol), stats);
                     }
+                    on_progress(&stats);
                 }
             }
         }
@@ -604,6 +627,42 @@ mod tests {
 
         // Verify the solution was accepted.
         assert!(solution.verify_result.is_accepted(&config.verify));
+    }
+
+    #[test]
+    fn callback_fires_on_solve() {
+        let (sources, index, _) = make_synthetic_scenario();
+
+        let config = SolverConfig {
+            max_field_stars: 25,
+            code_tolerance: 0.002,
+            verify: VerifyConfig {
+                match_radius_pix: 3.0,
+                log_odds_accept: 10.0,
+                min_matches: 3,
+                ..VerifyConfig::default()
+            },
+            ..SolverConfig::default()
+        };
+
+        let mut call_count = 0usize;
+        let mut last_verified = 0usize;
+
+        let (solution, _stats) =
+            solve_with_callback(&sources, &[&index], (512.0, 512.0), &config, |stats| {
+                call_count += 1;
+                last_verified = stats.n_verified;
+            });
+
+        assert!(solution.is_some());
+        assert!(
+            call_count > 0,
+            "callback should have been called at least once"
+        );
+        assert!(
+            last_verified > 0,
+            "should have verified at least one candidate"
+        );
     }
 
     #[test]
