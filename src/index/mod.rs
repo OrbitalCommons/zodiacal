@@ -1,4 +1,6 @@
 pub mod builder;
+pub mod catalog;
+pub mod gaia;
 pub mod store;
 
 use crate::kdtree::KdTree;

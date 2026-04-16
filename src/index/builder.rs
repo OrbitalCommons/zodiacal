@@ -768,6 +768,109 @@ pub fn build_index_from_star_data(stars: &[StarData], config: &IndexBuilderConfi
     build_index(&tuples, config)
 }
 
+/// Build an index from a [`SpatialCatalog`](super::catalog::SpatialCatalog)
+/// using HEALPix-guided uniformization.
+///
+/// Similar to [`build_index_from_catalog`], but queries the catalog cell-by-cell
+/// instead of streaming all stars. This allows catalogs that load data on demand
+/// (e.g. [`GaiaSpatialCatalog`](super::gaia::GaiaSpatialCatalog)) to avoid
+/// loading the entire dataset into memory.
+pub fn build_index_from_spatial(
+    catalog: &impl super::catalog::SpatialCatalog,
+    config: &CatalogBuilderConfig,
+) -> Index {
+    let mp = MultiProgress::new();
+
+    let uni_depth = config.effective_uniformize_depth();
+    let max_per_cell = config.max_stars_per_cell;
+
+    // --- Phase 1: HEALPix uniformization via spatial queries ---
+    let pb_uni = mp.add(ProgressBar::new_spinner());
+    pb_uni.set_style(spinner_style());
+    pb_uni.set_prefix("✦ Uniformize");
+    pb_uni.set_message(format!(
+        "querying catalog by cell (depth {}, {} per cell)...",
+        uni_depth, max_per_cell
+    ));
+    pb_uni.enable_steady_tick(std::time::Duration::from_millis(80));
+
+    let cells = catalog.occupied_cells(uni_depth);
+    let n_cells = cells.len();
+
+    let mut stars: Vec<IndexStar> = Vec::new();
+    let mut total_streamed: u64 = 0;
+
+    for (i, &cell) in cells.iter().enumerate() {
+        let cell_stars = catalog.stars_in_cell(uni_depth, cell);
+        total_streamed += cell_stars.len() as u64;
+
+        // Keep only the brightest max_per_cell stars from this cell.
+        let mut cell_heap: BinaryHeap<HeapStar> = BinaryHeap::with_capacity(max_per_cell + 1);
+
+        for s in cell_stars {
+            let hs = HeapStar {
+                mag: s.magnitude,
+                id: s.id,
+                ra: s.position.ra,
+                dec: s.position.dec,
+            };
+            if cell_heap.len() < max_per_cell {
+                cell_heap.push(hs);
+            } else if let Some(faintest) = cell_heap.peek()
+                && hs.mag < faintest.mag
+            {
+                cell_heap.pop();
+                cell_heap.push(hs);
+            }
+        }
+
+        for hs in cell_heap {
+            stars.push(IndexStar {
+                catalog_id: hs.id,
+                ra: hs.ra,
+                dec: hs.dec,
+                mag: hs.mag,
+            });
+        }
+
+        if (i + 1) % 1000 == 0 || i + 1 == n_cells {
+            pb_uni.set_message(format!(
+                "processed {}/{} cells ({} stars from {} total)...",
+                i + 1,
+                n_cells,
+                stars.len(),
+                total_streamed,
+            ));
+        }
+    }
+
+    stars.sort_by(|a, b| {
+        a.mag
+            .partial_cmp(&b.mag)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    finish_spinner(
+        &pb_uni,
+        &format!(
+            "✓ {} stars from {} cells ({} total scanned, depth {})",
+            stars.len(),
+            n_cells,
+            total_streamed,
+            uni_depth,
+        ),
+    );
+
+    // Phases 2+ (KD-tree, quad building) reuse the shared core.
+    build_index_from_stars(
+        stars,
+        config.scale_lower,
+        config.scale_upper,
+        config.effective_max_quads(),
+        &mp,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -988,6 +1091,38 @@ mod tests {
         let index = build_index(&catalog, &config);
         assert_eq!(index.stars.len(), 5);
         assert_eq!(index.star_tree.len(), 5);
+    }
+
+    #[test]
+    fn spatial_catalog_builds_index() {
+        use crate::index::catalog::InMemorySpatialCatalog;
+        use starfield::catalogs::StarData;
+
+        let catalog = make_small_catalog();
+        // Convert to StarData for the spatial catalog
+        let star_data: Vec<StarData> = catalog
+            .iter()
+            .map(|&(id, ra, dec, mag)| {
+                StarData::new(id, ra.to_degrees(), dec.to_degrees(), mag, None)
+            })
+            .collect();
+        let spatial = InMemorySpatialCatalog::from_star_data(star_data.into_iter());
+
+        let config = CatalogBuilderConfig {
+            scale_lower: 0.001,
+            scale_upper: 0.02,
+            max_stars_per_cell: 10,
+            max_quads: Some(1000),
+            ..CatalogBuilderConfig::default()
+        };
+
+        let index = build_index_from_spatial(&spatial, &config);
+
+        assert_eq!(index.stars.len(), 10);
+        assert!(
+            !index.quads.is_empty(),
+            "expected some quads to be generated"
+        );
     }
 
     #[test]
