@@ -382,7 +382,7 @@ fn build_index_from_stars(
     let total_raw = all_candidates.len();
 
     // Sort by key for deterministic output regardless of parallel scheduling.
-    all_candidates.sort_by(|a, b| a.0.cmp(&b.0));
+    all_candidates.sort_by_key(|a| a.0);
 
     let mut seen: HashSet<[usize; DIMQUADS]> = HashSet::with_capacity(total_raw);
     let mut quads: Vec<Quad> = Vec::with_capacity(total_raw.min(max_quads));
