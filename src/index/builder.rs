@@ -7,7 +7,6 @@ use rayon::prelude::*;
 use starfield::catalogs::{StarCatalog, StarData};
 
 use crate::geom::sphere::{angular_distance, radec_to_xyz, star_midpoint};
-use crate::healpix;
 use crate::kdtree::KdTree;
 use crate::quads::{Code, DIMCODES, DIMQUADS, Quad, compute_canonical_code};
 
@@ -55,6 +54,15 @@ mod progress_shim {
 }
 #[cfg(not(feature = "cli"))]
 use progress_shim::{MultiProgress, ProgressBar, ProgressStyle};
+
+/// Compute an appropriate HEALPix depth for a given angular scale (radians).
+///
+/// Returns the depth where each pixel is approximately the same angular size
+/// as the given scale.
+pub fn depth_for_scale(scale_rad: f64) -> u8 {
+    let nside_f = (std::f64::consts::PI / 3.0).sqrt() / scale_rad;
+    (nside_f.log2().ceil() as u8).min(29)
+}
 
 /// Configuration for building an index.
 pub struct IndexBuilderConfig {
@@ -109,13 +117,13 @@ impl CatalogBuilderConfig {
     /// Compute the effective uniformization depth (auto or explicit).
     pub fn effective_uniformize_depth(&self) -> u8 {
         self.uniformize_depth
-            .unwrap_or_else(|| healpix::depth_for_scale(self.scale_upper * 2.0))
+            .unwrap_or_else(|| depth_for_scale(self.scale_upper * 2.0))
     }
 
     /// Compute the effective quad-building depth (auto or explicit).
     pub fn effective_quad_depth(&self) -> u8 {
         self.quad_depth
-            .unwrap_or_else(|| healpix::depth_for_scale(self.scale_upper * 2.0))
+            .unwrap_or_else(|| depth_for_scale(self.scale_upper * 2.0))
     }
 
     /// Compute recommended max_quads based on HEALPix geometry.
@@ -123,7 +131,7 @@ impl CatalogBuilderConfig {
     /// Returns `passes * npix(quad_depth)` — enough quads to fill
     /// every cell with the requested number of passes.
     pub fn recommended_max_quads(&self) -> usize {
-        let n_cells = healpix::npix(self.effective_quad_depth()) as usize;
+        let n_cells = cdshealpix::nested::n_hash(self.effective_quad_depth()) as usize;
         self.passes * n_cells
     }
 
@@ -469,7 +477,7 @@ pub fn build_index_from_catalog(
     let mp = MultiProgress::new();
 
     let uni_depth = config.effective_uniformize_depth();
-    let n_cells = healpix::npix(uni_depth);
+    let n_cells = cdshealpix::nested::n_hash(uni_depth);
     let max_per_cell = config.max_stars_per_cell;
 
     // --- Phase 1: HEALPix uniformization ---
@@ -496,7 +504,7 @@ pub fn build_index_from_catalog(
             ));
         }
 
-        let pixel = healpix::lon_lat_to_nested(s.position.ra, s.position.dec, uni_depth);
+        let pixel = cdshealpix::nested::hash(uni_depth, s.position.ra, s.position.dec);
         let heap = cell_heaps
             .entry(pixel)
             .or_insert_with(|| BinaryHeap::with_capacity(max_per_cell + 1));
@@ -563,7 +571,7 @@ pub fn build_index_from_catalog(
 
     // --- Phase 3: Per-cell quad building ---
     let quad_depth = config.effective_quad_depth();
-    let n_quad_cells = healpix::npix(quad_depth);
+    let n_quad_cells = cdshealpix::nested::n_hash(quad_depth);
     let max_quads = config.effective_max_quads();
     let quads_per_cell = (max_quads as u64 / n_quad_cells).max(1) as usize;
 
@@ -579,7 +587,7 @@ pub fn build_index_from_catalog(
     // Assign each star to its quad-depth cell.
     let mut cell_stars: HashMap<u64, Vec<usize>> = HashMap::new();
     for (idx, star) in stars.iter().enumerate() {
-        let cell = healpix::lon_lat_to_nested(star.ra, star.dec, quad_depth);
+        let cell = cdshealpix::nested::hash(quad_depth, star.ra, star.dec);
         cell_stars.entry(cell).or_default().push(idx);
     }
 
@@ -594,7 +602,8 @@ pub fn build_index_from_catalog(
             pb_quads.inc(1);
 
             // Gather star indices from this cell + neighbors.
-            let mut neighbor_cells = healpix::neighbours(cell_id, quad_depth);
+            let mut neighbor_cells = Vec::with_capacity(9);
+            cdshealpix::nested::append_bulk_neighbours(quad_depth, cell_id, &mut neighbor_cells);
             neighbor_cells.push(cell_id);
 
             let mut local_star_indices: Vec<usize> = Vec::new();
@@ -979,5 +988,17 @@ mod tests {
         let index = build_index(&catalog, &config);
         assert_eq!(index.stars.len(), 5);
         assert_eq!(index.star_tree.len(), 5);
+    }
+
+    #[test]
+    fn depth_for_scale_reasonable() {
+        let d = depth_for_scale(0.0175);
+        assert!(d >= 4 && d <= 8, "depth_for_scale(1deg) = {d}, expected ~6");
+
+        let d2 = depth_for_scale(0.000291);
+        assert!(
+            d2 >= 10 && d2 <= 14,
+            "depth_for_scale(1arcmin) = {d2}, expected ~12"
+        );
     }
 }

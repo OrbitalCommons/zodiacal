@@ -19,6 +19,7 @@ Zodiacal is a blind astrometry library written in Rust.
 - Block for at most 1 minute when waiting for results from background tasks
 - Never publish crates without explicit user permission
 - Never use --allow-dirty with cargo publish
+- Never use `git add -A` or `git add .` — always stage files by name to avoid pulling unrelated work into a commit
 
 ## Starfield Integration
 
