@@ -267,3 +267,213 @@ fn read_first_source_id(path: &Path) -> Option<u64> {
     let source_id = first_line.split(',').nth(1)?.parse::<u64>().ok()?;
     Some(source_id)
 }
+
+/// List all Gaia CSV files in a directory.
+fn list_gaia_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
+    let mut files: Vec<PathBuf> = fs::read_dir(dir)?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            p.extension().is_some_and(|ext| ext == "gz")
+                && p.file_name()
+                    .is_some_and(|n| n.to_string_lossy().starts_with("GaiaSource"))
+        })
+        .collect();
+    files.sort();
+    Ok(files)
+}
+
+/// Process a single Gaia file: parse all stars under mag_limit, bin into
+/// per-cell heaps keeping only the N brightest per cell.
+fn process_file(
+    path: &Path,
+    mag_limit: f64,
+    depth: u8,
+    max_per_cell: usize,
+) -> (HashMap<u64, BinaryHeap<HeapStar>>, u64) {
+    let mut heaps: HashMap<u64, BinaryHeap<HeapStar>> = HashMap::new();
+    let mut count: u64 = 0;
+
+    let file = match fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return (heaps, 0),
+    };
+
+    let reader = BufReader::new(GzDecoder::new(file));
+    let mut lines = reader.lines();
+    let _ = lines.next(); // skip header
+
+    for line in lines {
+        let line = match line {
+            Ok(l) => l,
+            Err(_) => continue,
+        };
+
+        if let Some(star) = parse_gaia_line(&line, mag_limit) {
+            count += 1;
+            let cell = cdshealpix::nested::hash(depth, star.position.ra, star.position.dec);
+            let hs = HeapStar {
+                mag: star.magnitude,
+                id: star.id,
+                ra: star.position.ra,
+                dec: star.position.dec,
+            };
+
+            let heap = heaps
+                .entry(cell)
+                .or_insert_with(|| BinaryHeap::with_capacity(max_per_cell + 1));
+
+            if heap.len() < max_per_cell {
+                heap.push(hs);
+            } else if let Some(faintest) = heap.peek()
+                && hs.mag < faintest.mag
+            {
+                heap.pop();
+                heap.push(hs);
+            }
+        }
+    }
+
+    (heaps, count)
+}
+
+/// Merge per-file cell heaps into a single set of heaps.
+fn merge_heaps(
+    dst: &mut HashMap<u64, BinaryHeap<HeapStar>>,
+    src: HashMap<u64, BinaryHeap<HeapStar>>,
+    max_per_cell: usize,
+) {
+    for (cell, src_heap) in src {
+        let dst_heap = dst
+            .entry(cell)
+            .or_insert_with(|| BinaryHeap::with_capacity(max_per_cell + 1));
+
+        for hs in src_heap {
+            if dst_heap.len() < max_per_cell {
+                dst_heap.push(hs);
+            } else if let Some(faintest) = dst_heap.peek()
+                && hs.mag < faintest.mag
+            {
+                dst_heap.pop();
+                dst_heap.push(hs);
+            }
+        }
+    }
+}
+
+use std::collections::{BinaryHeap, HashMap};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use rayon::prelude::*;
+
+use super::builder::{CatalogBuilderConfig, build_index_from_stars_pub};
+use super::{Index, IndexStar};
+
+/// Star entry for brightness-ordered heaps (faintest at top for eviction).
+#[derive(PartialEq)]
+struct HeapStar {
+    mag: f64,
+    id: u64,
+    ra: f64,
+    dec: f64,
+}
+
+impl Eq for HeapStar {}
+
+impl PartialOrd for HeapStar {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for HeapStar {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.mag
+            .partial_cmp(&other.mag)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    }
+}
+
+/// Build a zodiacal index directly from Gaia DR1 CSV files on disk.
+///
+/// Processes all files in parallel using rayon, decompressing each file
+/// exactly once. Stars are binned into HEALPix cells with per-cell
+/// brightness heaps, then the uniformized star set is passed to the
+/// standard index builder.
+pub fn build_index_from_gaia(
+    gaia_dir: &Path,
+    mag_limit: f64,
+    config: &CatalogBuilderConfig,
+) -> std::io::Result<Index> {
+    let files = list_gaia_files(gaia_dir)?;
+    let n_files = files.len();
+    let uni_depth = config.effective_uniformize_depth();
+    let max_per_cell = config.max_stars_per_cell;
+
+    eprintln!("Processing {} Gaia files in parallel...", n_files);
+    eprintln!(
+        "  depth={}, max_per_cell={}, mag_limit={:.1}",
+        uni_depth, max_per_cell, mag_limit
+    );
+
+    let files_done = AtomicU64::new(0);
+    let stars_total = AtomicU64::new(0);
+
+    // Phase 1: parallel file processing — each file produces per-cell heaps.
+    let per_file_heaps: Vec<HashMap<u64, BinaryHeap<HeapStar>>> = files
+        .par_iter()
+        .map(|path| {
+            let (heaps, count) = process_file(path, mag_limit, uni_depth, max_per_cell);
+            let done = files_done.fetch_add(1, Ordering::Relaxed) + 1;
+            stars_total.fetch_add(count, Ordering::Relaxed);
+            if done.is_multiple_of(100) || done == n_files as u64 {
+                eprintln!("  [{}/{}] files processed...", done, n_files);
+            }
+            heaps
+        })
+        .collect();
+
+    let total = stars_total.load(Ordering::Relaxed);
+    eprintln!(
+        "Parsed {} stars from {} files, merging heaps...",
+        total, n_files
+    );
+
+    // Phase 2: merge all per-file heaps into one global set.
+    let mut global_heaps: HashMap<u64, BinaryHeap<HeapStar>> = HashMap::new();
+    for file_heaps in per_file_heaps {
+        merge_heaps(&mut global_heaps, file_heaps, max_per_cell);
+    }
+
+    // Flatten heaps into sorted star list.
+    let mut stars: Vec<IndexStar> = Vec::new();
+    for (_, heap) in global_heaps {
+        for hs in heap {
+            stars.push(IndexStar {
+                catalog_id: hs.id,
+                ra: hs.ra,
+                dec: hs.dec,
+                mag: hs.mag,
+            });
+        }
+    }
+    stars.sort_by(|a, b| {
+        a.mag
+            .partial_cmp(&b.mag)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    eprintln!(
+        "Uniformized to {} stars from {} cells",
+        stars.len(),
+        cdshealpix::nested::n_hash(uni_depth)
+    );
+
+    // Phase 3: build quads and KD-trees using the shared core.
+    Ok(build_index_from_stars_pub(
+        stars,
+        config.scale_lower,
+        config.scale_upper,
+        config.effective_max_quads(),
+    ))
+}

@@ -243,6 +243,20 @@ pub fn build_index(stars: &[(u64, f64, f64, f64)], config: &IndexBuilderConfig) 
     )
 }
 
+/// Build an index from pre-selected IndexStars (public entry point).
+///
+/// Use this when you have already performed uniformization and have
+/// a final star list ready for quad building.
+pub fn build_index_from_stars_pub(
+    index_stars: Vec<IndexStar>,
+    scale_lower: f64,
+    scale_upper: f64,
+    max_quads: usize,
+) -> Index {
+    let mp = MultiProgress::new();
+    build_index_from_stars(index_stars, scale_lower, scale_upper, max_quads, &mp)
+}
+
 /// Core index builder that takes pre-selected IndexStars.
 fn build_index_from_stars(
     index_stars: Vec<IndexStar>,
