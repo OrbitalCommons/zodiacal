@@ -648,20 +648,21 @@ mod tests {
         let mut call_count = 0usize;
         let mut last_verified = 0usize;
 
-        let (solution, _stats) = solve_with_callback(
-            &sources,
-            &[&index],
-            (512.0, 512.0),
-            &config,
-            |stats| {
+        let (solution, _stats) =
+            solve_with_callback(&sources, &[&index], (512.0, 512.0), &config, |stats| {
                 call_count += 1;
                 last_verified = stats.n_verified;
-            },
-        );
+            });
 
         assert!(solution.is_some());
-        assert!(call_count > 0, "callback should have been called at least once");
-        assert!(last_verified > 0, "should have verified at least one candidate");
+        assert!(
+            call_count > 0,
+            "callback should have been called at least once"
+        );
+        assert!(
+            last_verified > 0,
+            "should have verified at least one candidate"
+        );
     }
 
     #[test]
