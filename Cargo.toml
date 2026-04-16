@@ -7,7 +7,7 @@ license = "Apache-2.0"
 repository = "https://github.com/meawoppl/zodiacal"
 keywords = ["astrometry", "plate-solving", "astronomy", "wcs"]
 categories = ["science"]
-exclude = ["external/", "PLAN.md"]
+exclude = ["external/", "PLAN.md", "benches/", "scripts/", "scratch/"]
 
 [features]
 default = ["fits"]
