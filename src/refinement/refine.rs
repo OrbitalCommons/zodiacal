@@ -164,10 +164,10 @@ pub fn refine_solution(
 /// epoch, treating RA and Dec errors as uncorrelated (see PLAN.md §11.4).
 fn gaia_weight(astro: &super::types::GaiaAstrometry, obs: &ObservationContext) -> f64 {
     let dt_years = (obs.time.tt() - jyear_to_tt_jd(astro.ref_epoch_jyear)) / 365.25;
-    let sigma_ra_sq = astro.sigma_ra_mas.powi(2)
-        + (dt_years * astro.sigma_pmra_mas_per_year).powi(2);
-    let sigma_dec_sq = astro.sigma_dec_mas.powi(2)
-        + (dt_years * astro.sigma_pmdec_mas_per_year).powi(2);
+    let sigma_ra_sq =
+        astro.sigma_ra_mas.powi(2) + (dt_years * astro.sigma_pmra_mas_per_year).powi(2);
+    let sigma_dec_sq =
+        astro.sigma_dec_mas.powi(2) + (dt_years * astro.sigma_pmdec_mas_per_year).powi(2);
     let sigma_pos_sq = (sigma_ra_sq + sigma_dec_sq) / 2.0;
     if sigma_pos_sq > 0.0 {
         1.0 / sigma_pos_sq
@@ -180,11 +180,7 @@ fn jyear_to_tt_jd(jyear: f64) -> f64 {
     2_451_545.0 + (jyear - 2000.0) * 365.25
 }
 
-fn rms_pixel(
-    sky_xyz: &[[f64; 3]],
-    field_xy: &[(f64, f64)],
-    wcs: &SipWcs,
-) -> f64 {
+fn rms_pixel(sky_xyz: &[[f64; 3]], field_xy: &[(f64, f64)], wcs: &SipWcs) -> f64 {
     let mut sum_sq = 0.0;
     let mut n = 0usize;
     for (xyz, (fx, fy)) in sky_xyz.iter().zip(field_xy.iter()) {
@@ -226,9 +222,9 @@ fn wcs_changed_less_than(
         ((d_ra * tan.crval[1].cos()).powi(2) + d_dec.powi(2)).sqrt() / scale_rad_per_pix;
 
     let mut cd_delta_sq = 0.0;
-    for i in 0..2 {
-        for j in 0..2 {
-            cd_delta_sq += (tan.cd[i][j] - prev_cd[i][j]).powi(2);
+    for (cd_row, prev_row) in tan.cd.iter().zip(prev_cd.iter()) {
+        for (cd_v, prev_v) in cd_row.iter().zip(prev_row.iter()) {
+            cd_delta_sq += (cd_v - prev_v).powi(2);
         }
     }
     let cd_delta = cd_delta_sq.sqrt() / scale_rad_per_pix.max(f64::EPSILON);

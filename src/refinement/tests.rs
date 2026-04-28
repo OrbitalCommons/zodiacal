@@ -53,8 +53,8 @@ fn make_scenario() -> (
     Vec<DetectedSource>,
     Index,
     RefinementCatalog,
-    TanWcs,          // truth
-    SipWcs,          // initial (biased)
+    TanWcs, // truth
+    SipWcs, // initial (biased)
     ObservationContext,
 ) {
     let wcs_truth = truth_wcs();
@@ -78,10 +78,8 @@ fn make_scenario() -> (
     for i in 0..N_STARS {
         let ix = i % side;
         let iy = i / side;
-        let px = IMAGE_SIZE * 0.1
-            + IMAGE_SIZE * 0.8 * (ix as f64) / (side as f64 - 1.0).max(1.0);
-        let py = IMAGE_SIZE * 0.1
-            + IMAGE_SIZE * 0.8 * (iy as f64) / (side as f64 - 1.0).max(1.0);
+        let px = IMAGE_SIZE * 0.1 + IMAGE_SIZE * 0.8 * (ix as f64) / (side as f64 - 1.0).max(1.0);
+        let py = IMAGE_SIZE * 0.1 + IMAGE_SIZE * 0.8 * (iy as f64) / (side as f64 - 1.0).max(1.0);
 
         // The pixel is the target *apparent* position. Work backwards to find
         // the apparent (RA, Dec), then back-propagate via PM to find the
@@ -201,10 +199,7 @@ fn refinement_via_sidecar_recovers_truth_wcs() {
 
     // Write the in-memory catalog to a sidecar.
     let mut sidecar_path = std::env::temp_dir();
-    sidecar_path.push(format!(
-        "zodiacal-refine-e2e-{}.gaia",
-        std::process::id()
-    ));
+    sidecar_path.push(format!("zodiacal-refine-e2e-{}.gaia", std::process::id()));
     let records: Vec<SidecarRecord> = catalog
         .sources
         .iter()
@@ -237,8 +232,7 @@ fn refinement_via_sidecar_recovers_truth_wcs() {
 
     // Load only the rows for the index's stars (here: all of them).
     let source_ids: Vec<u64> = index.stars.iter().map(|s| s.catalog_id).collect();
-    let reloaded =
-        RefinementCatalog::load_sidecar_filtered(&sidecar_path, &source_ids).unwrap();
+    let reloaded = RefinementCatalog::load_sidecar_filtered(&sidecar_path, &source_ids).unwrap();
     assert_eq!(reloaded.len(), catalog.len());
 
     // Run refinement through the reloaded catalog.
@@ -248,9 +242,8 @@ fn refinement_via_sidecar_recovers_truth_wcs() {
         convergence_pix: 0.001,
         min_matches: 10,
     };
-    let refined =
-        refine_solution(&initial, &field_sources, &index, &reloaded, &obs, &config)
-            .expect("refinement via sidecar should succeed");
+    let refined = refine_solution(&initial, &field_sources, &index, &reloaded, &obs, &config)
+        .expect("refinement via sidecar should succeed");
 
     assert!(
         refined.residual_rms_mas < 1.0,

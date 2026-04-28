@@ -993,11 +993,14 @@ mod tests {
     #[test]
     fn depth_for_scale_reasonable() {
         let d = depth_for_scale(0.0175);
-        assert!(d >= 4 && d <= 8, "depth_for_scale(1deg) = {d}, expected ~6");
+        assert!(
+            (4..=8).contains(&d),
+            "depth_for_scale(1deg) = {d}, expected ~6"
+        );
 
         let d2 = depth_for_scale(0.000291);
         assert!(
-            d2 >= 10 && d2 <= 14,
+            (10..=14).contains(&d2),
             "depth_for_scale(1arcmin) = {d2}, expected ~12"
         );
     }

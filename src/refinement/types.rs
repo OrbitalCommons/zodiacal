@@ -79,13 +79,9 @@ impl RefinementCatalog {
     /// Load a subset of the sidecar at `path` filtered to the given
     /// `source_ids`. Missing ids are silently skipped. The caller owns
     /// the list (typically the `catalog_id`s from the in-memory `Index`).
-    pub fn load_sidecar_filtered(
-        path: &Path,
-        source_ids: &[u64],
-    ) -> Result<Self, RefinementError> {
-        let reader = SidecarReader::open(path).map_err(|e| {
-            RefinementError::Starfield(format!("sidecar open failed: {e}"))
-        })?;
+    pub fn load_sidecar_filtered(path: &Path, source_ids: &[u64]) -> Result<Self, RefinementError> {
+        let reader = SidecarReader::open(path)
+            .map_err(|e| RefinementError::Starfield(format!("sidecar open failed: {e}")))?;
         let results = reader.get_many(source_ids);
 
         let mut sources = HashMap::with_capacity(results.len());

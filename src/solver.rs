@@ -219,9 +219,9 @@ fn try_quad(
                     }
                 }
                 if let Some(ref region) = config.within {
-                    let cx = star_xyz.iter().fold([0.0_f64; 3], |a, v| {
-                        [a[0] + v[0], a[1] + v[1], a[2] + v[2]]
-                    });
+                    let cx = star_xyz
+                        .iter()
+                        .fold([0.0_f64; 3], |a, v| [a[0] + v[0], a[1] + v[1], a[2] + v[2]]);
                     let n = (cx[0] * cx[0] + cx[1] * cx[1] + cx[2] * cx[2]).sqrt();
                     let centroid = [cx[0] / n, cx[1] / n, cx[2] / n];
                     // The 4-star centroid can sit up to roughly half a quad's
@@ -229,8 +229,7 @@ fn try_quad(
                     // point. Pad by index.scale_upper to be safely inclusive
                     // — false positives are caught by verify, false negatives
                     // would silently drop valid solves.
-                    let region_center =
-                        radec_to_xyz(region.center.ra, region.center.dec);
+                    let region_center = radec_to_xyz(region.center.ra, region.center.dec);
                     let padded_radius = region.radius_rad + index.scale_upper;
                     if angular_distance(region_center, centroid) > padded_radius {
                         continue;

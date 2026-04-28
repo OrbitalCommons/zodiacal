@@ -229,11 +229,7 @@ impl SidecarReader {
     /// Returns one `Option<SidecarRecord>` per input source_id, in the
     /// same order as the input (not sorted order).
     pub fn get_many(&self, source_ids: &[u64]) -> Vec<Option<SidecarRecord>> {
-        let mut indexed: Vec<(usize, u64)> = source_ids
-            .iter()
-            .copied()
-            .enumerate()
-            .collect();
+        let mut indexed: Vec<(usize, u64)> = source_ids.iter().copied().enumerate().collect();
         indexed.sort_by_key(|&(_, id)| id);
 
         let mut out = vec![None; source_ids.len()];
@@ -265,14 +261,23 @@ impl SidecarReader {
         }
         // partition_point: first pivot whose id > source_id.
         let p = self.pivots.partition_point(|&pid| pid <= source_id);
-        let lo = if p == 0 { 0 } else { (p - 1) * self.pivot_stride as usize };
+        let lo = if p == 0 {
+            0
+        } else {
+            (p - 1) * self.pivot_stride as usize
+        };
         let hi = (p * self.pivot_stride as usize).min(self.n_records);
         (lo, hi)
     }
 
     /// Binsearch for `source_id` within [lo, hi). Returns the record index
     /// if found, else None.
-    fn binsearch_range(&self, mut lo: usize, mut hi: usize, source_id: u64) -> Option<&SidecarRecord> {
+    fn binsearch_range(
+        &self,
+        mut lo: usize,
+        mut hi: usize,
+        source_id: u64,
+    ) -> Option<&SidecarRecord> {
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
             let mid_id = self.record_at(mid).source_id;
@@ -307,8 +312,7 @@ impl SidecarReader {
                 let next = (start + step).min(self.n_records);
                 if next >= self.n_records {
                     // Target is in [prev+1, n_records).
-                    let found_idx = self
-                        .binsearch_idx(prev + 1, self.n_records, source_id);
+                    let found_idx = self.binsearch_idx(prev + 1, self.n_records, source_id);
                     return found_idx;
                 }
                 let id = self.record_at(next).source_id;
