@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.3.0
+
+### Added
+- `refinement` module: high-precision astrometric refinement using starfield's
+  apparent-place pipeline (proper motion, parallax, light-time, stellar
+  aberration). Targets ~10 mas absolute astrometry on noise-free synthetic data.
+- `RefinementCatalog` + `GaiaAstrometry` + `ObservationContext` types for
+  feeding full Gaia astrometry through to the refinement step.
+- Flat sorted-by-source_id binary catalog sidecar (`SidecarRecord`,
+  `SidecarReader`, `write_sidecar`) with mmap + in-memory pivot table +
+  galloping-search batch lookup. Designed for the `.zdcl.gaia` companion
+  to existing index files (#45).
+- `RefinementCatalog::load_sidecar_filtered()` for loading only the rows
+  needed for a given FOV from a sidecar file.
+
+### Changed
+- Bumped `starfield` dependency from `0.9.1` to `0.11` to pick up the
+  apparent-place pipeline (`Position::observe`, `Position::apparent`,
+  `Star::observe_from`).
+- `solver::try_quad`: `SolverConfig::scale_range` and `SolverConfig::within`
+  are now applied **before** `fit_tan_wcs` rather than after. Eliminates a
+  ~12× pessimization observed when a wide scale_range hint causes every
+  index band to enter the inner fit loop (#48). The `within` filter pads
+  by `index.scale_upper` to keep boundary candidates intact.
+
+### Dependencies
+- Added `nalgebra = "0.32"` (matches starfield's pin) for sidecar interop.
+- Added `memmap2 = "0.9"` for the sidecar reader.
+
 ## 0.2.0
 
 ### Added

@@ -206,6 +206,37 @@ fn try_quad(
                     radec_to_xyz(s.ra, s.dec)
                 });
 
+                // Pre-fit cheap rejection: see issue #48. The eventual fit's
+                // pixel_scale() and field_center() are well-approximated by
+                // the AB backbone scale and the 4-star centroid respectively;
+                // testing them here lets us skip wrong candidates without
+                // paying for fit_tan_wcs.
+                if let Some((lo_arcsec, hi_arcsec)) = config.scale_range {
+                    let ang_rad = angular_distance(star_xyz[0], star_xyz[1]);
+                    let scale_arcsec = ang_rad.to_degrees() * 3600.0 / ab_dist_px;
+                    if scale_arcsec < lo_arcsec || scale_arcsec > hi_arcsec {
+                        continue;
+                    }
+                }
+                if let Some(ref region) = config.within {
+                    let cx = star_xyz.iter().fold([0.0_f64; 3], |a, v| {
+                        [a[0] + v[0], a[1] + v[1], a[2] + v[2]]
+                    });
+                    let n = (cx[0] * cx[0] + cx[1] * cx[1] + cx[2] * cx[2]).sqrt();
+                    let centroid = [cx[0] / n, cx[1] / n, cx[2] / n];
+                    // The 4-star centroid can sit up to roughly half a quad's
+                    // angular extent away from the eventual fitted tangent
+                    // point. Pad by index.scale_upper to be safely inclusive
+                    // — false positives are caught by verify, false negatives
+                    // would silently drop valid solves.
+                    let region_center =
+                        radec_to_xyz(region.center.ra, region.center.dec);
+                    let padded_radius = region.radius_rad + index.scale_upper;
+                    if angular_distance(region_center, centroid) > padded_radius {
+                        continue;
+                    }
+                }
+
                 let field_xy: [(f64, f64); DIMQUADS] = reordered_positions;
 
                 let fit_result = fit_tan_wcs(star_xyz.as_slice(), field_xy.as_slice(), image_size);
@@ -216,20 +247,6 @@ fn try_quad(
                     | Err(FitError::SingularMatrix)
                     | Err(FitError::ProjectionFailed) => continue,
                 };
-
-                if let Some((lo, hi)) = config.scale_range {
-                    let scale_arcsec = wcs.pixel_scale() * 3600.0;
-                    if scale_arcsec < lo || scale_arcsec > hi {
-                        continue;
-                    }
-                }
-
-                if let Some(ref region) = config.within {
-                    let (ra, dec) = wcs.field_center();
-                    if !region.contains(ra, dec) {
-                        continue;
-                    }
-                }
 
                 let quad_residual_limit = 10.0;
                 let max_residual_sq = quad_residual_limit * quad_residual_limit;
@@ -1009,6 +1026,91 @@ mod tests {
             (0.95..=1.05).contains(&scale_ratio),
             "pixel scale ratio {} outside [0.95, 1.05]",
             scale_ratio
+        );
+    }
+
+    /// Issue #48: a wildly wrong scale_range hint should be rejected before
+    /// fit_tan_wcs runs, so no candidate ever reaches the verify stage.
+    #[test]
+    fn scale_filtering_rejects_pre_fit() {
+        let (sources, index, _) = make_synthetic_scenario();
+        let config = SolverConfig {
+            scale_range: Some((100.0, 200.0)), // truth is 2 arcsec/pixel
+            max_field_stars: 30,
+            code_tolerance: 0.01,
+            verify: VerifyConfig {
+                match_radius_pix: 10.0,
+                log_odds_accept: 10.0,
+                min_matches: 3,
+                ..VerifyConfig::default()
+            },
+            ..SolverConfig::default()
+        };
+        let (solution, stats) = solve(&sources, &[&index], (512.0, 512.0), &config);
+        assert!(solution.is_none());
+        assert_eq!(
+            stats.n_verified, 0,
+            "pre-fit scale filter should prevent any candidate from reaching verify"
+        );
+    }
+
+    /// Issue #48: a `within` region elsewhere on the sky should be rejected
+    /// before fit_tan_wcs runs.
+    #[test]
+    fn within_filter_rejects_pre_fit() {
+        let (sources, index, known_wcs) = make_synthetic_scenario();
+        let (true_ra, true_dec) = known_wcs.field_center();
+        let elsewhere = SkyRegion::from_radians(
+            Equatorial {
+                ra: true_ra + 1.5,
+                dec: (true_dec - 0.8).max(-PI / 2.0 + 0.01),
+            },
+            0.001,
+        );
+        let config = SolverConfig {
+            within: Some(elsewhere),
+            max_field_stars: 25,
+            code_tolerance: 0.002,
+            verify: VerifyConfig {
+                match_radius_pix: 3.0,
+                log_odds_accept: 10.0,
+                min_matches: 3,
+                ..VerifyConfig::default()
+            },
+            ..SolverConfig::default()
+        };
+        let (solution, stats) = solve(&sources, &[&index], (512.0, 512.0), &config);
+        assert!(solution.is_none());
+        assert_eq!(
+            stats.n_verified, 0,
+            "pre-fit within filter should prevent any candidate from reaching verify"
+        );
+    }
+
+    /// Issue #48: a wide scale_range that includes the truth must still let
+    /// the solver succeed (the optimization is allowed to skip non-matching
+    /// candidates but must not reject correct ones).
+    #[test]
+    fn wide_scale_range_still_solves() {
+        let (sources, index, known_wcs) = make_synthetic_scenario();
+        let known_scale_arcsec = known_wcs.pixel_scale() * 3600.0;
+        // ~6× wider than truth on each side.
+        let config = SolverConfig {
+            scale_range: Some((known_scale_arcsec / 6.0, known_scale_arcsec * 6.0)),
+            max_field_stars: 25,
+            code_tolerance: 0.002,
+            verify: VerifyConfig {
+                match_radius_pix: 3.0,
+                log_odds_accept: 10.0,
+                min_matches: 3,
+                ..VerifyConfig::default()
+            },
+            ..SolverConfig::default()
+        };
+        let (solution, _) = solve(&sources, &[&index], (512.0, 512.0), &config);
+        assert!(
+            solution.is_some(),
+            "wide scale_range that includes truth should still solve"
         );
     }
 }
