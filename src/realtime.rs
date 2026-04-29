@@ -16,7 +16,7 @@ use starfield::time::Time;
 use crate::extraction::DetectedSource;
 use crate::geom::sphere::angular_distance;
 use crate::geom::sphere::radec_to_xyz;
-use crate::index::{EnsureReport, IndexSource, LiveIndex};
+use crate::index::{EnsureReport, Index, IndexSource, LiveIndex};
 use crate::pointing::PointingSource;
 use crate::solver::{SkyRegion, Solution, SolverConfig, solve};
 
@@ -75,11 +75,21 @@ pub struct RealtimeSolver<S: IndexSource, P: PointingSource> {
     refresh_policy: RefreshPolicy,
     last_refresh: Option<RefreshSnapshot>,
     region_padding_rad: f64,
+    /// Cached flat `Index` keyed by `LiveIndex::build_generation`. Avoids
+    /// the O(N log N) `as_index()` rebuild on every `solve()` call when
+    /// no cell membership change has happened — which is the steady
+    /// state for realtime modes once the loaded set has settled.
+    cached_index: Option<(u64, Index)>,
 }
 
 impl<S: IndexSource, P: PointingSource> RealtimeSolver<S, P> {
     /// Construct with default config: `EveryTick` refresh, no padding,
     /// `SolverConfig::default()`. Use the methods below to override.
+    ///
+    /// `EveryTick` is the conservative default — every `solve()` call
+    /// re-reads the pointing source. For production realtime use, prefer
+    /// `OnPointingDelta` to avoid wasted source-side work when the
+    /// pointing hasn't drifted.
     pub fn new(source: S, pointing: P) -> Self {
         Self {
             live: LiveIndex::open(source),
@@ -88,6 +98,7 @@ impl<S: IndexSource, P: PointingSource> RealtimeSolver<S, P> {
             refresh_policy: RefreshPolicy::EveryTick,
             last_refresh: None,
             region_padding_rad: 0.0,
+            cached_index: None,
         }
     }
 
@@ -104,6 +115,10 @@ impl<S: IndexSource, P: PointingSource> RealtimeSolver<S, P> {
     pub fn with_region_padding_rad(mut self, padding: f64) -> Self {
         self.region_padding_rad = padding.max(0.0);
         self
+    }
+
+    pub fn with_region_padding_deg(self, padding_deg: f64) -> Self {
+        self.with_region_padding_rad(padding_deg.to_radians())
     }
 
     pub fn loaded_cell_count(&self) -> usize {
@@ -153,6 +168,11 @@ impl<S: IndexSource, P: PointingSource> RealtimeSolver<S, P> {
         }
     }
 
+    /// `OnPointingDelta` refreshes when EITHER the pointing has drifted
+    /// past `angular_threshold_rad` OR the snapshot is older than
+    /// `max_age`. (Note: an earlier draft of the plan called for AND
+    /// here, but that would silently skip a fresh-but-displaced
+    /// pointing — almost never the right behavior. We use OR.)
     fn policy_should_refresh(&self, candidate: &SkyRegion) -> bool {
         match (self.refresh_policy, &self.last_refresh) {
             (RefreshPolicy::EveryTick, _) => true,
@@ -175,6 +195,22 @@ impl<S: IndexSource, P: PointingSource> RealtimeSolver<S, P> {
         }
     }
 
+    /// Borrow the flat `Index` for the currently loaded cells. Returns a
+    /// cached snapshot when `LiveIndex::build_generation` matches the
+    /// last cache key — only rebuilds (O(N log N)) when membership has
+    /// actually changed.
+    fn snapshot_index(&mut self) -> &Index {
+        let current_gen = self.live.build_generation();
+        let needs_rebuild = match &self.cached_index {
+            Some((cached_gen, _)) => *cached_gen != current_gen,
+            None => true,
+        };
+        if needs_rebuild {
+            self.cached_index = Some((current_gen, self.live.as_index()));
+        }
+        &self.cached_index.as_ref().unwrap().1
+    }
+
     /// Run a full solve at time `t`. Calls `tick(t)` first, then solves
     /// against the current loaded set. Returns the solution + diagnostics.
     pub fn solve(
@@ -187,16 +223,20 @@ impl<S: IndexSource, P: PointingSource> RealtimeSolver<S, P> {
         let refresh = self.tick(t)?;
         let refresh_elapsed = refresh_start.elapsed();
 
-        let snapshot = self.live.as_index();
         let solve_start = Instant::now();
-        let (solution, _stats) = solve(sources, &[&snapshot], image_size, &self.solver_config);
+        let build_generation = self.live.build_generation();
+        // Refresh / build the cached flat Index, then re-borrow it
+        // immutably for the solve call alongside &self.solver_config.
+        self.snapshot_index();
+        let snapshot: &Index = &self.cached_index.as_ref().unwrap().1;
+        let (solution, _stats) = solve(sources, &[snapshot], image_size, &self.solver_config);
         let solve_elapsed = solve_start.elapsed();
         Ok(RealtimeOutput {
             solution,
             refresh,
             solve_elapsed,
             refresh_elapsed,
-            build_generation: self.live.build_generation(),
+            build_generation,
         })
     }
 }
@@ -411,6 +451,75 @@ mod tests {
         let snap = rt.last_refresh().unwrap();
         // Padded region radius = 0.05 + 0.1 = 0.15.
         assert!((snap.region.radius_rad - 0.15).abs() < 1e-12);
+    }
+
+    /// Pointing source whose region center can be mutated between ticks
+    /// (used to verify `OnPointingDelta` actually fires when the
+    /// pointing changes by more than the threshold).
+    struct ShiftingPointing {
+        ra: Mutex<f64>,
+        dec: Mutex<f64>,
+        radius: f64,
+    }
+    impl PointingSource for ShiftingPointing {
+        fn current_region(&self, _t: &Time) -> SkyRegion {
+            SkyRegion::from_radians(
+                Equatorial::new(*self.ra.lock().unwrap(), *self.dec.lock().unwrap()),
+                self.radius,
+            )
+        }
+    }
+
+    #[test]
+    fn tick_refreshes_when_pointing_drifts_past_threshold() {
+        let (_sources, source, truth) = make_synthetic_scenario();
+        let pointing = ShiftingPointing {
+            ra: Mutex::new(truth.crval[0]),
+            dec: Mutex::new(truth.crval[1]),
+            radius: 0.05,
+        };
+        let mut rt = RealtimeSolver::new(source, pointing).with_refresh_policy(
+            RefreshPolicy::OnPointingDelta {
+                angular_threshold_rad: 0.1, // 5.7°
+                max_age: Duration::from_secs(3600),
+            },
+        );
+        let t = time_for_test();
+        let r1 = rt.tick(&t).unwrap();
+        assert!(r1.is_some(), "first tick must refresh");
+
+        // Tiny shift below threshold — should not refresh.
+        *rt.pointing.ra.lock().unwrap() = truth.crval[0] + 0.01;
+        let r2 = rt.tick(&t).unwrap();
+        assert!(r2.is_none(), "small drift below threshold should skip");
+
+        // Big shift well above threshold — should refresh.
+        *rt.pointing.ra.lock().unwrap() = truth.crval[0] + 0.5;
+        let r3 = rt.tick(&t).unwrap();
+        assert!(r3.is_some(), "drift past threshold should refresh");
+    }
+
+    #[test]
+    fn snapshot_index_caches_across_solves_with_unchanged_membership() {
+        let (sources, source, truth) = make_synthetic_scenario();
+        let region = SkyRegion::from_radians(Equatorial::new(truth.crval[0], truth.crval[1]), 0.05);
+        let pointing = StaticRegion(region);
+        let mut rt = RealtimeSolver::new(source, pointing).with_refresh_policy(
+            RefreshPolicy::OnPointingDelta {
+                angular_threshold_rad: 0.5,
+                max_age: Duration::from_secs(3600),
+            },
+        );
+        let t = time_for_test();
+        let out1 = rt.solve(&sources, (512.0, 512.0), &t).unwrap();
+        let gen1 = out1.build_generation;
+        let out2 = rt.solve(&sources, (512.0, 512.0), &t).unwrap();
+        let gen2 = out2.build_generation;
+        // No membership change between the two solves → generation
+        // unchanged → cached_index is reused (we can't directly assert
+        // the cache hit from outside, but the generation equality is a
+        // necessary signal).
+        assert_eq!(gen1, gen2);
     }
 
     #[test]
