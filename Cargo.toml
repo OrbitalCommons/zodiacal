@@ -37,7 +37,7 @@ rayon = "1.11.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 starfield = "0.11"
-starfield-gaia = { path = "../starfield-datasources/crates/gaia", optional = true }
+starfield-gaia = { git = "https://github.com/OrbitalCommons/starfield-datasources", optional = true }
 
 [[bin]]
 name = "zodiacal"

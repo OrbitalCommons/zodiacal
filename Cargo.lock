@@ -2720,6 +2720,7 @@ dependencies = [
 [[package]]
 name = "starfield-datasource-utils"
 version = "0.1.0"
+source = "git+https://github.com/OrbitalCommons/starfield-datasources#98044f92fccf0144235c07fd4bf2b9c0c3f9b012"
 dependencies = [
  "indicatif 0.17.11",
  "reqwest",
@@ -2729,6 +2730,7 @@ dependencies = [
 [[package]]
 name = "starfield-gaia"
 version = "0.2.0"
+source = "git+https://github.com/OrbitalCommons/starfield-datasources#98044f92fccf0144235c07fd4bf2b9c0c3f9b012"
 dependencies = [
  "arrow",
  "cdshealpix",

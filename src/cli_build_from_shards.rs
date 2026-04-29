@@ -19,9 +19,8 @@ use std::sync::Mutex;
 use std::time::Instant;
 
 use rayon::prelude::*;
-use starfield_gaia::common::reader::CsvSourceReader;
 use starfield_gaia::download::Downloader;
-use starfield_gaia::{Dr3, Dr3Entry};
+use starfield_gaia::{Dr3, Dr3Catalog, Dr3Entry};
 
 use crate::index::builder::{IndexBuilderConfig, build_index};
 use crate::refinement::{DEFAULT_PIVOT_STRIDE, SidecarRecord, write_sidecar};
@@ -37,7 +36,13 @@ pub type IndexStarTuple = (u64, f64, f64, f64);
 /// Pair emitted per accepted Gaia row.
 pub type ShardRow = (IndexStarTuple, SidecarRecord);
 
-/// Find every `GaiaSource_*.csv.gz` in `dir`. Returns sorted paths.
+/// Find every `*.csv` or `*.csv.gz` in `dir`. Returns sorted paths.
+///
+/// Accepts both starfield-gaia's "excerpt" layout
+/// (`shard_NNNN.csv.gz` under `~/.cache/starfield/gaia-excerpts/<name>/`)
+/// and the raw ESA `GaiaSource_NNN-NNN-NNN.csv.gz` layout — the column
+/// schema is identical in both cases, so `CsvSourceReader::<Dr3>` reads
+/// either uniformly.
 fn find_shard_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
     let mut files: Vec<PathBuf> = Vec::new();
     for entry in std::fs::read_dir(dir)? {
@@ -50,8 +55,7 @@ fn find_shard_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
             Some(n) => n,
             None => continue,
         };
-        if name.starts_with("GaiaSource_") && (name.ends_with(".csv.gz") || name.ends_with(".csv"))
-        {
+        if name.ends_with(".csv.gz") || name.ends_with(".csv") {
             files.push(path);
         }
     }
@@ -98,22 +102,29 @@ pub fn entry_to_records(entry: &Dr3Entry) -> ShardRow {
 
 /// Read one shard file and return all kept stars as (tuple, record) pairs.
 ///
-/// Uses the streaming `CsvSourceReader` to avoid materializing the whole
-/// file into a `HashMap` (which would otherwise double our memory budget
-/// before we ever start building).
+/// Delegates to `starfield_gaia::Dr3Catalog::from_csv_file`, which is
+/// the canonical high-level reader for Gaia DR3 CSV shards (whether
+/// raw ESA `GaiaSource_*.csv.gz` or starfield-gaia "excerpt"
+/// `shard_*.csv.gz` — both share the DR3 column layout).
 fn read_shard(path: &Path, mag_limit: f64) -> Result<Vec<ShardRow>, String> {
-    let reader = CsvSourceReader::<Dr3>::open(path, mag_limit)
-        .map_err(|e| format!("{}: open failed: {e}", path.display()))?;
+    let catalog = Dr3Catalog::from_csv_file(path, mag_limit)
+        .map_err(|e| format!("{}: load failed: {e}", path.display()))?;
 
-    let mut out = Vec::new();
-    for entry_result in reader {
-        let entry = entry_result.map_err(|e| format!("{}: parse failed: {e}", path.display()))?;
-        // mag_limit is already applied inside CsvSourceReader, but skip NaN mags
-        // defensively — a NaN here would corrupt the brightness sort.
+    // `brighter_than_ref(f64::INFINITY)` is the only inherent (non-trait)
+    // accessor on `GaiaCatalogBase` that yields `&R::Entry` for every
+    // loaded row — using `StarCatalog::stars()` would require both
+    // crates to agree on a single `starfield` instance, which they
+    // don't (starfield-gaia is workspace-pinned to git, zodiacal pulls
+    // from crates.io).
+    let entries = catalog.0.brighter_than_ref(f64::INFINITY);
+    let mut out = Vec::with_capacity(entries.len());
+    for entry in entries {
+        // mag_limit is already applied at load time, but defensively
+        // skip NaN mags — a NaN here would corrupt the brightness sort.
         if !entry.core.phot_g_mean_mag.is_finite() {
             continue;
         }
-        out.push(entry_to_records(&entry));
+        out.push(entry_to_records(entry));
     }
     Ok(out)
 }
