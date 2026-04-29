@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.1
+
+### Changed
+- Exclude `test_cases/` from the published crate (#58). The 0.4.0 package
+  shipped 1036 files / 10.3 MiB uncompressed; ~1000 of those were
+  `test_cases/*.json` solver fixtures with no value to downstream library
+  users. 0.4.1 drops the same surface to ~36 files / a few hundred KB.
+  No code or API change.
+
 ## 0.4.0
 
 Five-step deployment-mode roadmap: the index now supports sparse loading,
