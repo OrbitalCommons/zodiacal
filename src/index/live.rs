@@ -157,17 +157,14 @@ impl<S: IndexSource> LiveIndex<S> {
         }
     }
 
-    /// Drop specific cells by id.
+    /// Drop the specified cells. `HealpixCell` carries `(depth, id)`;
+    /// only cells matching exactly are removed.
     pub fn drop_cells(&mut self, cells: &[HealpixCell]) -> DropReport {
         let start = Instant::now();
         let mut dropped_count = 0;
         let mut stars_dropped = 0;
         for cell in cells {
             let removed = self.remove_cell(cell);
-            if removed > 0 || self.loaded.contains_key(cell) {
-                // contains_key check is for completeness; we already
-                // removed; this branch never fires.
-            }
             if removed > 0 {
                 dropped_count += 1;
                 stars_dropped += removed;
@@ -215,29 +212,28 @@ impl<S: IndexSource> LiveIndex<S> {
         })
     }
 
+    /// Stage all sub-trees + per-cell payload into a local vector. If
+    /// any cell load fails, return Err *without* having mutated `self`.
+    /// Then commit everything in one pass on success.
+    ///
+    /// Loading is per-cell because `IndexSource::load_cells` returns the
+    /// union as a single `IndexFragment` without per-cell offsets. For
+    /// `ZdclFile` that means N+1 walks of the quads block where 1 would
+    /// suffice — accepted in v1 since add/drop happens at human
+    /// timescales. Extend `IndexFragment` with per-cell offsets if this
+    /// ever becomes a hotspot.
     fn add_cells(&mut self, cells: &[HealpixCell]) -> io::Result<usize> {
-        let frag: IndexFragment = self.source.load_cells(cells)?;
-        // The fragment's stars are concatenated across `cells` in the
-        // source's cell order. We need to split them back per-cell so
-        // each cell can own its sub-tree. The source guarantees that
-        // load_cells walks cells in the order they're presented — but
-        // returns the union as a single Vec without a per-cell split
-        // table. Easiest is to rebuild per-cell by re-querying the
-        // source one cell at a time. That keeps the data structure
-        // aligned without depending on the fragment's internal layout.
-        let _ = frag; // Drop the union fragment — we re-query per-cell below.
-
+        let mut staged: Vec<(HealpixCell, LoadedCell, KdTree<3>, KdTree<{ DIMCODES }>)> =
+            Vec::with_capacity(cells.len());
         let mut total_stars_added = 0;
+
         for &cell in cells {
-            let single_frag = self.source.load_cells(std::slice::from_ref(&cell))?;
-            let n_stars = single_frag.stars.len();
-            if n_stars == 0 && single_frag.quads.is_empty() {
+            let frag: IndexFragment = self.source.load_cells(std::slice::from_ref(&cell))?;
+            let n_stars = frag.stars.len();
+            if n_stars == 0 && frag.quads.is_empty() {
                 continue;
             }
-            // Build per-cell trees. Star tree is over xyz unit vectors;
-            // result indices are local to this cell's `stars`. Code tree
-            // similarly; results are local to this cell's `quads`.
-            let star_points: Vec<[f64; 3]> = single_frag
+            let star_points: Vec<[f64; 3]> = frag
                 .stars
                 .iter()
                 .map(|s| radec_to_xyz(s.ra, s.dec))
@@ -245,22 +241,28 @@ impl<S: IndexSource> LiveIndex<S> {
             let star_indices: Vec<usize> = (0..n_stars).collect();
             let star_tree = KdTree::<3>::build(star_points, star_indices);
 
-            let code_indices: Vec<usize> = (0..single_frag.codes.len()).collect();
-            let code_tree = KdTree::<{ DIMCODES }>::build(single_frag.codes.clone(), code_indices);
+            let code_indices: Vec<usize> = (0..frag.codes.len()).collect();
+            let code_tree = KdTree::<{ DIMCODES }>::build(frag.codes.clone(), code_indices);
 
-            self.star_forest.insert(cell.id, star_tree);
-            self.code_forest.insert(cell.id, code_tree);
-
-            self.loaded.insert(
+            staged.push((
                 cell,
                 LoadedCell {
-                    stars: single_frag.stars,
-                    quads: single_frag.quads,
-                    codes: single_frag.codes,
+                    stars: frag.stars,
+                    quads: frag.quads,
+                    codes: frag.codes,
                     last_used: Instant::now(),
                 },
-            );
+                star_tree,
+                code_tree,
+            ));
             total_stars_added += n_stars;
+        }
+
+        // Commit phase — only runs if every cell loaded successfully.
+        for (cell, payload, star_tree, code_tree) in staged {
+            self.star_forest.insert(cell.id, star_tree);
+            self.code_forest.insert(cell.id, code_tree);
+            self.loaded.insert(cell, payload);
         }
         if total_stars_added > 0 {
             self.build_generation += 1;
@@ -281,15 +283,25 @@ impl<S: IndexSource> LiveIndex<S> {
 
     /// Flatten the loaded cells into a single `Index` with rebuilt
     /// flat KdTrees. Used by callers that need the existing concrete-
-    /// `Index` solver/refine APIs. Iteration order across cells is
-    /// HashMap-iteration order, which is stable for a given map but
-    /// not deterministic across runs.
+    /// `Index` solver/refine APIs.
+    ///
+    /// **Cost: O(N log N)** in the loaded star count from the tree
+    /// rebuilds. Call sparingly; the realtime path queries the
+    /// `KdForest`s directly.
+    ///
+    /// Cells are flattened in `cell.id` ascending order so the
+    /// resulting `Index.stars` ordering — and hence quad indices — is
+    /// deterministic across runs (HashMap iteration order is not).
     pub fn as_index(&self) -> Index {
         let mut stars: Vec<IndexStar> = Vec::with_capacity(self.loaded_star_count());
         let mut quads: Vec<Quad> = Vec::with_capacity(self.loaded_quad_count());
         let mut codes: Vec<Code> = Vec::with_capacity(self.loaded_quad_count());
 
-        for cell in self.loaded.values() {
+        let mut cells_sorted: Vec<&HealpixCell> = self.loaded.keys().collect();
+        cells_sorted.sort_by_key(|c| (c.depth, c.id));
+
+        for key in cells_sorted {
+            let cell = &self.loaded[key];
             let base = stars.len();
             for s in &cell.stars {
                 stars.push(s.clone());
@@ -541,6 +553,143 @@ mod tests {
         let center = radec_to_xyz(0.5, 0.3);
         let hit = live.star_forest().nearest(&center);
         assert!(hit.is_some());
+    }
+
+    /// IndexSource that fails on `load_cells` for one specific cell id.
+    /// Used to verify atomicity guarantees in `add_cells` / `set_region`.
+    struct FailingSource {
+        inner: MockSource,
+        fail_on_cell_id: u64,
+    }
+    impl IndexSource for FailingSource {
+        fn cells_intersecting(&self, region: &SkyRegion) -> Vec<HealpixCell> {
+            self.inner.cells_intersecting(region)
+        }
+        fn load_cells(&self, cells: &[HealpixCell]) -> io::Result<IndexFragment> {
+            for c in cells {
+                if c.id == self.fail_on_cell_id {
+                    return Err(io::Error::other(format!(
+                        "simulated failure on cell {}",
+                        c.id
+                    )));
+                }
+            }
+            self.inner.load_cells(cells)
+        }
+        fn cell_depth(&self) -> u8 {
+            self.inner.cell_depth()
+        }
+        fn metadata(&self) -> Option<&IndexMetadata> {
+            self.inner.metadata()
+        }
+        fn star_count(&self) -> usize {
+            self.inner.star_count()
+        }
+        fn quad_count(&self) -> usize {
+            self.inner.quad_count()
+        }
+        fn scale_range(&self) -> (f64, f64) {
+            self.inner.scale_range()
+        }
+    }
+
+    #[test]
+    fn add_cells_failure_leaves_state_untouched() {
+        // Configure: source has 3 cells; load_cells fails when called
+        // for cell id 2. Ensure a region covering all cells, then
+        // verify state == empty (atomic failure).
+        let source = FailingSource {
+            inner: make_mock_source(),
+            fail_on_cell_id: 2,
+        };
+        let mut live = LiveIndex::open(source);
+        let all_sky =
+            SkyRegion::from_radians(starfield::Equatorial::new(0.0, 0.0), std::f64::consts::PI);
+        let cells = live.source().cells_intersecting(&all_sky);
+        assert!(
+            cells.iter().any(|c| c.id == 2),
+            "test fixture must include the failing cell"
+        );
+
+        let result = live.ensure_region(&all_sky);
+        assert!(result.is_err(), "load should fail");
+        // Atomicity: nothing committed.
+        assert_eq!(live.loaded_cell_count(), 0);
+        assert_eq!(live.loaded_star_count(), 0);
+        assert_eq!(live.build_generation(), 0);
+    }
+
+    #[test]
+    fn set_region_failure_preserves_prior_state() {
+        // Load cell 0 first, then attempt to swap to a region covering
+        // cell 2 (which fails). Cell 0 should still be present and
+        // build_generation unchanged from after the first load.
+        let source = FailingSource {
+            inner: make_mock_source(),
+            fail_on_cell_id: 2,
+        };
+        let mut live = LiveIndex::open(source);
+        let region_a = SkyRegion::from_radians(starfield::Equatorial::new(0.5, 0.3), 0.05);
+        live.set_region(&region_a).unwrap();
+        let gen_before = live.build_generation();
+        let cells_before: HashSet<HealpixCell> = live.loaded_cells().copied().collect();
+
+        let region_b = SkyRegion::from_radians(starfield::Equatorial::new(3.0, 0.5), 0.05);
+        let result = live.set_region(&region_b);
+        assert!(result.is_err(), "load on cell 2 should fail");
+        // Prior state preserved, no drops happened.
+        let cells_after: HashSet<HealpixCell> = live.loaded_cells().copied().collect();
+        assert_eq!(cells_before, cells_after);
+        assert_eq!(live.build_generation(), gen_before);
+    }
+
+    #[test]
+    fn drop_cells_removes_only_the_named_ones() {
+        let mut live = LiveIndex::open(make_mock_source());
+        let all_sky =
+            SkyRegion::from_radians(starfield::Equatorial::new(0.0, 0.0), std::f64::consts::PI);
+        live.ensure_region(&all_sky).unwrap();
+        let before = live.loaded_cell_count();
+        let target = HealpixCell { depth: 5, id: 1 };
+        let report = live.drop_cells(&[target]);
+        assert_eq!(report.cells_dropped, 1);
+        assert_eq!(live.loaded_cell_count(), before - 1);
+        assert!(live.loaded_cells().all(|c| *c != target));
+    }
+
+    #[test]
+    fn drop_cells_ignores_unknown_cells() {
+        let mut live = LiveIndex::open(make_mock_source());
+        let region = SkyRegion::from_radians(starfield::Equatorial::new(0.5, 0.3), 0.05);
+        live.ensure_region(&region).unwrap();
+        let before = live.loaded_cell_count();
+        let unknown = HealpixCell { depth: 5, id: 9999 };
+        let report = live.drop_cells(&[unknown]);
+        assert_eq!(report.cells_dropped, 0);
+        assert_eq!(report.stars_dropped, 0);
+        assert_eq!(live.loaded_cell_count(), before);
+    }
+
+    #[test]
+    fn kd_forest_insert_replaces_existing_tag() {
+        // Inserting a tag that's already present should drop the prior
+        // sub-tree first, not duplicate it.
+        let pts_a: Vec<[f64; 2]> = vec![[0.0, 0.0], [1.0, 0.0], [2.0, 0.0]];
+        let pts_b: Vec<[f64; 2]> = vec![[10.0, 10.0]];
+        let tree_a = KdTree::<2>::build(pts_a, vec![0, 1, 2]);
+        let tree_b = KdTree::<2>::build(pts_b, vec![0]);
+
+        let mut forest: KdForest<2> = KdForest::new();
+        forest.insert(42, tree_a);
+        assert_eq!(forest.len(), 3);
+        forest.insert(42, tree_b); // same tag — should replace
+        assert_eq!(forest.len(), 1);
+        assert_eq!(forest.sub_tree_count(), 1);
+        // Confirm only the replacement's content is present.
+        let near_origin = forest.range_search(&[0.0, 0.0], 0.5);
+        assert!(near_origin.is_empty());
+        let near_b = forest.range_search(&[10.0, 10.0], 0.5);
+        assert_eq!(near_b.len(), 1);
     }
 
     #[test]
