@@ -1,10 +1,12 @@
 pub mod builder;
+pub mod live;
 pub mod source;
 pub mod store;
 
 use crate::kdtree::KdTree;
 use crate::quads::{DIMCODES, Quad};
 
+pub use live::{DropReport, EnsureReport, LiveIndex};
 pub use source::{HealpixCell, IndexFragment, IndexSource, ZdclFile};
 
 /// Metadata for a star in the index.

@@ -2,6 +2,12 @@
 //!
 //! Uses const generics so the compiler generates specialized code for each
 //! dimensionality (3D star positions on the unit sphere, 4D quad codes, etc.).
+//!
+//! `KdTree<DIM>` is the concrete tree. `KdQueryable<DIM>` is the read-side
+//! trait — both `KdTree` and the multi-tree `KdForest` implement it, so
+//! consumers can hold a single tree or a dynamic union of per-cell trees
+//! behind the same interface (used by `LiveIndex` to support cheap cell
+//! add/drop without rebuilding the whole tree on every membership change).
 
 /// Result of a spatial search: original index and squared Euclidean distance.
 #[derive(Debug, Clone, PartialEq)]
@@ -326,6 +332,146 @@ fn squared_distance<const DIM: usize>(a: &[f64; DIM], b: &[f64; DIM]) -> f64 {
         sum += d * d;
     }
     sum
+}
+
+/// Read-side trait for any spatial index that can answer range / nearest
+/// queries on `[f64; DIM]` points. Implemented by `KdTree<DIM>` and by
+/// `KdForest<DIM>` (which unions multiple sub-trees behind one interface).
+pub trait KdQueryable<const DIM: usize>: Send + Sync {
+    fn range_search(&self, query: &[f64; DIM], radius_sq: f64) -> Vec<SearchResult>;
+    fn nearest(&self, query: &[f64; DIM]) -> Option<SearchResult>;
+    fn range_count(&self, query: &[f64; DIM], radius_sq: f64) -> usize;
+    fn len(&self) -> usize;
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+impl<const DIM: usize> KdQueryable<DIM> for KdTree<DIM> {
+    fn range_search(&self, query: &[f64; DIM], radius_sq: f64) -> Vec<SearchResult> {
+        KdTree::range_search(self, query, radius_sq)
+    }
+    fn nearest(&self, query: &[f64; DIM]) -> Option<SearchResult> {
+        KdTree::nearest(self, query)
+    }
+    fn range_count(&self, query: &[f64; DIM], radius_sq: f64) -> usize {
+        KdTree::range_count(self, query, radius_sq)
+    }
+    fn len(&self) -> usize {
+        KdTree::len(self)
+    }
+}
+
+/// A dynamic union of `KdTree<DIM>`s, each tagged with a stable u64 key
+/// (typically a HEALPix cell id). Supports cheap add/drop without
+/// rebuilding any sub-tree, at the cost of K-fold fanout per query.
+///
+/// Indices in `SearchResult.index` are **per-sub-tree**, NOT globally
+/// unique across the forest. Callers that need a stable global index
+/// should disambiguate by also tracking which sub-tree each result came
+/// from (use `range_search_tagged` for that).
+#[derive(Default)]
+pub struct KdForest<const DIM: usize> {
+    trees: Vec<TaggedTree<DIM>>,
+}
+
+struct TaggedTree<const DIM: usize> {
+    tag: u64,
+    tree: KdTree<DIM>,
+}
+
+/// A `SearchResult` annotated with the sub-tree's tag, so callers can
+/// recover which sub-tree the hit came from across a forest fanout.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TaggedSearchResult {
+    pub tag: u64,
+    pub index: usize,
+    pub dist_sq: f64,
+}
+
+impl<const DIM: usize> KdForest<DIM> {
+    pub fn new() -> Self {
+        Self { trees: Vec::new() }
+    }
+
+    /// Add a sub-tree under `tag`. If a sub-tree with the same tag is
+    /// already present, the previous one is dropped first.
+    pub fn insert(&mut self, tag: u64, tree: KdTree<DIM>) {
+        self.remove(tag);
+        self.trees.push(TaggedTree { tag, tree });
+    }
+
+    /// Remove the sub-tree with the given tag. Returns whether anything
+    /// was removed.
+    pub fn remove(&mut self, tag: u64) -> bool {
+        let before = self.trees.len();
+        self.trees.retain(|t| t.tag != tag);
+        before != self.trees.len()
+    }
+
+    /// Tags of currently-loaded sub-trees, in insertion order.
+    pub fn tags(&self) -> impl Iterator<Item = u64> + '_ {
+        self.trees.iter().map(|t| t.tag)
+    }
+
+    pub fn sub_tree_count(&self) -> usize {
+        self.trees.len()
+    }
+
+    /// `range_search` with the source-sub-tree tag attached to each hit.
+    pub fn range_search_tagged(
+        &self,
+        query: &[f64; DIM],
+        radius_sq: f64,
+    ) -> Vec<TaggedSearchResult> {
+        let mut out = Vec::new();
+        for t in &self.trees {
+            for hit in t.tree.range_search(query, radius_sq) {
+                out.push(TaggedSearchResult {
+                    tag: t.tag,
+                    index: hit.index,
+                    dist_sq: hit.dist_sq,
+                });
+            }
+        }
+        out
+    }
+}
+
+impl<const DIM: usize> KdQueryable<DIM> for KdForest<DIM> {
+    fn range_search(&self, query: &[f64; DIM], radius_sq: f64) -> Vec<SearchResult> {
+        let mut out = Vec::new();
+        for t in &self.trees {
+            out.extend(t.tree.range_search(query, radius_sq));
+        }
+        out
+    }
+
+    fn nearest(&self, query: &[f64; DIM]) -> Option<SearchResult> {
+        let mut best: Option<SearchResult> = None;
+        for t in &self.trees {
+            if let Some(hit) = t.tree.nearest(query)
+                && best
+                    .as_ref()
+                    .map(|b| hit.dist_sq < b.dist_sq)
+                    .unwrap_or(true)
+            {
+                best = Some(hit);
+            }
+        }
+        best
+    }
+
+    fn range_count(&self, query: &[f64; DIM], radius_sq: f64) -> usize {
+        self.trees
+            .iter()
+            .map(|t| t.tree.range_count(query, radius_sq))
+            .sum()
+    }
+
+    fn len(&self) -> usize {
+        self.trees.iter().map(|t| t.tree.len()).sum()
+    }
 }
 
 #[cfg(test)]
