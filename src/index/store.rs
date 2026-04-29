@@ -98,6 +98,26 @@ impl Index {
         load_filtered(path, None)
     }
 
+    /// Save in v3 format (HEALPix-grouped layout). Stars are sorted by
+    /// HEALPix cell at `cell_depth` and the file header carries a cell
+    /// table mapping cell_id → (star_offset, star_count) for sparse-load
+    /// access via [`super::source::ZdclFile`].
+    ///
+    /// Use [`super::source::DEFAULT_CELL_DEPTH`] for the standard depth.
+    pub fn save_v3(&self, path: &Path, cell_depth: u8) -> io::Result<()> {
+        let file = File::create(path)?;
+        let mut w = BufWriter::new(file);
+        super::source::write_v3(
+            &mut w,
+            self.metadata.as_ref(),
+            &self.stars,
+            &self.quads,
+            self.scale_lower,
+            self.scale_upper,
+            cell_depth,
+        )
+    }
+
     /// Load only stars within `region`, plus the quads that reference those
     /// stars. Quads with any star outside `region` are dropped entirely.
     ///

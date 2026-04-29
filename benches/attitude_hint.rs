@@ -159,16 +159,17 @@ struct TrialResult {
 }
 
 fn base_config() -> SolverConfig {
-    let mut config = SolverConfig::default();
-    config.max_field_stars = 25;
-    config.code_tolerance = 0.002;
-    config.verify = VerifyConfig {
-        match_radius_pix: 3.0,
-        log_odds_accept: 10.0,
-        min_matches: 3,
-        ..VerifyConfig::default()
-    };
-    config
+    SolverConfig {
+        max_field_stars: 25,
+        code_tolerance: 0.002,
+        verify: VerifyConfig {
+            match_radius_pix: 3.0,
+            log_odds_accept: 10.0,
+            min_matches: 3,
+            ..VerifyConfig::default()
+        },
+        ..SolverConfig::default()
+    }
 }
 
 fn solve_timed_multi(
