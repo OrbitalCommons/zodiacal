@@ -2,7 +2,7 @@ use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::Path;
 
-use crate::geom::sphere::{angular_distance, radec_to_xyz};
+use crate::geom::sphere::radec_to_xyz;
 use crate::kdtree::KdTree;
 use crate::quads::{Code, DIMCODES, DIMQUADS, Quad};
 use crate::solver::SkyRegion;
@@ -103,8 +103,12 @@ impl Index {
     ///
     /// Disk I/O is unchanged from [`Index::load`] (the whole file is still
     /// read sequentially), but in-memory size scales with the kept set.
-    /// For boundary-quad robustness, prefer [`Index::load_in_region_padded`]
-    /// with `padding_rad = index.scale_upper`.
+    ///
+    /// Quads whose backbone straddles the region boundary will be silently
+    /// dropped — if you want to keep those, use
+    /// [`Index::load_in_region_padded`] with a padding at least as large as
+    /// the largest quad backbone you expect (typically the index's upper
+    /// scale bound, in radians).
     pub fn load_in_region(path: &Path, region: &SkyRegion) -> io::Result<Index> {
         load_filtered(path, Some((region, 0.0)))
     }
@@ -112,13 +116,13 @@ impl Index {
     /// Load with explicit padding around `region`. `padding_rad` is added to
     /// the region's radius before any star or quad acceptance test, so quads
     /// whose backbones straddle the region boundary are kept rather than
-    /// silently dropped.
+    /// silently dropped. Negative values are treated as zero.
     pub fn load_in_region_padded(
         path: &Path,
         region: &SkyRegion,
         padding_rad: f64,
     ) -> io::Result<Index> {
-        load_filtered(path, Some((region, padding_rad)))
+        load_filtered(path, Some((region, padding_rad.max(0.0))))
     }
 }
 
@@ -166,21 +170,26 @@ fn load_filtered(path: &Path, region_filter: Option<(&SkyRegion, f64)>) -> io::R
     let scale_lower = read_f64(&mut r)?;
     let scale_upper = read_f64(&mut r)?;
 
-    // Pre-compute the region center xyz once so the per-star test is cheap.
+    // Pre-compute the region center xyz and the cosine of the effective
+    // radius once. The per-star test then reduces to a single dot product
+    // (avoiding acos() for every star — important on the full-load path
+    // where this is the per-star inner loop on millions of records).
     let region_test = region_filter.map(|(region, padding)| {
         let center_xyz = radec_to_xyz(region.center.ra, region.center.dec);
-        let effective_radius = region.radius_rad + padding;
-        (center_xyz, effective_radius)
+        let cos_radius = (region.radius_rad + padding).cos();
+        (center_xyz, cos_radius)
     });
+    let filtered = region_test.is_some();
 
-    // Stars phase: read all, filter, push None into the remap for dropped
-    // stars and Some(new_idx) for kept ones.
-    let mut stars: Vec<IndexStar> = Vec::with_capacity(if region_test.is_some() {
-        num_stars / 4
+    // Stars phase: when filtering, also build a remap from old index to
+    // compact index. When loading the full file, skip the remap allocation
+    // entirely — every star is kept and quads keep their original indices.
+    let mut stars: Vec<IndexStar> = Vec::with_capacity(num_stars);
+    let mut star_remap: Vec<Option<usize>> = if filtered {
+        Vec::with_capacity(num_stars)
     } else {
-        num_stars
-    });
-    let mut star_remap: Vec<Option<usize>> = Vec::with_capacity(num_stars);
+        Vec::new()
+    };
     for _ in 0..num_stars {
         let catalog_id = read_u64(&mut r)?;
         let ra = read_f64(&mut r)?;
@@ -188,36 +197,45 @@ fn load_filtered(path: &Path, region_filter: Option<(&SkyRegion, f64)>) -> io::R
         let mag = read_f64(&mut r)?;
         let keep = match region_test {
             None => true,
-            Some((center_xyz, radius)) => {
+            Some((center_xyz, cos_radius)) => {
                 let xyz = radec_to_xyz(ra, dec);
-                angular_distance(center_xyz, xyz) <= radius
+                let dot = xyz[0] * center_xyz[0] + xyz[1] * center_xyz[1] + xyz[2] * center_xyz[2];
+                dot >= cos_radius
             }
         };
+        if filtered {
+            if keep {
+                star_remap.push(Some(stars.len()));
+            } else {
+                star_remap.push(None);
+            }
+        }
         if keep {
-            star_remap.push(Some(stars.len()));
             stars.push(IndexStar {
                 catalog_id,
                 ra,
                 dec,
                 mag,
             });
-        } else {
-            star_remap.push(None);
         }
     }
 
     // Quads phase: read all, drop those referencing any dropped star,
     // remap indices for kept quads. Track which quad positions were kept so
-    // we know which codes to keep in the next phase.
+    // we know which codes to keep in the next phase. Skip the bookkeeping
+    // entirely when loading the full file.
     let mut quads: Vec<Quad> = Vec::with_capacity(num_quads);
-    let mut quad_kept: Vec<bool> = Vec::with_capacity(num_quads);
+    let mut quad_kept: Vec<bool> = if filtered {
+        Vec::with_capacity(num_quads)
+    } else {
+        Vec::new()
+    };
     for _ in 0..num_quads {
         let mut star_ids = [0usize; DIMQUADS];
         for sid in &mut star_ids {
             *sid = read_u32(&mut r)? as usize;
         }
-        if region_test.is_none() {
-            quad_kept.push(true);
+        if !filtered {
             quads.push(Quad { star_ids });
             continue;
         }
@@ -240,14 +258,25 @@ fn load_filtered(path: &Path, region_filter: Option<(&SkyRegion, f64)>) -> io::R
         }
     }
 
-    // Codes phase: walk quads in original order, keep the codes for kept quads.
-    let mut codes: Vec<Code> = Vec::with_capacity(quads.len());
-    for &keep in &quad_kept {
-        let mut code = [0.0f64; DIMCODES];
-        for v in &mut code {
-            *v = read_f64(&mut r)?;
+    // Codes phase: full load reads all codes; filtered load keeps only those
+    // matching the kept quads.
+    let mut codes: Vec<Code> = Vec::with_capacity(if filtered { quads.len() } else { num_quads });
+    if filtered {
+        for &keep in &quad_kept {
+            let mut code = [0.0f64; DIMCODES];
+            for v in &mut code {
+                *v = read_f64(&mut r)?;
+            }
+            if keep {
+                codes.push(code);
+            }
         }
-        if keep {
+    } else {
+        for _ in 0..num_quads {
+            let mut code = [0.0f64; DIMCODES];
+            for v in &mut code {
+                *v = read_f64(&mut r)?;
+            }
             codes.push(code);
         }
     }
@@ -639,8 +668,8 @@ mod tests {
         let center_xyz = radec_to_xyz(center_ra, center_dec);
         let patch_a_xyz = radec_to_xyz(patch_a[0], patch_a[1]);
         let patch_b_xyz = radec_to_xyz(patch_b[0], patch_b[1]);
-        let dist_a = angular_distance(center_xyz, patch_a_xyz);
-        let dist_b = angular_distance(center_xyz, patch_b_xyz);
+        let dist_a = crate::geom::sphere::angular_distance(center_xyz, patch_a_xyz);
+        let dist_b = crate::geom::sphere::angular_distance(center_xyz, patch_b_xyz);
         let radius = dist_a.max(dist_b) + 0.02; // small slack
 
         let region =
@@ -681,6 +710,111 @@ mod tests {
         // KdTrees should have rebuilt over the kept set.
         assert_eq!(regional.star_tree.len(), regional.stars.len());
         assert_eq!(regional.code_tree.len(), regional.quads.len());
+    }
+
+    /// Integration: build a real index via build_index, save, sparse-load
+    /// over a region containing the field, and solve against synthetic
+    /// pixel sources. This is the "sparse load doesn't break the solver"
+    /// guarantee.
+    #[test]
+    fn load_in_region_then_solve_recovers_wcs() {
+        use crate::extraction::DetectedSource;
+        use crate::geom::tan::TanWcs;
+        use crate::index::builder::{IndexBuilderConfig, build_index};
+        use crate::solver::{SolverConfig, solve};
+        use crate::verify::VerifyConfig;
+        use std::f64::consts::PI;
+
+        let image_size = (512.0, 512.0);
+        let pixel_scale_arcsec: f64 = 2.0;
+        let scale_rad = (pixel_scale_arcsec / 3600.0).to_radians();
+        let arcsec_rad = scale_rad;
+        let truth_wcs = TanWcs {
+            crval: [1.0, 0.5],
+            crpix: [256.0, 256.0],
+            cd: [[arcsec_rad, 0.0], [0.0, arcsec_rad]],
+            image_size: [image_size.0, image_size.1],
+        };
+
+        // Deterministic pseudo-random stars in the field. Matches the
+        // existing solver::tests::synthetic_solve seed so we know the
+        // catalog/quad config produces a solvable field; this test is
+        // about whether the sparse loader preserves that solvability.
+        let mut state: u64 = 314_159_265;
+        let mut rng = || -> f64 {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state as f64) / (u64::MAX as f64)
+        };
+
+        let mut catalog = Vec::new();
+        let mut sources = Vec::new();
+        for i in 0..25 {
+            let px = 30.0 + rng() * 452.0;
+            let py = 30.0 + rng() * 452.0;
+            let (ra, dec) = truth_wcs.pixel_to_radec(px, py);
+            catalog.push((i as u64, ra, dec, i as f64));
+            sources.push(DetectedSource {
+                x: px,
+                y: py,
+                flux: 1000.0 - i as f64 * 10.0,
+            });
+        }
+
+        let field_diag = (image_size.0 * image_size.0 + image_size.1 * image_size.1).sqrt();
+        let max_angle = field_diag * scale_rad;
+        let cfg = IndexBuilderConfig {
+            scale_lower: scale_rad * 10.0,
+            scale_upper: max_angle,
+            max_stars: 25,
+            max_quads: 50_000,
+        };
+        let index = build_index(&catalog, &cfg);
+
+        let path = temp_path("region_then_solve");
+        index.save(&path).unwrap();
+
+        // Sparse-load over a region containing the field, padded by the
+        // index's largest backbone so no quads get clipped.
+        let center = starfield::Equatorial::new(truth_wcs.crval[0], truth_wcs.crval[1]);
+        let region = SkyRegion::from_radians(center, max_angle);
+        let regional = Index::load_in_region_padded(&path, &region, max_angle).unwrap();
+        std::fs::remove_file(&path).ok();
+
+        // Sanity: regional load should retain ~all the stars/quads since the
+        // field fits inside the padded region.
+        assert_eq!(regional.stars.len(), index.stars.len());
+        assert_eq!(regional.quads.len(), index.quads.len());
+
+        let solver_cfg = SolverConfig {
+            scale_range: None,
+            max_field_stars: 25,
+            code_tolerance: 0.002,
+            verify: VerifyConfig {
+                match_radius_pix: 3.0,
+                log_odds_accept: 10.0,
+                min_matches: 3,
+                ..VerifyConfig::default()
+            },
+            ..SolverConfig::default()
+        };
+        let (solution, _stats) = solve(&sources, &[&regional], image_size, &solver_cfg);
+        let solution = solution.expect("sparse-loaded index should solve");
+
+        // The solved WCS image center should match truth's image center to
+        // within a few arcsec. (CRVAL is not directly comparable because
+        // fit_tan_wcs chooses its own tangent point.)
+        let (solved_ra, solved_dec) = solution.wcs.field_center();
+        let (truth_ra, truth_dec) = truth_wcs.field_center();
+        let arcsec = PI / (180.0 * 3600.0);
+        let dra = (solved_ra - truth_ra).abs() * truth_dec.cos();
+        let ddec = (solved_dec - truth_dec).abs();
+        let sep_arcsec = ((dra * dra + ddec * ddec).sqrt()) / arcsec;
+        assert!(
+            sep_arcsec < 30.0,
+            "image-center separation {sep_arcsec:.2} arcsec exceeds 30\""
+        );
     }
 
     #[test]
