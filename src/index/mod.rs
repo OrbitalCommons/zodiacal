@@ -1,8 +1,11 @@
 pub mod builder;
+pub mod source;
 pub mod store;
 
 use crate::kdtree::KdTree;
 use crate::quads::{DIMCODES, Quad};
+
+pub use source::{HealpixCell, IndexFragment, IndexSource, ZdclFile};
 
 /// Metadata for a star in the index.
 #[derive(Debug, Clone)]
