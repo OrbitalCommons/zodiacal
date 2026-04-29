@@ -4,6 +4,8 @@
 //! by matching geometric star patterns against a reference catalog,
 //! returning a WCS (World Coordinate System) solution.
 
+#[cfg(feature = "gaia-shards")]
+pub mod cli_build_from_shards;
 pub mod extraction;
 pub mod fitting;
 pub mod geom;

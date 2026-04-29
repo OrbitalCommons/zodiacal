@@ -11,6 +11,11 @@ use zodiacal::index::{Index, IndexMetadata};
 use zodiacal::solver::{SolveStats, SolverConfig, solve, solve_image};
 use zodiacal::verify::VerifyConfig;
 
+#[cfg(feature = "gaia-shards")]
+use zodiacal::cli_build_from_shards::{BuildFromShardsConfig, run as run_build_from_shards};
+#[cfg(feature = "gaia-shards")]
+use zodiacal::index::source::DEFAULT_CELL_DEPTH;
+
 #[derive(Parser)]
 #[command(name = "zodiacal", about = "Blind astrometry plate solver")]
 struct Cli {
@@ -247,6 +252,58 @@ enum Commands {
     Info {
         /// Path to the index file (.zdcl).
         index: PathBuf,
+    },
+
+    /// Build a `.zdcl` index plus a `.zdcl.gaia` refinement sidecar from
+    /// a directory of Gaia DR3 `GaiaSource_*.csv.gz` shards in one pass.
+    ///
+    /// Reads every shard once, applies the magnitude limit, then builds the
+    /// quad index and writes the sidecar in v3 / v1 formats respectively.
+    ///
+    /// Memory note: the v1 sidecar writer holds all records in RAM. Each
+    /// star is ~120 bytes, so G≤16 (~83M stars) is the practical ceiling
+    /// on a 64 GB box; G>17 is rejected up front.
+    #[cfg(feature = "gaia-shards")]
+    BuildFromShards {
+        /// Directory containing `GaiaSource_*.csv(.gz)` shards. If omitted,
+        /// the tool scans the starfield-managed cache
+        /// (`Downloader::<Dr3>::list_cached()`).
+        #[arg(long)]
+        shards_dir: Option<PathBuf>,
+
+        /// Output prefix; emits `<prefix>.zdcl` and `<prefix>.zdcl.gaia`.
+        #[arg(long)]
+        output_prefix: PathBuf,
+
+        /// G-band magnitude cutoff (must be <= 17.0; deeper won't fit in RAM).
+        #[arg(long, default_value = "16.0")]
+        mag_limit: f64,
+
+        /// Minimum quad scale in arcseconds.
+        #[arg(long, default_value = "30.0")]
+        scale_lower: f64,
+
+        /// Maximum quad scale in arcseconds.
+        #[arg(long, default_value = "1800.0")]
+        scale_upper: f64,
+
+        /// Maximum brightest stars per HEALPix cell (advisory; reserved for
+        /// a future uniformization step — currently unused by `build_index`).
+        #[arg(long, default_value = "30")]
+        max_stars_per_cell: usize,
+
+        /// Maximum number of quads to generate (default: 8 × n_stars).
+        #[arg(long)]
+        max_quads: Option<usize>,
+
+        /// HEALPix depth used to group stars in the v3 `.zdcl` file.
+        #[arg(long, default_value_t = DEFAULT_CELL_DEPTH)]
+        cell_depth: u8,
+
+        /// Rayon worker thread count for parallel shard reads
+        /// (default: rayon's default = all logical cores).
+        #[arg(long)]
+        threads: Option<usize>,
     },
 }
 
@@ -1420,6 +1477,34 @@ fn main() {
         }
         Commands::Info { index } => {
             cmd_info(index);
+        }
+        #[cfg(feature = "gaia-shards")]
+        Commands::BuildFromShards {
+            shards_dir,
+            output_prefix,
+            mag_limit,
+            scale_lower,
+            scale_upper,
+            max_stars_per_cell,
+            max_quads,
+            cell_depth,
+            threads,
+        } => {
+            let cfg = BuildFromShardsConfig {
+                shards_dir: shards_dir.clone(),
+                output_prefix: output_prefix.clone(),
+                mag_limit: *mag_limit,
+                scale_lower_arcsec: *scale_lower,
+                scale_upper_arcsec: *scale_upper,
+                max_stars_per_cell: *max_stars_per_cell,
+                max_quads: *max_quads,
+                cell_depth: *cell_depth,
+                threads: *threads,
+            };
+            if let Err(e) = run_build_from_shards(&cfg) {
+                eprintln!("build-from-shards failed: {e}");
+                process::exit(1);
+            }
         }
     }
 }
