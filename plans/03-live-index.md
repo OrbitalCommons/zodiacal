@@ -3,9 +3,19 @@
 ## Goal
 
 A stateful in-memory index whose set of loaded cells can grow and shrink at
-runtime. KD-trees rebuild on each membership change. Wraps an `IndexSource`
-(plan 2) so it works with any backing store — file, in-memory, future remote
-service.
+runtime. Internally maintains a `KdForest` of per-cell sub-trees so cell
+add/drop is O(1) for tree maintenance — no full rebuild. Wraps an
+`IndexSource` (plan 2) so it works with any backing store.
+
+**Design update from the original plan**: rather than rebuilding the KD-tree
+on every cell change (originally planned: full O(N log N) rebuild), we now
+keep per-cell sub-trees in a `KdForest` and union queries across them. Cell
+add = "build a small tree, append to forest"; cell drop = "remove the named
+sub-tree." Per-query cost grows linearly with the number of loaded sub-trees
+(typically <100 in realtime use); rebuild cost is gone. For the existing
+`solve()` API which expects a flat `Index`, `LiveIndex::as_index()` flattens
+on demand and pays rebuild cost only when actually called — not on every
+membership change.
 
 ## Non-goals
 
