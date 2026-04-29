@@ -33,3 +33,7 @@ starfield = "0.11"
 [[bin]]
 name = "zodiacal"
 required-features = ["cli"]
+
+[[bench]]
+name = "attitude_hint"
+harness = false
