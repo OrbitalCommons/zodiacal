@@ -23,7 +23,10 @@ use crate::solver::SkyRegion;
 /// drives [`crate::index::LiveIndex`] cell membership; the optional
 /// observer state, if present, is consumed by the refinement pipeline
 /// for parallax / aberration corrections.
-pub trait PointingSource: Send {
+///
+/// `Send + Sync` so plan 5's orchestrator can share a
+/// `Arc<dyn PointingSource>` across threads.
+pub trait PointingSource: Send + Sync {
     fn current_region(&self, t: &Time) -> SkyRegion;
     /// Default: no observer state (refinement falls back to "no
     /// observer" mode — no parallax, no aberration). Implementors
@@ -45,14 +48,16 @@ pub struct BcrsState {
 }
 
 /// Source of spacecraft barycentric state at a given time.
-pub trait EphemerisSource: Send {
+pub trait EphemerisSource: Send + Sync {
     fn state_at(&self, t: &Time) -> Option<BcrsState>;
 }
 
 /// Source of body-to-inertial attitude quaternion at a given time. The
 /// convention is "body frame → inertial frame" (multiplying a body-frame
 /// vector by the quaternion gives its inertial-frame coordinates).
-pub trait AttitudeSource: Send {
+/// nalgebra's `UnitQuaternion * Vector3` is an active rotation, so this
+/// matches the standard `body_to_inertial` convention.
+pub trait AttitudeSource: Send + Sync {
     fn quaternion_at(&self, t: &Time) -> Option<UnitQuaternion<f64>>;
 }
 
@@ -74,6 +79,9 @@ pub struct SpacecraftBoresight<E: EphemerisSource, A: AttitudeSource> {
 }
 
 impl<E: EphemerisSource, A: AttitudeSource> SpacecraftBoresight<E, A> {
+    /// Construct with the default `+Z` boresight. Use
+    /// [`Self::with_boresight`] to pick a different body-frame axis;
+    /// the supplied vector is normalized.
     pub fn new(
         ephemeris: E,
         attitude: A,
@@ -87,6 +95,17 @@ impl<E: EphemerisSource, A: AttitudeSource> SpacecraftBoresight<E, A> {
             fov_padding_rad,
             boresight_body: [0.0, 0.0, 1.0],
         }
+    }
+
+    /// Override the body-frame boresight direction. The supplied
+    /// vector is normalized; passing a zero vector is a programmer
+    /// error and panics in debug builds.
+    pub fn with_boresight(mut self, body: [f64; 3]) -> Self {
+        let n = (body[0] * body[0] + body[1] * body[1] + body[2] * body[2]).sqrt();
+        debug_assert!(n > 0.0, "boresight_body must be a non-zero vector");
+        let inv = if n > 0.0 { 1.0 / n } else { 1.0 };
+        self.boresight_body = [body[0] * inv, body[1] * inv, body[2] * inv];
+        self
     }
 }
 
@@ -145,10 +164,18 @@ pub struct GroundStation {
 
 impl GroundStation {
     pub fn from_degrees(latitude_deg: f64, longitude_deg: f64, min_altitude_deg: f64) -> Self {
+        debug_assert!(
+            (-90.0..=90.0).contains(&latitude_deg),
+            "latitude must be in -90..=90, got {latitude_deg}"
+        );
+        debug_assert!(
+            (0.0..=90.0).contains(&min_altitude_deg),
+            "min_altitude_deg must be in 0..=90, got {min_altitude_deg}"
+        );
         Self {
-            latitude_rad: latitude_deg.to_radians(),
+            latitude_rad: latitude_deg.to_radians().clamp(-PI / 2.0, PI / 2.0),
             longitude_rad: longitude_deg.to_radians(),
-            min_altitude_rad: min_altitude_deg.to_radians(),
+            min_altitude_rad: min_altitude_deg.to_radians().clamp(0.0, PI / 2.0),
         }
     }
 
@@ -159,9 +186,10 @@ impl GroundStation {
     /// distinction; not relevant for cell-loading purposes).
     ///
     /// RA at zenith == Local Apparent Sidereal Time, expressed in
-    /// radians.
+    /// radians. starfield's `time.gast()` already does the UT1 lookup
+    /// internally and returns hours; we just add the observer's
+    /// longitude (in hours) and wrap to `[0, 24)`.
     pub fn zenith(&self, time: &Time) -> (f64, f64) {
-        // GAST is in hours; LST = GAST + longitude(in hours).
         let gast_hours = time.gast();
         let lst_hours = (gast_hours + self.longitude_rad * 12.0 / PI).rem_euclid(24.0);
         let zenith_ra = lst_hours * PI / 12.0;
@@ -261,9 +289,31 @@ mod tests {
         let station = GroundStation::from_degrees(0.0, 0.0, 30.0);
         let (ra0, _) = station.zenith(&t0);
         let (ra1, _) = station.zenith(&t1);
-        // Expect <few-arcmin difference (sidereal-day approx is rough).
-        let diff = (ra0 - ra1).abs().min((ra0 - ra1 + 2.0 * PI).abs());
+        // Circular distance on the [0, 2π) RA circle.
+        let tau = 2.0 * PI;
+        let raw = (ra0 - ra1).rem_euclid(tau);
+        let diff = raw.min(tau - raw);
         assert!(diff < 0.05, "zenith RA wrap mismatch: {diff} rad");
+    }
+
+    #[test]
+    fn ground_station_longitude_shifts_zenith_ra_eastward() {
+        // Two stations at the same time, longitudes 90° apart in the
+        // east direction. Eastern station's zenith RA must lead by 90°
+        // (positive longitude → larger LST). This pins the longitude
+        // sign convention so a flipped sign would fail.
+        let ts = Timescale::default();
+        let t = ts.tt_jd(2_460_000.5, None);
+        let west = GroundStation::from_degrees(0.0, 0.0, 30.0);
+        let east = GroundStation::from_degrees(0.0, 90.0, 30.0);
+        let (ra_west, _) = west.zenith(&t);
+        let (ra_east, _) = east.zenith(&t);
+        let tau = 2.0 * PI;
+        let lead = (ra_east - ra_west).rem_euclid(tau);
+        assert!(
+            (lead - PI / 2.0).abs() < 1e-9,
+            "expected ~π/2 east lead, got {lead}"
+        );
     }
 
     #[test]
@@ -301,6 +351,45 @@ mod tests {
         let sat = SpacecraftBoresight::new(ephem, attitude, 0.01, 0.0);
         let region = sat.current_region(&now());
         // +X inertial = (RA=0, Dec=0).
+        assert!(region.center.ra.abs() < 1e-12 || (region.center.ra - 2.0 * PI).abs() < 1e-12);
+        assert!(region.center.dec.abs() < 1e-12);
+    }
+
+    #[test]
+    fn spacecraft_quaternion_x_axis_90_takes_z_to_minus_y() {
+        // Asymmetric rotation that uniquely pins the active /
+        // body→inertial convention: 90° about +X takes +Z to -Y.
+        // -Y in (RA, Dec): RA = 3π/2, Dec = 0.
+        let q = UnitQuaternion::from_axis_angle(&Vector3::x_axis(), PI / 2.0);
+        let attitude = StaticAttitude(q);
+        let ephem = StaticEphemeris(BcrsState {
+            position_au: [0.0; 3],
+            velocity_au_per_day: [0.0; 3],
+        });
+        let sat = SpacecraftBoresight::new(ephem, attitude, 0.01, 0.0);
+        let region = sat.current_region(&now());
+        let expected_ra = 3.0 * PI / 2.0;
+        assert!(
+            (region.center.ra - expected_ra).abs() < 1e-12,
+            "expected RA {expected_ra}, got {}",
+            region.center.ra
+        );
+        assert!(region.center.dec.abs() < 1e-12);
+    }
+
+    #[test]
+    fn spacecraft_with_boresight_normalizes_input() {
+        let q = UnitQuaternion::identity();
+        let attitude = StaticAttitude(q);
+        let ephem = StaticEphemeris(BcrsState {
+            position_au: [0.0; 3],
+            velocity_au_per_day: [0.0; 3],
+        });
+        // Pass a non-unit body vector pointing at +X (magnitude 5).
+        let sat =
+            SpacecraftBoresight::new(ephem, attitude, 0.01, 0.0).with_boresight([5.0, 0.0, 0.0]);
+        // After normalization, body=+X, identity quaternion → +X inertial = (RA=0, Dec=0).
+        let region = sat.current_region(&now());
         assert!(region.center.ra.abs() < 1e-12 || (region.center.ra - 2.0 * PI).abs() < 1e-12);
         assert!(region.center.dec.abs() < 1e-12);
     }
