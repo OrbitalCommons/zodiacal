@@ -20,6 +20,7 @@ use std::time::Instant;
 
 use rayon::prelude::*;
 use starfield_gaia::common::reader::CsvSourceReader;
+use starfield_gaia::download::Downloader;
 use starfield_gaia::{Dr3, Dr3Entry};
 
 use crate::index::builder::{IndexBuilderConfig, build_index};
@@ -118,8 +119,11 @@ fn read_shard(path: &Path, mag_limit: f64) -> Result<Vec<ShardRow>, String> {
 }
 
 /// Configuration for `run`.
+///
+/// `shards_dir = None` tells the tool to use the shard set cached by
+/// `starfield-gaia` (i.e. files under `~/.cache/starfield/gaia/`).
 pub struct BuildFromShardsConfig {
-    pub shards_dir: PathBuf,
+    pub shards_dir: Option<PathBuf>,
     pub output_prefix: PathBuf,
     pub mag_limit: f64,
     /// Lower scale bound in arcseconds.
@@ -152,23 +156,36 @@ pub fn run(cfg: &BuildFromShardsConfig) -> Result<(), String> {
 
     let t0 = Instant::now();
 
-    let shards = find_shard_files(&cfg.shards_dir).map_err(|e| {
-        format!(
-            "failed to scan shards directory {}: {e}",
-            cfg.shards_dir.display()
-        )
-    })?;
+    // Resolve shards. If --shards-dir is provided, scan that directory.
+    // Otherwise use the shard set cached by `starfield-gaia` (typically at
+    // `~/.cache/starfield/gaia/`), which is the canonical location for
+    // already-downloaded GaiaSource files.
+    let (shards, source_label) = match cfg.shards_dir.as_ref() {
+        Some(dir) => {
+            let files = find_shard_files(dir)
+                .map_err(|e| format!("failed to scan shards directory {}: {e}", dir.display()))?;
+            (files, format!("directory {}", dir.display()))
+        }
+        None => {
+            let cached = Downloader::<Dr3>::list_cached().map_err(|e| {
+                format!(
+                    "failed to list starfield-gaia cached shards: {e}; \
+                     pass --shards-dir to override"
+                )
+            })?;
+            (cached, "starfield-gaia cache".to_string())
+        }
+    };
     if shards.is_empty() {
-        return Err(format!(
-            "no GaiaSource_*.csv(.gz) shards found in {}",
-            cfg.shards_dir.display()
-        ));
+        return Err(match cfg.shards_dir.as_ref() {
+            Some(dir) => format!("no GaiaSource_*.csv(.gz) shards found in {}", dir.display()),
+            None => "starfield-gaia cache is empty (no GaiaSource_*.csv.gz files \
+                     downloaded yet); run starfield-gaia downloader or pass \
+                     --shards-dir"
+                .to_string(),
+        });
     }
-    eprintln!(
-        "Found {} shard(s) in {}",
-        shards.len(),
-        cfg.shards_dir.display()
-    );
+    eprintln!("Found {} shard(s) from {}", shards.len(), source_label);
 
     // Set up rayon (best-effort: ignore the error if the global pool is
     // already configured by another caller).

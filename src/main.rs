@@ -265,9 +265,11 @@ enum Commands {
     /// on a 64 GB box; G>17 is rejected up front.
     #[cfg(feature = "gaia-shards")]
     BuildFromShards {
-        /// Directory containing `GaiaSource_*.csv(.gz)` shards.
+        /// Directory containing `GaiaSource_*.csv(.gz)` shards. If omitted,
+        /// the tool scans the starfield-managed cache
+        /// (`Downloader::<Dr3>::list_cached()`).
         #[arg(long)]
-        shards_dir: PathBuf,
+        shards_dir: Option<PathBuf>,
 
         /// Output prefix; emits `<prefix>.zdcl` and `<prefix>.zdcl.gaia`.
         #[arg(long)]
