@@ -8,7 +8,7 @@
 //! virtual cell containing all stars, and `load_cells` returns the full set.
 
 use std::fs::File;
-use std::io::{self, Seek, SeekFrom};
+use std::io;
 use std::path::Path;
 
 use cdshealpix::nested;
@@ -75,6 +75,11 @@ pub trait IndexSource: Send + Sync {
 
     /// Total quads.
     fn quad_count(&self) -> usize;
+
+    /// Quad-scale band carried by this source: (lower, upper) in radians.
+    /// Useful for the solver to skip whole sources whose scale range can't
+    /// match the field's backbone.
+    fn scale_range(&self) -> (f64, f64);
 }
 
 /// Per-cell offset entry in the v3 file header.
@@ -114,7 +119,7 @@ const MAGIC: &[u8; 4] = b"ZDCL";
 
 impl ZdclFile {
     pub fn open(path: &Path) -> io::Result<Self> {
-        let mut file = File::open(path)?;
+        let file = File::open(path)?;
         let mmap = unsafe { Mmap::map(&file)? };
 
         if mmap.len() < 8 {
@@ -131,11 +136,6 @@ impl ZdclFile {
         }
         let version = u32::from_le_bytes(mmap[4..8].try_into().unwrap());
 
-        // We use the file handle for seekable reads of the metadata JSON
-        // blob (whose length we read from mmap), then everything else is
-        // pure mmap arithmetic.
-        let _ = file.seek(SeekFrom::Start(8));
-
         match version {
             1 | 2 => Self::open_v1_v2(mmap, version),
             3 => Self::open_v3(mmap),
@@ -151,6 +151,12 @@ impl ZdclFile {
         let metadata = if version >= 2 {
             let meta_len = read_u64_at(&mmap, cursor)? as usize;
             cursor += 8;
+            if meta_len > mmap.len().saturating_sub(cursor) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("metadata_len {meta_len} exceeds remaining file size"),
+                ));
+            }
             if meta_len > 0 {
                 let bytes = read_bytes_at(&mmap, cursor, meta_len)?;
                 cursor += meta_len;
@@ -174,9 +180,18 @@ impl ZdclFile {
         cursor += 8;
 
         let stars_offset = cursor;
-        let quads_offset = stars_offset + n_stars * STAR_RECORD_SIZE;
-        let codes_offset = quads_offset + n_quads * QUAD_RECORD_SIZE;
-        let total_expected = codes_offset + n_quads * CODE_RECORD_SIZE;
+        let stars_size = n_stars
+            .checked_mul(STAR_RECORD_SIZE)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "stars block overflow"))?;
+        let quads_size = n_quads
+            .checked_mul(QUAD_RECORD_SIZE)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "quads block overflow"))?;
+        let codes_size = n_quads
+            .checked_mul(CODE_RECORD_SIZE)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "codes block overflow"))?;
+        let quads_offset = stars_offset + stars_size;
+        let codes_offset = quads_offset + quads_size;
+        let total_expected = codes_offset + codes_size;
         if mmap.len() < total_expected {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -206,6 +221,13 @@ impl ZdclFile {
         let mut cursor = 8usize;
         let meta_len = read_u64_at(&mmap, cursor)? as usize;
         cursor += 8;
+        // Bound metadata length to remaining file size before slicing.
+        if meta_len > mmap.len().saturating_sub(cursor) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("metadata_len {meta_len} exceeds remaining file size"),
+            ));
+        }
         let metadata = if meta_len > 0 {
             let bytes = read_bytes_at(&mmap, cursor, meta_len)?;
             cursor += meta_len;
@@ -218,10 +240,41 @@ impl ZdclFile {
 
         let cell_depth = read_u8_at(&mmap, cursor)?;
         cursor += 1;
+        // Validate cell_depth is in the valid HEALPix range. cdshealpix
+        // panics on depths > 29; reject corrupt files cleanly here. The
+        // SYNTHESIZED_CELL_DEPTH sentinel is for v2 backwards-compat only
+        // and must never appear on disk in a v3 file.
+        if cell_depth > 29 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("cell_depth {cell_depth} outside valid HEALPix range 0..=29"),
+            ));
+        }
         // 7 reserved bytes
         cursor += 7;
         let n_cells = read_u64_at(&mmap, cursor)? as usize;
         cursor += 8;
+
+        // Bound n_cells against the maximum possible HEALPix cells at this
+        // depth — and against the remaining file size — before allocating.
+        let max_cells_at_depth = 12usize
+            .checked_shl((cell_depth as u32) * 2)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "cell_depth overflow"))?;
+        if n_cells > max_cells_at_depth {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("n_cells {n_cells} exceeds 12*4^cell_depth = {max_cells_at_depth}"),
+            ));
+        }
+        let cell_table_bytes = n_cells.checked_mul(CELL_TABLE_ENTRY_SIZE).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, "cell_table size overflow")
+        })?;
+        if cell_table_bytes > mmap.len().saturating_sub(cursor) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("cell_table_bytes {cell_table_bytes} exceeds remaining file"),
+            ));
+        }
 
         let mut cell_table: Vec<CellEntry> = Vec::with_capacity(n_cells);
         for _ in 0..n_cells {
@@ -251,9 +304,18 @@ impl ZdclFile {
         cursor += 8;
 
         let stars_offset = cursor;
-        let quads_offset = stars_offset + n_stars * STAR_RECORD_SIZE;
-        let codes_offset = quads_offset + n_quads * QUAD_RECORD_SIZE;
-        let total_expected = codes_offset + n_quads * CODE_RECORD_SIZE;
+        let stars_size = n_stars
+            .checked_mul(STAR_RECORD_SIZE)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "stars block overflow"))?;
+        let quads_size = n_quads
+            .checked_mul(QUAD_RECORD_SIZE)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "quads block overflow"))?;
+        let codes_size = n_quads
+            .checked_mul(CODE_RECORD_SIZE)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "codes block overflow"))?;
+        let quads_offset = stars_offset + stars_size;
+        let codes_offset = quads_offset + quads_size;
+        let total_expected = codes_offset + codes_size;
         if mmap.len() < total_expected {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -262,6 +324,27 @@ impl ZdclFile {
                     mmap.len()
                 ),
             ));
+        }
+
+        // Validate every cell entry's range is a subrange of [0, n_stars).
+        for (i, entry) in cell_table.iter().enumerate() {
+            let end = (entry.star_offset as usize)
+                .checked_add(entry.star_count as usize)
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("cell entry {i} range overflow"),
+                    )
+                })?;
+            if end > n_stars {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "cell entry {i}: range [{}, {end}) exceeds n_stars {n_stars}",
+                        entry.star_offset
+                    ),
+                ));
+            }
         }
 
         Ok(Self {
@@ -457,6 +540,10 @@ impl IndexSource for ZdclFile {
 
     fn quad_count(&self) -> usize {
         self.n_quads
+    }
+
+    fn scale_range(&self) -> (f64, f64) {
+        (self.scale_lower, self.scale_upper)
     }
 }
 
@@ -810,6 +897,240 @@ mod tests {
         std::fs::remove_file(&path).ok();
         assert_eq!(frag.stars.len(), 0);
         assert_eq!(frag.quads.len(), 0);
+    }
+
+    #[test]
+    fn v3_solve_smoke_via_index_from_fragment() {
+        // End-to-end: build an index, save as v3, open via ZdclFile,
+        // load full, convert IndexFragment → Index, run solve(), verify
+        // the recovered WCS matches the truth.
+        use crate::extraction::DetectedSource;
+        use crate::geom::tan::TanWcs;
+        use crate::index::builder::{IndexBuilderConfig, build_index};
+        use crate::solver::{SolverConfig, solve};
+        use crate::verify::VerifyConfig;
+        use std::f64::consts::PI;
+
+        let image_size = (512.0, 512.0);
+        let pixel_scale_arcsec: f64 = 2.0;
+        let scale_rad = (pixel_scale_arcsec / 3600.0).to_radians();
+        let truth_wcs = TanWcs {
+            crval: [1.0, 0.5],
+            crpix: [256.0, 256.0],
+            cd: [[scale_rad, 0.0], [0.0, scale_rad]],
+            image_size: [image_size.0, image_size.1],
+        };
+
+        let mut state: u64 = 314_159_265;
+        let mut rng = || -> f64 {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state as f64) / (u64::MAX as f64)
+        };
+
+        let mut catalog = Vec::new();
+        let mut sources = Vec::new();
+        for i in 0..25 {
+            let px = 30.0 + rng() * 452.0;
+            let py = 30.0 + rng() * 452.0;
+            let (ra, dec) = truth_wcs.pixel_to_radec(px, py);
+            catalog.push((i as u64, ra, dec, i as f64));
+            sources.push(DetectedSource {
+                x: px,
+                y: py,
+                flux: 1000.0 - i as f64 * 10.0,
+            });
+        }
+
+        let field_diag = (image_size.0 * image_size.0 + image_size.1 * image_size.1).sqrt();
+        let max_angle = field_diag * scale_rad;
+        let cfg = IndexBuilderConfig {
+            scale_lower: scale_rad * 10.0,
+            scale_upper: max_angle,
+            max_stars: 25,
+            max_quads: 50_000,
+        };
+        let index = build_index(&catalog, &cfg);
+
+        let path = temp_path("v3_solve_smoke");
+        index.save_v3(&path, DEFAULT_CELL_DEPTH).unwrap();
+
+        let zf = ZdclFile::open(&path).unwrap();
+        let frag = zf.load_full().unwrap();
+        std::fs::remove_file(&path).ok();
+        let reloaded: Index = frag.into();
+        assert_eq!(reloaded.stars.len(), index.stars.len());
+        assert_eq!(reloaded.quads.len(), index.quads.len());
+        assert_eq!(reloaded.star_tree.len(), index.stars.len());
+        assert_eq!(reloaded.code_tree.len(), index.quads.len());
+
+        let solver_cfg = SolverConfig {
+            scale_range: None,
+            max_field_stars: 25,
+            code_tolerance: 0.002,
+            verify: VerifyConfig {
+                match_radius_pix: 3.0,
+                log_odds_accept: 10.0,
+                min_matches: 3,
+                ..VerifyConfig::default()
+            },
+            ..SolverConfig::default()
+        };
+        let (solution, _stats) = solve(&sources, &[&reloaded], image_size, &solver_cfg);
+        let solution = solution.expect("v3-loaded index should solve");
+
+        let (solved_ra, solved_dec) = solution.wcs.field_center();
+        let (truth_ra, truth_dec) = truth_wcs.field_center();
+        let arcsec = PI / (180.0 * 3600.0);
+        let dra = (solved_ra - truth_ra).abs() * truth_dec.cos();
+        let ddec = (solved_dec - truth_dec).abs();
+        let sep_arcsec = ((dra * dra + ddec * ddec).sqrt()) / arcsec;
+        assert!(
+            sep_arcsec < 30.0,
+            "v3 sparse-load+solve image-center separation {sep_arcsec:.2} arcsec exceeds 30\""
+        );
+    }
+
+    #[test]
+    fn v3_sparse_load_matches_full_load_for_full_region() {
+        let idx = make_test_index(60);
+        let path = temp_path("v3_sparse_full");
+        idx.save_v3(&path, DEFAULT_CELL_DEPTH).unwrap();
+
+        let zf = ZdclFile::open(&path).unwrap();
+        let region =
+            SkyRegion::from_radians(starfield::Equatorial::new(0.0, 0.0), std::f64::consts::PI);
+        let cells = zf.cells_intersecting(&region);
+        let fragment_via_cells = zf.load_cells(&cells).unwrap();
+        let fragment_full = zf.load_full().unwrap();
+        std::fs::remove_file(&path).ok();
+
+        // Same star set (order may differ between the two paths if cell
+        // iteration order does not match the on-disk star order — our
+        // load_cells walks star_ranges sorted ascending, which matches the
+        // on-disk grouping, so they should be identical).
+        assert_eq!(fragment_via_cells.stars.len(), fragment_full.stars.len());
+        assert_eq!(fragment_via_cells.quads.len(), fragment_full.quads.len());
+        let ids_full: std::collections::HashSet<u64> =
+            fragment_full.stars.iter().map(|s| s.catalog_id).collect();
+        let ids_cells: std::collections::HashSet<u64> = fragment_via_cells
+            .stars
+            .iter()
+            .map(|s| s.catalog_id)
+            .collect();
+        assert_eq!(ids_full, ids_cells);
+    }
+
+    #[test]
+    fn v3_rejects_corrupt_cell_depth() {
+        // Hand-construct a v3 header with cell_depth = 200 (> 29), verify
+        // ZdclFile::open returns InvalidData rather than panicking.
+        use std::io::Write as _;
+        let path = temp_path("v3_bad_depth");
+        let mut f = std::fs::File::create(&path).unwrap();
+        f.write_all(b"ZDCL").unwrap();
+        f.write_all(&3u32.to_le_bytes()).unwrap();
+        f.write_all(&0u64.to_le_bytes()).unwrap(); // meta_len
+        f.write_all(&[200u8]).unwrap(); // bad cell_depth
+        f.write_all(&[0u8; 7]).unwrap(); // reserved
+        f.write_all(&0u64.to_le_bytes()).unwrap(); // n_cells = 0
+        f.write_all(&0u64.to_le_bytes()).unwrap(); // n_stars = 0
+        f.write_all(&0u64.to_le_bytes()).unwrap(); // n_quads = 0
+        f.write_all(&0.0f64.to_le_bytes()).unwrap(); // scale_lower
+        f.write_all(&0.0f64.to_le_bytes()).unwrap(); // scale_upper
+        drop(f);
+        let err = match ZdclFile::open(&path) {
+            Ok(_) => panic!("should have rejected bad cell_depth"),
+            Err(e) => e,
+        };
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn v3_rejects_oversized_n_cells() {
+        // A v3 header that claims more cells than fit in the file (or even
+        // could exist at the chosen depth) must error, not panic on
+        // Vec::with_capacity.
+        use std::io::Write as _;
+        let path = temp_path("v3_bad_ncells");
+        let mut f = std::fs::File::create(&path).unwrap();
+        f.write_all(b"ZDCL").unwrap();
+        f.write_all(&3u32.to_le_bytes()).unwrap();
+        f.write_all(&0u64.to_le_bytes()).unwrap();
+        f.write_all(&[5u8]).unwrap(); // valid cell_depth
+        f.write_all(&[0u8; 7]).unwrap();
+        // Claim u64::MAX cells — would OOM Vec::with_capacity.
+        f.write_all(&u64::MAX.to_le_bytes()).unwrap();
+        drop(f);
+        let err = match ZdclFile::open(&path) {
+            Ok(_) => panic!("should have rejected oversized n_cells"),
+            Err(e) => e,
+        };
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn v3_rejects_truncated_file() {
+        // Header claims n_stars > 0 but the stars block is missing.
+        use std::io::Write as _;
+        let path = temp_path("v3_truncated");
+        let mut f = std::fs::File::create(&path).unwrap();
+        f.write_all(b"ZDCL").unwrap();
+        f.write_all(&3u32.to_le_bytes()).unwrap();
+        f.write_all(&0u64.to_le_bytes()).unwrap();
+        f.write_all(&[5u8]).unwrap();
+        f.write_all(&[0u8; 7]).unwrap();
+        f.write_all(&0u64.to_le_bytes()).unwrap(); // n_cells = 0
+        f.write_all(&100u64.to_le_bytes()).unwrap(); // n_stars = 100 (lying)
+        f.write_all(&0u64.to_le_bytes()).unwrap();
+        f.write_all(&0.0f64.to_le_bytes()).unwrap();
+        f.write_all(&0.0f64.to_le_bytes()).unwrap();
+        // Don't write the stars block.
+        drop(f);
+        let err = match ZdclFile::open(&path) {
+            Ok(_) => panic!("should have rejected truncated file"),
+            Err(e) => e,
+        };
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn v3_rejects_cell_entry_out_of_bounds() {
+        // A cell entry whose star_offset+star_count exceeds n_stars must
+        // error at open, not silently truncate at load time.
+        use std::io::Write as _;
+        let path = temp_path("v3_bad_cell");
+        let mut f = std::fs::File::create(&path).unwrap();
+        f.write_all(b"ZDCL").unwrap();
+        f.write_all(&3u32.to_le_bytes()).unwrap();
+        f.write_all(&0u64.to_le_bytes()).unwrap();
+        f.write_all(&[5u8]).unwrap();
+        f.write_all(&[0u8; 7]).unwrap();
+        f.write_all(&1u64.to_le_bytes()).unwrap(); // n_cells = 1
+        // One bogus cell entry: cell_id = 0, star_offset = 50, count = 100
+        f.write_all(&0u64.to_le_bytes()).unwrap();
+        f.write_all(&50u64.to_le_bytes()).unwrap();
+        f.write_all(&100u32.to_le_bytes()).unwrap();
+        // Padding to 8-byte alignment (cell entry is 20 bytes; cursor at
+        // 32+20=52 needs 4 bytes pad)
+        f.write_all(&[0u8; 4]).unwrap();
+        f.write_all(&30u64.to_le_bytes()).unwrap(); // n_stars = 30 (cell range exceeds)
+        f.write_all(&0u64.to_le_bytes()).unwrap();
+        f.write_all(&0.0f64.to_le_bytes()).unwrap();
+        f.write_all(&0.0f64.to_le_bytes()).unwrap();
+        // 30 stars × 32 bytes
+        f.write_all(&vec![0u8; 30 * 32]).unwrap();
+        drop(f);
+        let err = match ZdclFile::open(&path) {
+            Ok(_) => panic!("should have rejected out-of-bounds cell entry"),
+            Err(e) => e,
+        };
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        std::fs::remove_file(&path).ok();
     }
 
     #[test]

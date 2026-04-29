@@ -66,3 +66,34 @@ impl std::fmt::Debug for Index {
             .finish()
     }
 }
+
+impl From<IndexFragment> for Index {
+    /// Build a runnable `Index` (with reconstructed KD-trees) from an
+    /// `IndexFragment` returned by `IndexSource::load_full` or
+    /// `IndexSource::load_cells`. Tree-reconstruction is O(N log N); for
+    /// a typical regional load (~10 k stars) it costs a few milliseconds.
+    fn from(frag: IndexFragment) -> Self {
+        use crate::geom::sphere::radec_to_xyz;
+
+        let star_points: Vec<[f64; 3]> = frag
+            .stars
+            .iter()
+            .map(|s| radec_to_xyz(s.ra, s.dec))
+            .collect();
+        let star_indices: Vec<usize> = (0..frag.stars.len()).collect();
+        let star_tree = KdTree::<3>::build(star_points, star_indices);
+
+        let code_indices: Vec<usize> = (0..frag.codes.len()).collect();
+        let code_tree = KdTree::<{ DIMCODES }>::build(frag.codes, code_indices);
+
+        Self {
+            star_tree,
+            stars: frag.stars,
+            code_tree,
+            quads: frag.quads,
+            scale_lower: frag.scale_lower,
+            scale_upper: frag.scale_upper,
+            metadata: frag.metadata,
+        }
+    }
+}
