@@ -9,6 +9,7 @@ pub mod fitting;
 pub mod geom;
 pub mod index;
 pub mod kdtree;
+pub mod pointing;
 pub mod quads;
 pub mod refinement;
 pub mod solver;
