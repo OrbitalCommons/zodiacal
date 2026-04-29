@@ -749,10 +749,233 @@ src/
 
 ---
 
+---
+
+### Step 11 — High-Precision Refinement `(L)`
+
+**Module:** `src/refinement/`
+
+**Purpose:** Take the tweaked solution and refine it to ~10 mas absolute astrometric precision by accounting for:
+
+- **Proper motion** from the Gaia epoch (J2016.0) to the observation epoch
+- **Stellar parallax** using the observer's barycentric position
+- **Gravitational light deflection** by the Sun (and giant planets near the field)
+- **Stellar aberration** using the observer's barycentric velocity
+
+All the underlying physics is implemented in `starfield` via `Star::observe_from(observer, time).apparent().radec()` — this module is a thin adapter from zodiacal's types plus a weighted iterative WCS re-fit on top.
+
+#### 11.1 Public API
+
+```rust
+pub struct ObservationContext {
+    /// Time of observation (any starfield Timescale; converted to TT internally)
+    pub time: starfield::time::Time,
+    /// Observer state
+    pub observer: ObserverState,
+}
+
+pub enum ObserverState {
+    /// Ground station (or anywhere fixed to the rotating Earth)
+    Terrestrial {
+        lat_deg: f64,
+        lon_deg: f64,
+        height_m: f64,
+    },
+    /// Spacecraft or other body at a known BCRS state vector
+    Barycentric {
+        position_au: [f64; 3],
+        velocity_au_per_day: [f64; 3],
+    },
+}
+
+pub struct GaiaAstrometry {
+    pub ra_deg: f64,
+    pub dec_deg: f64,
+    pub pmra_mas_per_year: f64,        // already includes cos(dec)
+    pub pmdec_mas_per_year: f64,
+    pub parallax_mas: f64,
+    pub radial_km_per_s: f64,
+    pub ref_epoch_jyear: f64,          // J2016.0 for Gaia DR3
+    // Per-component 1-sigma uncertainties
+    pub sigma_ra_mas: f64,
+    pub sigma_dec_mas: f64,
+    pub sigma_pmra_mas_per_year: f64,
+    pub sigma_pmdec_mas_per_year: f64,
+    pub sigma_parallax_mas: f64,
+    // Covariance correlations are a future addition (see §11.4)
+}
+
+pub struct RefinementCatalog {
+    /// Full astrometry keyed by the same catalog_id stored in IndexStar
+    pub sources: HashMap<u64, GaiaAstrometry>,
+}
+
+pub struct RefinementConfig {
+    /// Initial match radius in pixels (for associating field ↔ catalog)
+    pub match_radius_pix: f64,
+    /// Maximum iterations (typically converges in 2-3)
+    pub max_iterations: usize,
+    /// Convergence threshold: stop when per-iteration WCS change < this (pixels RMS)
+    pub convergence_pix: f64,
+    /// Minimum matches required to attempt a refinement
+    pub min_matches: usize,
+}
+
+pub struct RefinedSolution {
+    pub wcs: SipWcs,                           // refined WCS
+    pub n_iterations: usize,
+    pub residual_rms_mas: f64,                 // sky-plane RMS residual
+    pub residual_rms_pix: f64,
+    pub matched: Vec<RefinedMatch>,            // per-star residuals
+}
+
+pub struct RefinedMatch {
+    pub catalog_id: u64,
+    pub field_source_idx: usize,
+    pub apparent_ra_deg: f64,
+    pub apparent_dec_deg: f64,
+    pub residual_mas: f64,
+    pub weight: f64,
+}
+
+pub fn refine_solution(
+    initial: &tweak::TweakedSolution,         // or whatever tweak.rs returns
+    field_sources: &[DetectedSource],
+    catalog: &RefinementCatalog,
+    obs: &ObservationContext,
+    config: &RefinementConfig,
+) -> Result<RefinedSolution, RefinementError>;
+```
+
+#### 11.2 Pipeline
+
+```
+initial WCS + field sources + catalog + obs context
+              │
+              ▼
+1. Match field sources to catalog stars using initial WCS.
+   (Project catalog RA/Dec → pixel via initial WCS, nearest within match_radius_pix.)
+              │
+              ▼
+2. For each matched catalog star:
+      a. Build starfield::Star from Gaia 6-parameter solution + ref_epoch.
+      b. Build observer starfield::Position:
+         - Terrestrial → construct topos, derive BCRS state at obs time.
+         - Barycentric → pass through.
+      c. direction_apparent = star.observe_from(observer, time).apparent().radec()
+      d. Compute per-star weight from propagated Gaia covariance
+         (position uncertainty at obs_epoch grows as sigma_pos² + sigma_pm² · Δt²).
+              │
+              ▼
+3. Weighted WCS re-fit:
+      - Re-fit SIP WCS using apparent (RA, Dec) as truth and pixel centroids as
+        measurements.
+      - Extend fitting.rs with a weighted-least-squares SIP fit.
+              │
+              ▼
+4. Check convergence. If (new WCS − old WCS) RMS > convergence_pix and
+   iterations remain → loop back to step 1 with refined WCS.
+              │
+              ▼
+5. Return RefinedSolution with per-match residuals.
+```
+
+#### 11.3 Catalog sidecar (deferred; depends on starfield-datasources)
+
+At runtime the `RefinementCatalog` is an in-memory HashMap. For persistence, the plan is a **sidecar file** next to each `.zdcl` index:
+
+```
+my_index.zdcl       ← fast solver index (existing)
+my_index.zdcl.gaia  ← columnar sidecar with full Gaia rows, keyed by catalog_id
+```
+
+**Format (v1):** Apache Arrow / Parquet. Columns: `catalog_id`, `ra`, `dec`, `pmra`, `pmdec`, `parallax`, `radial_velocity`, `ref_epoch`, plus per-component `sigma_*`. Parquet because:
+- Columnar access means loading only the columns we need.
+- Schema evolution: add covariance correlations, BP/RP, RV errors later without breaking readers.
+- Standard tooling — anyone can inspect with pandas or DuckDB.
+
+**Loading:** at solve time, load only the catalog_ids that appear in the FOV (from the initial solution). No need to load the whole sidecar.
+
+Implementation is deferred until `starfield-datasources` exposes a canonical Gaia ingest path. Until then, the in-memory `RefinementCatalog` is user-supplied by the caller.
+
+#### 11.4 Weighting strategy
+
+Per-star weight from Gaia covariance propagated to observation epoch:
+
+```
+sigma_ra(t_obs)  = sqrt(sigma_ra²        + (Δt · sigma_pmra)²)
+sigma_dec(t_obs) = sqrt(sigma_dec²       + (Δt · sigma_pmdec)²)
+sigma_pos(t_obs) = sqrt(sigma_ra(t_obs)² + sigma_dec(t_obs)²) / sqrt(2)
+weight            = 1 / sigma_pos(t_obs)²
+```
+
+where `Δt = t_obs − t_ref` in years. Treats RA and Dec errors as uncorrelated for v1.
+
+**Future work:** full 5×5 covariance propagation with Gaia correlation columns. Needed if residuals stall above ~5 mas and the user wants to go lower. Not blocking for 10 mas.
+
+#### 11.5 Iteration and convergence
+
+Typically 2–3 iterations converge for a well-posed problem:
+
+- **Iteration 1** uses apparent positions but the matching is based on the tweak solution, which may mis-identify stars near the match radius. Re-matching after the apparent-place correction usually adds a few more good matches and drops a few bad ones.
+- **Iteration 2+** re-fits with the improved match list.
+- Stop when per-iteration WCS change (measured as RMS pixel displacement of a grid of test points) drops below `convergence_pix` (default 0.05 pix).
+
+Robust outlier rejection: drop matches with residual > 3σ after each fit.
+
+#### 11.6 Open questions
+
+- **SIP order tradeoff.** Refined residuals may expose distortion the tweaker didn't capture. Refinement could optionally bump SIP order — but that risks over-fitting with few matches. Default: keep the order the tweaker chose.
+- **Deflection by planets.** `starfield::Position::apparent()` loops over `DEFLECTORS` (Sun + giants). For fields >30° from a giant this is ~1 mas. Default behavior is fine; add a feature flag only if a specific field warrants disabling/extending.
+- **Refraction.** Atmospheric refraction for ground-based observers is ~1" at zenith, tens of arc-seconds at low altitudes. starfield's `Position` doesn't apply refraction in the current path. For ground-based 10 mas absolute astrometry, refraction is a real concern. **Decision needed:** either (a) refuse ground observations below some altitude, (b) require callers to pre-correct, or (c) add a refraction model (Hohenkerk-Sinclair / Saastamoinen) as part of this module. Recommend (b) as the interim answer and open an issue on starfield for a proper refraction pipeline.
+- **Where to get the catalog_id → Gaia mapping.** If the index was built from a Gaia catalog, catalog_id IS the Gaia source_id and we're done. If the index was built from something else (Hipparcos, Tycho), we'd need a cross-match table. Defer; assume Gaia indexes for v1.
+
+#### 11.7 Testing
+
+**Unit tests:**
+- Synthetic star at J2016.0 → apparent at J2026.4 with known PM → verify displacement matches analytical expectation to <1 µas.
+- Round-trip: apparent direction → propagate backwards via `Position::observe`-inverse → recover catalog direction.
+- Parallax: source at 10 pc (100 mas parallax), observer at 1 AU different positions — verify apparent direction shifts by 100 mas correctly.
+- Aberration: observer moving at 30 km/s perpendicular to source — verify apparent direction shifted by ~20.5″ toward apex.
+
+**Integration test:**
+- Synthesize a field: take N Gaia sources with known full astrometry, propagate each to a known `(time, observer)` using this module's forward path, project through a known WCS with SIP distortion → generate field_sources with sub-pixel centroids.
+- Run solver → tweak → refinement.
+- Assert: final RMS residual < 10 mas; recovered WCS matches truth to <1 mas at all corners.
+
+**Validation against astropy:**
+- `python_tests.rs`-style harness. For each test case: compute apparent place via astropy's `SkyCoord.apply_space_motion()` + `.transform_to(GCRS(obstime=...))` chain, compare to zodiacal's output. Tolerance: 1 mas.
+
+---
+
+### Step 12 — Hook refinement into the solver output
+
+**Module:** `src/solver.rs` (extension)
+
+The existing solver pipeline ends at `tweak_solution()`. Add a top-level convenience that runs the whole chain:
+
+```rust
+pub fn solve_and_refine(
+    sources: &[DetectedSource],
+    indexes: &[Index],
+    catalog: &RefinementCatalog,
+    obs: &ObservationContext,
+    solver_config: &SolverConfig,
+    tweak_config: &TweakConfig,
+    refinement_config: &RefinementConfig,
+) -> Option<RefinedSolution>;
+```
+
+Refinement is **opt-in**: the base `solve()` and tweak paths stay unchanged. Callers who don't need 10 mas precision don't pay any cost.
+
+---
+
 ## Open Questions / Future Work
 
 - **Index tiling:** For all-sky solving, indexes should be tiled by healpix region. Defer to v2.
 - **Parallelism:** The solver loop over indexes is embarrassingly parallel. Add rayon later.
 - **GPU:** KD-tree range search could benefit from GPU. Way out of scope for v1.
-- **Proper motion:** For high-precision work, stars need epoch propagation. Starfield handles this — integrate when needed.
+- **Proper motion in solver (pre-refinement):** The current solver matches against catalog positions at the index's reference epoch, with no PM. For bright high-PM stars this can cause near-miss matches at >1" displacement after decades. Consider propagating catalog positions to approximate obs epoch before solving, or widening match tolerance for bright stars. Refinement stage fixes this post-hoc but matching-stage errors can prevent refinement from running at all.
 - **Multi-extension indexes:** astrometry.net packs multiple scales into one file. Start with one-scale-per-file.
+- **Refraction model:** See §11.6. Needs a decision if ground-based 10 mas work is in scope.
+- **Covariance-aware refinement:** Full Gaia 5×5 correlation matrix propagation. Needed for sub-5-mas work.
