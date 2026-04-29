@@ -177,9 +177,128 @@ Zodiacal uses a JSON format for exchanging detected source lists between tools. 
 
 The `ra_deg`, `dec_deg`, and `plate_scale_arcsec` fields are optional hints. When present they can speed up solving by constraining the search space. When absent they are omitted from the JSON entirely.
 
+## Library Use
+
+The CLI is a thin wrapper over the `zodiacal` crate. Embedding the solver into your own application gives you access to several features the CLI doesn't expose, plus three deployment-mode building blocks (see below).
+
+### Core API
+
+```rust
+use zodiacal::index::Index;
+use zodiacal::solver::{solve, SolverConfig};
+use zodiacal::extraction::DetectedSource;
+
+let index = Index::load("my_index_00.zdcl".as_ref())?;
+let sources: Vec<DetectedSource> = /* from extract_sources() or your own pipeline */;
+let (solution, stats) = solve(&sources, &[&index], (image_w, image_h), &SolverConfig::default());
+```
+
+### High-Precision Refinement (10 mas absolute astrometry)
+
+After the blind solve produces a TAN+SIP solution, the `refinement` module re-fits the WCS using each matched catalog star's **apparent direction** at the observation time — applying proper motion, parallax, light-time, and stellar aberration via the [starfield](https://github.com/OrbitalCommons/starfield) apparent-place pipeline.
+
+```rust
+use zodiacal::refinement::{refine_solution, ObservationContext, ObserverState, RefinementConfig};
+
+let obs = ObservationContext {
+    time: starfield::time::Timescale::default().tt_jd(jd_tt, None),
+    observer: ObserverState::Barycentric {
+        position_au: spacecraft_pos,
+        velocity_au_per_day: spacecraft_vel,
+    },
+};
+let refined = refine_solution(&tweaked_wcs, &sources, &index, &gaia_catalog, &obs, &RefinementConfig::default())?;
+println!("residual RMS: {:.2} mas", refined.residual_rms_mas);
+```
+
+The full Gaia astrometry needed for refinement (RA/Dec/PM/parallax/RV + per-component sigmas) lives in a `RefinementCatalog`. For real datasets you'd populate it from the **Gaia sidecar** (`my_index.zdcl.gaia`) — a flat sorted-by-source_id binary file colocated with the index, accessed via mmap + galloping search:
+
+```rust
+use zodiacal::refinement::RefinementCatalog;
+
+let catalog_ids: Vec<u64> = matched_sources.iter().map(|s| s.catalog_id).collect();
+let gaia = RefinementCatalog::load_sidecar_filtered(
+    "my_index_00.zdcl.gaia".as_ref(),
+    &catalog_ids,
+)?;
+```
+
+## Deployment Modes
+
+The library exposes three building blocks that compose into different operational profiles:
+
+### Mode 1 — Server (full sky, batch)
+
+Load every index once, share across many concurrent solves. The standard `Index::load` + `solve` API works as-is. Wrap in `Arc<Index>` to share across threads.
+
+```rust
+use std::sync::Arc;
+let index = Arc::new(Index::load("my_index_00.zdcl".as_ref())?);
+// dispatch solves across rayon / tokio / thread pool
+```
+
+### Mode 2 — Realtime telescope (slewing zenith)
+
+A ground telescope's visible sky changes as Earth rotates. `LiveIndex` tracks which HEALPix cells of the index need to be resident, `GroundStation` provides the current zenith from `(lat, lon, time)`, and `RealtimeSolver` ticks them in sync:
+
+```rust
+use zodiacal::index::{LiveIndex, ZdclFile};
+use zodiacal::pointing::GroundStation;
+use zodiacal::realtime::{RealtimeSolver, RefreshPolicy};
+use std::time::Duration;
+
+let source = ZdclFile::open("my_index_v3.zdcl".as_ref())?;
+let pointing = GroundStation::from_degrees(34.0, -118.0, /* min altitude */ 30.0);
+let mut rt = RealtimeSolver::new(source, pointing)
+    .with_refresh_policy(RefreshPolicy::OnPointingDelta {
+        angular_threshold_rad: 0.1,
+        max_age: Duration::from_secs(60),
+    });
+// later, per frame:
+let out = rt.solve(&detected_sources, image_size, &now)?;
+```
+
+### Mode 3 — Realtime star tracker (spacecraft)
+
+Same orchestrator, with a `SpacecraftBoresight` driving the loaded region from an attitude estimate + ephemeris. Bring your own `EphemerisSource` (`anise`, SPICE, TLE via `starfield::sgp4lib`, custom Kalman) and `AttitudeSource`:
+
+```rust
+use zodiacal::pointing::{SpacecraftBoresight, EphemerisSource, AttitudeSource};
+
+let pointing = SpacecraftBoresight::new(my_ephemeris, my_attitude_estimator,
+    /* detector half-angle */ 0.05_f64.to_radians(),
+    /* fov padding */ 0.05_f64.to_radians());
+let mut rt = RealtimeSolver::new(zdcl_file_v3, pointing);
+```
+
+Spacecraft mode also feeds `observer_state(t)` into refinement automatically — you get parallax + aberration corrections for free using the same ephemeris.
+
+### Sparse loading (any mode)
+
+For server-mode callers with prior knowledge of where they're pointing, `Index::load_in_region` reads the same v2 file format but keeps only stars inside a `SkyRegion`. Same disk I/O as a full load, dramatically lower resident memory.
+
+```rust
+use zodiacal::solver::SkyRegion;
+use starfield::Equatorial;
+let region = SkyRegion::from_degrees(Equatorial::new(0.5, 0.3), 5.0);
+let small_index = Index::load_in_region_padded(path, &region, /* pad rad */ 0.01)?;
+```
+
+## File Format
+
+`.zdcl` index files are versioned. Both the original streaming format and the new HEALPix-grouped layout are accepted by all current readers.
+
+| Version | Layout | Sparse cell load | Notes |
+|---|---|---|---|
+| v1 | streaming, no metadata | no | legacy |
+| v2 | streaming + length-prefixed JSON metadata | no | written by `Index::save` |
+| v3 | HEALPix-cell-grouped + cell table in header | **yes** (via `ZdclFile`) | written by `Index::save_v3` |
+
+`ZdclFile::open` accepts v1/v2/v3 transparently; older files appear as a single virtual cell so the `IndexSource` API works uniformly.
+
 ## Architecture
 
-The solver pipeline:
+The blind solve pipeline:
 
 ```
 Image → Source Extraction → Quad Formation → Code Matching → WCS Fitting → Verification
@@ -189,19 +308,38 @@ Image → Source Extraction → Quad Formation → Code Matching → WCS Fitting
                                      Star Catalog → HEALPix Uniformization → Quad Building
 ```
 
+Optional post-solve refinement chain:
+
+```
+Tweaked WCS + Matched Sources + Gaia sidecar + Observation Context
+                                  ↓
+                         Apparent place per matched star
+                         (PM + parallax + light-time + aberration)
+                                  ↓
+                         Weighted re-fit of TAN parameters
+                                  ↓
+                          Refined Solution (~10 mas RMS)
+```
+
+For realtime modes, `LiveIndex` sits between the file and the solver, holding only the HEALPix cells currently relevant. `RealtimeSolver` coordinates pointing-source updates with `LiveIndex` membership changes and the cached snapshot used for solving.
+
 Key design decisions:
-- **HEALPix uniformization**: stars are distributed across sky cells to ensure uniform index coverage regardless of stellar density
-- **Multi-scale indexes**: narrow angular-scale bands keep kd-trees small, reducing false-positive matches
-- **Dual-parity matching**: field codes are tried in both orientations (original + x/y swapped) to handle image flips
-- **Incremental quad loop**: quads are generated in two phases (astrometry.net style) to avoid redundancy
-- **Per-index scale filtering**: indexes whose band can't overlap with the field's backbone angular scale are skipped entirely
+- **HEALPix uniformization** at index build, **HEALPix grouping** in v3 file format: stars are distributed across sky cells to ensure uniform coverage and to enable cell-targeted reads.
+- **Multi-scale indexes**: narrow angular-scale bands keep kd-trees small, reducing false-positive matches.
+- **Dual-parity matching**: field codes are tried in both orientations (original + x/y swapped) to handle image flips.
+- **Pre-fit filters**: `SolverConfig::scale_range` and `SolverConfig::within` reject candidates before the LSQ fit, eliminating ~10× pessimization on wide hints.
+- **`KdForest` for live indexes**: per-cell sub-trees so cell add/drop is O(1) — no full rebuild on every realtime membership change.
+- **Generation-cached snapshots**: `RealtimeSolver` caches the flat `Index` view by `LiveIndex::build_generation`, so steady-state solve cost is a pointer-deref.
 
 ## Dependencies
 
-- [starfield](https://github.com/OrbitalCommons/starfield) — star catalogs, coordinate systems, star finding
-- [ndarray](https://crates.io/crates/ndarray) — N-dimensional arrays
-- [clap](https://crates.io/crates/clap) — CLI argument parsing
-- [image](https://crates.io/crates/image) — image loading
+- [starfield](https://github.com/OrbitalCommons/starfield) — star catalogs, coordinate systems, time scales, apparent-place pipeline
+- [cdshealpix](https://crates.io/crates/cdshealpix) — HEALPix tessellation for index uniformization and v3 cell layout
+- [memmap2](https://crates.io/crates/memmap2) — mmap-backed sidecar and v3 index readers
+- [nalgebra](https://crates.io/crates/nalgebra) — quaternion + vector math (used by refinement and pointing-source)
+- [ndarray](https://crates.io/crates/ndarray) (optional, `image-processing` feature) — N-dimensional arrays
+- [clap](https://crates.io/crates/clap) (optional, `cli` feature) — CLI argument parsing
+- [image](https://crates.io/crates/image) (optional, `cli` feature) — image loading
 - [rayon](https://crates.io/crates/rayon) — parallelism
 - [serde](https://crates.io/crates/serde) / [serde_json](https://crates.io/crates/serde_json) — serialization
 
