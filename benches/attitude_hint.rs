@@ -265,8 +265,7 @@ fn main() {
             }
             "--pixel-scale" => {
                 i += 1;
-                pixel_scale_arcsec =
-                    args[i].parse().expect("invalid --pixel-scale value");
+                pixel_scale_arcsec = args[i].parse().expect("invalid --pixel-scale value");
             }
             // Ignore unknown args (cargo bench passes --bench etc.)
             _ => {}
@@ -315,7 +314,11 @@ fn main() {
 
     eprintln!(
         "Running {n_trials} trials, {n_stars} stars/scenario, mode={}, pixel_scale={pixel_scale_arcsec}\"...",
-        if real_indexes.is_some() { "real" } else { "synthetic" }
+        if real_indexes.is_some() {
+            "real"
+        } else {
+            "synthetic"
+        }
     );
 
     for trial in 0..n_trials {
@@ -336,9 +339,9 @@ fn main() {
                 let rotation = rng.uniform(0.0, 2.0 * PI);
                 let trial_wcs = make_test_wcs([ra, dec], pixel_scale_arcsec, rotation, image_size);
 
-                if let Some(srcs) = synthesize_sources_from_real_index(
-                    &real[0], &trial_wcs, image_size, n_stars,
-                ) {
+                if let Some(srcs) =
+                    synthesize_sources_from_real_index(&real[0], &trial_wcs, image_size, n_stars)
+                {
                     break (srcs, trial_wcs);
                 }
                 attempt += 1;
