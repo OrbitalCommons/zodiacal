@@ -16,6 +16,7 @@ pub struct ObservationContext {
 ///
 /// For v1 only `Barycentric` is supported. Terrestrial observations must
 /// be pre-reduced to a BCRS state vector by the caller.
+#[derive(Debug, Clone, Copy)]
 pub enum ObserverState {
     /// BCRS position and velocity of the observer at `ObservationContext::time`.
     /// Units: AU and AU/day.
