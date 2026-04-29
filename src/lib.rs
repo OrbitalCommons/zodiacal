@@ -11,6 +11,7 @@ pub mod index;
 pub mod kdtree;
 pub mod pointing;
 pub mod quads;
+pub mod realtime;
 pub mod refinement;
 pub mod solver;
 pub mod tweak;
