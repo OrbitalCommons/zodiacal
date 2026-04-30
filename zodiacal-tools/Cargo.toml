@@ -1,0 +1,19 @@
+[package]
+name = "zodiacal-tools"
+version = "0.1.0"
+edition = "2024"
+description = "Operational tools for building and inspecting zodiacal indexes (.zdcl) and refinement sidecars (.zdcl.gaia)"
+license = "Apache-2.0"
+repository = "https://github.com/OrbitalCommons/zodiacal"
+keywords = ["astrometry", "gaia", "starfield", "tooling"]
+categories = ["command-line-utilities", "science"]
+
+[[bin]]
+name = "zodiacal-tools"
+path = "src/main.rs"
+
+[dependencies]
+zodiacal = { path = "..", version = "0.4" }
+starfield-gaia = { git = "https://github.com/OrbitalCommons/starfield-datasources" }
+clap = { version = "4.5", features = ["derive"] }
+rayon = "1.11"
