@@ -225,7 +225,12 @@ let gaia = RefinementCatalog::load_sidecar_filtered(
 
 ## Deployment Modes
 
-The library exposes three building blocks that compose into different operational profiles:
+The library exposes three building blocks that compose into different operational profiles. The summaries below get you started; for end-to-end code, memory budgets, performance numbers, sharding, and pitfalls per mode, see the dedicated docs:
+
+- [`docs/deployment/server.md`](docs/deployment/server.md) — backend / batch service
+- [`docs/deployment/ground.md`](docs/deployment/ground.md) — ground telescope tracking the zenith
+- [`docs/deployment/space.md`](docs/deployment/space.md) — spacecraft star tracker
+- [`docs/deployment/README.md`](docs/deployment/README.md) — overview + cross-cutting performance table
 
 ### Mode 1 — Server (full sky, batch)
 
