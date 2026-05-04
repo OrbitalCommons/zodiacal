@@ -538,7 +538,7 @@ fn cmd_batch_solve(
                 let (ra, dec) = solution.wcs.field_center();
                 let best_reject_lo = stats.best_rejected.map(|(lo, _)| lo).unwrap_or(0.0);
                 eprintln!(
-                    "SOLVED in {:.1}s  RA={:.4} Dec={:+.4}  matched={}  verified={}  accept_lo={:.1}  best_reject_lo={:.1}",
+                    "SOLVED in {:.1}s  RA={:.8} Dec={:+.8}  matched={}  verified={}  accept_lo={:.1}  best_reject_lo={:.1}",
                     elapsed,
                     ra.to_degrees(),
                     dec.to_degrees(),
