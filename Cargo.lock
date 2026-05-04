@@ -2656,40 +2656,9 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "starfield"
-version = "0.11.0"
+version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "18b93ef240e0fc643093ef80412cae570bc46a0e802f39fc65b38f4322ece9e1"
-dependencies = [
- "base64",
- "byteorder",
- "chrono",
- "clap",
- "flate2",
- "image",
- "indicatif 0.17.11",
- "lazy_static",
- "log",
- "md5",
- "memmap2",
- "nalgebra",
- "ndarray 0.16.1",
- "num",
- "once_cell",
- "rand 0.9.4",
- "regex",
- "reqwest",
- "serde",
- "serde_json",
- "sgp4",
- "thiserror 2.0.18",
- "time",
- "uom",
-]
-
-[[package]]
-name = "starfield"
-version = "0.12.0"
-source = "git+https://github.com/OrbitalCommons/starfield.git#41839fc85f1e13e68ffe8dd75b1f202fc8483d98"
+checksum = "42042be8ac3f550a5709b25c675b5f1e77d7c2f6f0986dbfec76c8bd9dca07c3"
 dependencies = [
  "base64",
  "byteorder",
@@ -2720,17 +2689,17 @@ dependencies = [
 [[package]]
 name = "starfield-datasource-utils"
 version = "0.1.0"
-source = "git+https://github.com/OrbitalCommons/starfield-datasources#98044f92fccf0144235c07fd4bf2b9c0c3f9b012"
+source = "git+https://github.com/OrbitalCommons/starfield-datasources?rev=058146b#058146bde1c9b794dbe457c1bd0fa01746206440"
 dependencies = [
  "indicatif 0.17.11",
  "reqwest",
- "starfield 0.12.0",
+ "starfield",
 ]
 
 [[package]]
 name = "starfield-gaia"
 version = "0.2.0"
-source = "git+https://github.com/OrbitalCommons/starfield-datasources#98044f92fccf0144235c07fd4bf2b9c0c3f9b012"
+source = "git+https://github.com/OrbitalCommons/starfield-datasources?rev=058146b#058146bde1c9b794dbe457c1bd0fa01746206440"
 dependencies = [
  "arrow",
  "cdshealpix",
@@ -2740,7 +2709,8 @@ dependencies = [
  "rand 0.8.6",
  "regex",
  "serde",
- "starfield 0.12.0",
+ "serde_json",
+ "starfield",
  "starfield-datasource-utils",
  "thiserror 1.0.69",
 ]
@@ -3724,7 +3694,7 @@ dependencies = [
  "rayon",
  "serde",
  "serde_json",
- "starfield 0.11.0",
+ "starfield",
 ]
 
 [[package]]
