@@ -500,6 +500,132 @@ def fig_star_reuse(z: ZdclV3) -> Figure:
     return fig
 
 
+def per_cell_max_used_mag(z: ZdclV3) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """For every populated HEALPix cell, return (cell_ra_rad, cell_dec_rad,
+    max_used_mag, used_count) — one entry per cell that has at least one
+    star in the index.
+
+    `max_used_mag` is the dimmest (highest-mag) star in the cell that
+    appears in at least one quad — the depth the index reaches in that
+    cell. NaN for cells whose stars are all unused. The cell center is
+    the unit-vector centroid of its stars.
+    """
+    counts = star_reuse_counts(z)  # quads-using-star, indexed by star id
+    mags = z.stars["mag"]
+    ras = z.stars["ra"]
+    decs = z.stars["dec"]
+
+    cell_offsets = z.cell_table["star_offset"].astype(np.int64)
+    cell_counts = z.cell_table["star_count"].astype(np.int64)
+
+    # Pre-compute unit vectors so cell centroids are correct across the
+    # RA=0 wrap.
+    cos_d = np.cos(decs)
+    x = cos_d * np.cos(ras)
+    y = cos_d * np.sin(ras)
+    zc = np.sin(decs)
+
+    n_cells = len(z.cell_table)
+    cell_ra = np.empty(n_cells)
+    cell_dec = np.empty(n_cells)
+    cell_max_mag = np.full(n_cells, np.nan)
+    cell_used = np.zeros(n_cells, dtype=np.int64)
+
+    for i in range(n_cells):
+        off = cell_offsets[i]
+        n = cell_counts[i]
+        if n == 0:
+            cell_ra[i] = np.nan
+            cell_dec[i] = np.nan
+            continue
+        sl = slice(off, off + n)
+        sx = x[sl].mean()
+        sy = y[sl].mean()
+        sz = zc[sl].mean()
+        norm = math.sqrt(sx * sx + sy * sy + sz * sz)
+        if norm > 0:
+            sx /= norm; sy /= norm; sz /= norm
+        ra = math.atan2(sy, sx)
+        if ra < 0:
+            ra += 2 * math.pi
+        dec = math.asin(max(-1.0, min(1.0, sz)))
+        cell_ra[i] = ra
+        cell_dec[i] = dec
+
+        used_mask = counts[sl] > 0
+        n_used = int(used_mask.sum())
+        cell_used[i] = n_used
+        if n_used > 0:
+            cell_max_mag[i] = float(mags[sl][used_mask].max())
+
+    keep = ~np.isnan(cell_ra)
+    return cell_ra[keep], cell_dec[keep], cell_max_mag[keep], cell_used[keep]
+
+
+def fig_per_cell_depth(z: ZdclV3) -> Figure:
+    """Two-panel sky map: the dimmest (highest-magnitude) used star
+    per HEALPix cell, plus a histogram of those values.
+
+    The dimmest used star in a cell tells you how deep into the catalog
+    the index actually reached there — bright values mean the cell only
+    used the few brightest stars; dim values mean the index pulled in
+    fainter stars to build out quads.
+    """
+    cell_ra, cell_dec, max_mag, used = per_cell_max_used_mag(z)
+
+    # Wrap RA to (-π, π) for Mollweide.
+    ra_proj = np.where(cell_ra > np.pi, cell_ra - 2 * np.pi, cell_ra)
+    has_used = used > 0
+
+    fig = plt.figure(figsize=(16, 7))
+    fig.suptitle(
+        f"Index depth per HEALPix cell  "
+        f"(depth {z.header.cell_depth}, {int(np.sum(has_used)):,} of {len(max_mag):,} cells contain quads)",
+        fontsize=13, weight="bold", y=0.98,
+    )
+    gs = fig.add_gridspec(1, 3, width_ratios=[2.4, 1.0, 0.05], wspace=0.25)
+    ax_map = fig.add_subplot(gs[0, 0], projection="mollweide")
+    ax_hist = fig.add_subplot(gs[0, 1])
+    cax = fig.add_subplot(gs[0, 2])
+
+    if has_used.any():
+        sc = ax_map.scatter(
+            ra_proj[has_used], cell_dec[has_used],
+            c=max_mag[has_used],
+            s=42, cmap="viridis",  # bright (low mag) → dark; faint (high mag) → yellow
+            vmin=float(np.nanpercentile(max_mag, 1)),
+            vmax=float(np.nanpercentile(max_mag, 99)),
+            edgecolors="#222", linewidths=0.3,
+        )
+        cbar = fig.colorbar(sc, cax=cax)
+        cbar.set_label("dimmest used G mag (higher = deeper index)")
+
+    ax_map.grid(True, alpha=0.3)
+    ax_map.set_xticklabels([])
+    ax_map.set_title(
+        f"Mollweide sky map  "
+        f"({len(max_mag) - int(np.sum(has_used)):,} populated cells with no quads omitted)"
+    )
+
+    used_max = max_mag[has_used]
+    ax_hist.hist(used_max, bins=60, color="#4c72b0", edgecolor="white", linewidth=0.3)
+    median = float(np.median(used_max)) if used_max.size else 0.0
+    p10 = float(np.percentile(used_max, 10)) if used_max.size else 0.0
+    p90 = float(np.percentile(used_max, 90)) if used_max.size else 0.0
+    ax_hist.axvline(median, color="#444", ls=":", lw=1)
+    ax_hist.text(
+        median, ax_hist.get_ylim()[1] * 0.95,
+        f"  median = {median:.2f}", color="#444", fontsize=9, va="top",
+    )
+    ax_hist.set_xlabel("dimmest used G mag in cell")
+    ax_hist.set_ylabel("cells")
+    ax_hist.set_title(
+        f"Distribution across {used_max.size:,} cells with quads\n"
+        f"p10 / median / p90 = {p10:.2f} / {median:.2f} / {p90:.2f}"
+    )
+    return fig
+
+
 def fig_fov_coverage(z: ZdclV3, fov_radius_deg: float = 0.5) -> Figure:
     counts = fov_quad_count(z, n_samples=2000, fov_radius_deg=fov_radius_deg)
     sky_area_sqdeg = 4 * math.pi * (180 / math.pi) ** 2  # ≈ 41,253
@@ -634,6 +760,7 @@ def main():
         ("sky_density.png", lambda: fig_sky_density(z)),
         ("code_space.png", lambda: fig_code_space(z)),
         ("star_reuse.png", lambda: fig_star_reuse(z)),
+        ("per_cell_depth.png", lambda: fig_per_cell_depth(z)),
         ("fov_coverage.png", lambda: fig_fov_coverage(z, fov_radius_deg=args.fov_deg)),
     ]
     for name, builder in figs:
