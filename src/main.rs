@@ -279,9 +279,11 @@ fn load_fits(path: &Path) -> Array2<f32> {
         process::exit(1);
     });
 
-    let naxis1 = shape[0];
-    let naxis2 = shape[1];
-    eprintln!("FITS: {}x{}", naxis1, naxis2);
+    // Standard FITS: NAXIS1 = fastest-varying axis = image cols (width),
+    // NAXIS2 = slower axis = image rows (height), origin bottom-left.
+    let cols = shape[0];
+    let rows = shape[1];
+    eprintln!("FITS: {}x{}", cols, rows);
 
     // Read pixels as f32 (compat API handles BSCALE/BZERO automatically)
     let pixels: Vec<f32> = f32::read_image(&fitsfile, &hdu).unwrap_or_else(|e| {
@@ -289,24 +291,22 @@ fn load_fits(path: &Path) -> Array2<f32> {
         process::exit(1);
     });
 
-    let expected = naxis1 * naxis2;
+    let expected = cols * rows;
     if pixels.len() != expected {
         eprintln!(
             "FITS pixel count mismatch: expected {} ({}x{}), got {}",
             expected,
-            naxis1,
-            naxis2,
+            cols,
+            rows,
             pixels.len()
         );
         process::exit(1);
     }
 
-    // The test FITS files are written by meter-sim's fitsio which passes
-    // ndarray dimensions as [rows, cols] to FITS, mapping them to
-    // NAXIS1=rows and NAXIS2=cols (non-standard). The data is also flipped
-    // vertically on write (FITS origin is bottom-left). We reshape as
-    // (naxis1, naxis2) = (rows, cols) and flip vertically to undo both.
-    let arr = Array2::from_shape_vec((naxis1, naxis2), pixels).unwrap_or_else(|e| {
+    // FITS storage is NAXIS1-fastest, so the buffer is laid out as
+    // (rows, cols) row-major with row 0 = NAXIS2=1 = bottom of the image.
+    // ndarray Array2 conventionally puts row 0 at the top, so flip rows.
+    let arr = Array2::from_shape_vec((rows, cols), pixels).unwrap_or_else(|e| {
         eprintln!("Failed to reshape FITS data: {e}");
         process::exit(1);
     });
