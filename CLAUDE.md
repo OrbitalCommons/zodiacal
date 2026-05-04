@@ -20,6 +20,7 @@ Zodiacal is a blind astrometry library written in Rust.
 - Never publish crates without explicit user permission
 - Never use --allow-dirty with cargo publish
 - Never use `git add -A` or `git add .` — always stage files by name to avoid pulling unrelated work into a commit
+- Don't bother creating git tags after a release — the user doesn't use them and the published crate version on crates.io is the source of truth for which release shipped what
 
 ## Starfield Integration
 
