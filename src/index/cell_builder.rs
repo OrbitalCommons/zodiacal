@@ -37,21 +37,30 @@
 //! (cells ~1.8°) this loss is small for typical quad scales (30″–30′)
 //! but non-zero. Adding neighbor context is a follow-up.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 
-use crate::geom::sphere::{angular_distance, radec_to_xyz, star_midpoint};
-use crate::quads::{Code, DIMCODES, DIMQUADS, Quad, compute_canonical_code};
+use crate::bundle::gaia_shard::GaiaRecord;
+use crate::quads::{Code, DIMCODES, DIMQUADS, Quad};
 use crate::refinement::{SidecarRecord, SidecarStreamWriter};
 
 use super::IndexStar;
 use super::build_manifest::{BuildManifest, CellStats};
+use super::quads::build_quads_for_cell;
 
 /// One star produced by a [`CellStarSource`]. Carries everything the
-/// builder needs (index tuple + sidecar payload) so the caller doesn't
-/// need to thread two parallel collections.
+/// builder needs (index tuple + sidecar payload + bundle Gaia payload)
+/// so the caller doesn't need to thread parallel collections.
+///
+/// `sidecar` is the legacy 88-byte refinement sidecar record consumed
+/// by the single-band path's `.zdcl.gaia` writer. `gaia` is the new
+/// 104-byte bundle-format record consumed by the multi-band cell-driven
+/// builder's `.zga` writer (PR3+). The two carry overlapping but not
+/// identical information; sources are expected to populate both, and
+/// each consumer reads only the field it needs. Existing single-band
+/// callers ignore `gaia` entirely.
 #[derive(Debug, Clone)]
 pub struct CellStar {
     pub catalog_id: u64,
@@ -65,6 +74,11 @@ pub struct CellStar {
     /// schema; the source is expected to populate `sidecar.ra/dec` in
     /// degrees.
     pub sidecar: SidecarRecord,
+    /// Bundle-format 104-byte Gaia record consumed by the multi-band
+    /// cell-driven builder. Single-band callers don't read this; new
+    /// callers (PR3+) populate it from the same upstream Gaia row that
+    /// produces `sidecar`.
+    pub gaia: GaiaRecord,
 }
 
 /// Per-cell read interface. Implementations must be `Sync` because the
@@ -242,156 +256,6 @@ pub fn build_index_cell_driven<S: CellStarSource + ?Sized>(
     let _ = std::fs::remove_dir(work_dir);
 
     Ok(summary)
-}
-
-/// Build quads for one cell using only the cell's own stars. Stars are
-/// sorted by magnitude (brightest first); quad indices in the returned
-/// `Quad` values are positions in the *sorted* per-cell list.
-fn build_quads_for_cell(stars: &[CellStar], config: &CellBuildConfig) -> (Vec<Quad>, Vec<Code>) {
-    if stars.len() < DIMQUADS {
-        return (Vec::new(), Vec::new());
-    }
-
-    // Sort indices by magnitude (brightest first) so use_count limits
-    // bias toward the brightest stars.
-    let mut order: Vec<usize> = (0..stars.len()).collect();
-    order.sort_by(|&a, &b| {
-        stars[a]
-            .mag
-            .partial_cmp(&stars[b].mag)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    let xyzs: Vec<[f64; 3]> = order
-        .iter()
-        .map(|&i| radec_to_xyz(stars[i].ra_rad, stars[i].dec_rad))
-        .collect();
-
-    let mut quads: Vec<Quad> = Vec::new();
-    let mut codes: Vec<Code> = Vec::new();
-    let mut seen: HashSet<[usize; DIMQUADS]> = HashSet::new();
-    let mut use_count: Vec<usize> = vec![0; xyzs.len()];
-
-    let chord_sq_upper = 2.0 * (1.0 - config.scale_upper.cos());
-
-    'outer: for a_idx in 0..xyzs.len() {
-        if quads.len() >= config.quads_per_cell {
-            break;
-        }
-        if use_count[a_idx] >= config.max_reuse {
-            continue;
-        }
-
-        let a_xyz = xyzs[a_idx];
-        for b_idx in (a_idx + 1)..xyzs.len() {
-            if use_count[b_idx] >= config.max_reuse {
-                continue;
-            }
-            let b_xyz = xyzs[b_idx];
-            let ab_dist = angular_distance(a_xyz, b_xyz);
-            if ab_dist < config.scale_lower || ab_dist > config.scale_upper {
-                continue;
-            }
-
-            let mid = star_midpoint(a_xyz, b_xyz);
-            let cd_radius_sq = 2.0 * (1.0 - ab_dist.cos());
-
-            // Linear scan for candidates near the midpoint. At
-            // per-cell granularity n_stars is small (tens to a few
-            // hundred typically), so an O(n) scan beats a KD-tree
-            // construction. The chord_sq_upper outer guard avoids
-            // computing midpoints on too-distant pairs.
-            let _ = chord_sq_upper;
-
-            let mut candidates: Vec<usize> = Vec::new();
-            for (c_idx, c) in xyzs.iter().enumerate() {
-                if c_idx == a_idx || c_idx == b_idx {
-                    continue;
-                }
-                let dx = c[0] - mid[0];
-                let dy = c[1] - mid[1];
-                let dz = c[2] - mid[2];
-                if dx * dx + dy * dy + dz * dz < cd_radius_sq {
-                    candidates.push(c_idx);
-                }
-            }
-
-            for ci in 0..candidates.len() {
-                if quads.len() >= config.quads_per_cell {
-                    break 'outer;
-                }
-                for di in (ci + 1)..candidates.len() {
-                    let c_idx = candidates[ci];
-                    let d_idx = candidates[di];
-
-                    let mut key = [a_idx, b_idx, c_idx, d_idx];
-                    key.sort();
-                    if !seen.insert(key) {
-                        continue;
-                    }
-
-                    if use_count[c_idx] >= config.max_reuse || use_count[d_idx] >= config.max_reuse
-                    {
-                        continue;
-                    }
-
-                    let raw_xyz = [a_xyz, b_xyz, xyzs[c_idx], xyzs[d_idx]];
-                    let raw_ids = [a_idx, b_idx, c_idx, d_idx];
-                    let (ordered_xyz, ordered_ids) = canonical_quad_order(&raw_xyz, raw_ids);
-                    let (code, canonical_ids, _) =
-                        compute_canonical_code(&ordered_xyz, ordered_ids);
-
-                    for &idx in &canonical_ids {
-                        use_count[idx] += 1;
-                    }
-
-                    // Translate canonical_ids (positions in the sorted
-                    // local list) back to positions in the *input*
-                    // `stars` slice so the caller can look up
-                    // `catalog_id` directly.
-                    let star_ids_input: [usize; DIMQUADS] =
-                        std::array::from_fn(|i| order[canonical_ids[i]]);
-                    quads.push(Quad {
-                        star_ids: star_ids_input,
-                    });
-                    codes.push(code);
-
-                    if quads.len() >= config.quads_per_cell {
-                        break 'outer;
-                    }
-                }
-            }
-        }
-    }
-
-    (quads, codes)
-}
-
-/// Local copy of `builder::canonical_quad_order` — exposing the original
-/// would widen its visibility. Identical behaviour: order quad members
-/// so the longest backbone is at indices `[0]` and `[1]`.
-fn canonical_quad_order(
-    star_xyz: &[[f64; 3]; DIMQUADS],
-    star_ids: [usize; DIMQUADS],
-) -> ([[f64; 3]; DIMQUADS], [usize; DIMQUADS]) {
-    let mut best_pair = (0, 1);
-    let mut best_dist = 0.0f64;
-    for i in 0..DIMQUADS {
-        for j in (i + 1)..DIMQUADS {
-            let d = angular_distance(star_xyz[i], star_xyz[j]);
-            if d > best_dist {
-                best_dist = d;
-                best_pair = (i, j);
-            }
-        }
-    }
-    let (ai, bi) = best_pair;
-    let mut others: Vec<usize> = (0..DIMQUADS).filter(|&i| i != ai && i != bi).collect();
-    others.sort_by_key(|&i| star_ids[i]);
-    let order = [ai, bi, others[0], others[1]];
-    let new_xyz: [[f64; 3]; DIMQUADS] = std::array::from_fn(|i| star_xyz[order[i]]);
-    let new_ids: [usize; DIMQUADS] = std::array::from_fn(|i| star_ids[order[i]]);
-    (new_xyz, new_ids)
 }
 
 // --- Per-cell artifact format -------------------------------------------
@@ -689,6 +553,25 @@ mod tests {
                 sigma_pmra: 0.01,
                 sigma_pmdec: 0.01,
                 sigma_parallax: 0.02,
+                flags: 0,
+            },
+            gaia: GaiaRecord {
+                source_id: catalog_id,
+                ref_epoch: 2016.0,
+                ra: ra_rad.to_degrees(),
+                dec: dec_rad.to_degrees(),
+                pmra: 0.0,
+                pmdec: 0.0,
+                parallax: 0.0,
+                radial_velocity: f64::NAN,
+                phot_g_mean_mag: mag,
+                sigma_ra: 0.1,
+                sigma_dec: 0.1,
+                sigma_pmra: 0.01,
+                sigma_pmdec: 0.01,
+                sigma_parallax: 0.02,
+                ra_dec_corr: f32::NAN,
+                ruwe: f32::NAN,
                 flags: 0,
             },
         }
