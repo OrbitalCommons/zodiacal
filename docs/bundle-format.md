@@ -425,3 +425,149 @@ Ship this as **v1 of the bundle format** and gate it behind a new builder subcom
 - read a bundle into a multi-band view that the existing `solve()` API can consume.
 
 The shard-bucketing optimization (item #1 above) and the cross-cell-quads design (item #3) can wait until profiling or use-case shows they matter.
+
+---
+
+## Implementation roadmap
+
+Seven PRs, each meaningfully independent and reviewable, with a strict dependency chain. Each PR ships a working, tested artifact even if no later PR ever lands.
+
+### PR 1 — Foundations: `SubfileAccessor` + per-cell shard formats
+
+Lay the groundwork before any pipeline code. Pure data-handling primitives, no I/O orchestration.
+
+**Scope**
+- `SubfileAccessor` trait + `EntryBytes<'a>` enum (`Mmap(&[u8])` / `Owned(Bytes)`).
+- `FsAccessor` impl over a directory root; mmaps each entry on first touch and caches.
+- `ZipAccessor` impl over a `zip::ZipArchive`; decompresses entries into owned `Bytes`.
+- Per-cell file formats (read + write) with all magic numbers, header layouts, and integrity checks specified in this doc:
+  - `.zqd` quad shard with band-table-at-head + per-band quad/code blocks.
+  - `.zga` gaia shard with the 104 B record layout and `flags` bitfield.
+- `GaiaRecord` struct (104 B `repr(C)`) with serde-style accessors for the bitfield-gated optional fields.
+
+**Tests**
+- Round-trip: write → read → field-equality for both formats.
+- Random-access correctness: write N records, binsearch a random subset by source_id, assert hits.
+- `FsAccessor` vs `ZipAccessor` parity: same logical entries packaged both ways, identical reads.
+- Bad-magic / bad-version rejection.
+
+**Depends on:** nothing (this is the floor).
+
+### PR 2 — Manifest schema + build-manifest evolution
+
+Define the JSON manifest and extend the existing in-build `BuildManifest` (#70) to track per-band-per-cell completion.
+
+**Scope**
+- `BundleManifest` type (the `manifest.json` schema) with serde-derived parser + writer.
+- `BuildManifest` (in-build resume primitive) gains per-band `completed_per_band: Vec<BTreeSet<u32>>` plus the existing `completed_cells`.
+- Atomic save/load helpers preserve crash-safety properties from #70.
+
+**Tests**
+- Round-trip serialize → deserialize → equality.
+- Schema-version mismatch is rejected with a useful error.
+- Resume from a partial build manifest: cells already complete in some bands but not others are correctly skipped per-band.
+
+**Depends on:** PR 1 (uses `GaiaRecord` for typing some manifest stats).
+
+### PR 3 — Multi-band cell-driven builder
+
+Refactor the cell-driven path (`src/index/cell_builder.rs`) to build N scale bands in one pass over each cell's star buffer, emitting per-cell `.zqd` (multi-band) and `.zga` shards into a work_dir.
+
+**Scope**
+- New `MultiBandCellBuildConfig` carrying a `Vec<ScaleBand>` instead of a single scale range.
+- `build_quads_for_cell_multiband(stars, &bands) -> Vec<(BandIdx, Vec<Quad>, Vec<Code>)>`.
+- Per-cell artifact write goes through PR 1's `.zqd` writer, packaging all bands' blocks with a band table.
+- Per-cell sidecar chunk replaced by direct `.zga` write into work_dir's `gaia/` subdir, populated with the 104 B records (bit-5 flag set when `is_supplement_source_id`).
+- Cells processed in parallel via `rayon::par_iter`, atomic-rename + `*.part.HHHHHHHH` partials, build-manifest update after each successful per-cell commit.
+- Output stability test (extends the existing `parallel_build_matches_sequential`): same bundle source, 1-thread vs 8-thread builds produce byte-identical work_dir contents.
+
+**Tests**
+- Synthetic build of a small bundle (4 cells × 3 bands) end-to-end into a work_dir.
+- Crash-resume: kill the worker after N cells, restart; only remaining cells get rebuilt.
+- Per-band quad counts in band table match what the builder emitted.
+
+**Depends on:** PR 2 (build-manifest), indirectly PR 1 (file formats).
+
+### PR 4 — Tidy phase + folder-or-zip output
+
+The single-threaded finalize that packages a complete work_dir into the chosen output form.
+
+**Scope**
+- `tidy_to_folder(work_dir, output_path)`: rename if same FS, else recursive copy + atomic rename. Manifest written last as commit edge.
+- `tidy_to_zip(work_dir, output_zip)`: stream-zip work_dir contents (cells in cell-id order, manifest last); fsync; rename `path.partial.zip` → `path.zip`.
+- `--prune-work-dir` opt-in cleanup after successful tidy; default keep so a second tidy can produce the alternate output form from the same work_dir.
+- Resume: tidy mid-rename leaves a `.partial` artifact; re-running overwrites it.
+
+**Tests**
+- Both tidy paths produce a bundle that PR 5's reader (next PR — write tests using the in-development reader prototype, lock them in) can open and round-trip.
+- Tidy-mid crash: kill after N file copies into the zip stream; rerun completes successfully.
+- Both forms: build once → tidy to folder → tidy to zip → both readable, byte-equivalent logical content.
+
+**Depends on:** PR 3 (work_dir layout); PR 1 + PR 2 (formats + manifest).
+
+### PR 5 — Bundle reader: `ZdclBundle`
+
+The consumption-side type that wraps a `SubfileAccessor` and serves region queries.
+
+**Scope**
+- `ZdclBundle::open(path)` auto-detects directory vs zip, builds the right `SubfileAccessor`, parses `manifest.json`.
+- `load_region(region) -> MultiBandFragment` slicing all bands across a `SkyRegion`'s cells.
+- `load_region_band(band_idx, region)` for the single-band path the solver dispatches.
+- `gaia_get(source_id, cell_hint) -> Option<GaiaRecord>` and `gaia_get_many`, with the cell derivation path exercised when no hint.
+- `bundle.verify()` opt-in structural-integrity walk (magic, version, cell_id-vs-filename, sizes).
+- `MultiBandFragment` exposes `&[&Index]` for the existing `solve()` signature — solver gets a multi-band view with no API change.
+
+**Tests**
+- Open a synthetic bundle (built via PR 3 + PR 4 in test fixtures), iterate every cell, count records.
+- Region queries: assert `load_region(small_region)` returns ≤ all-sky's records.
+- `gaia_get` + `gaia_get_many` correctness against a known set of source_ids.
+- `verify()` catches deliberately-corrupted shards.
+- Folder vs zip parity: same fixture in both forms, same query results.
+
+**Depends on:** PR 1 (accessor + formats), PR 2 (manifest).
+
+### PR 6 — CLI: `build-from-excerpt-series` + `Index::load` bundle dispatch
+
+The user-facing surface that ties phases 1+2 of the build together, plus the consumer-side detection that lets existing `Index::load`-using code transparently consume bundles.
+
+**Scope**
+- `zodiacal-tools build-from-excerpt-series` subcommand:
+  - All `build-from-excerpt`'s flags (excerpt_dir, output_prefix, work_dir, mag_limit, max_stars_per_cell, max_reuse, threads).
+  - New flags: `--scale-lower 10 --scale-upper 600 --bands 12 --scale-factor 1.4142` (or `--band-scales 10,14,20,...` for explicit non-uniform).
+  - `--quads-per-cell 200` (per band).
+  - `--output-format dir|zip|both` (default infers from `--output-prefix` extension).
+- `Index::load(path)` in core zodiacal: branch on `path.is_dir() || path.ends_with(".zip")` → delegate to bundle reader; else falls through to existing v1/v2/v3 logic. Existing call-sites (the solver, batch-solve, refinement, analyze_index.py upstream) get bundle support transparently.
+
+**Tests**
+- CLI smoke test: `build-from-excerpt-series` on a small synthetic excerpt → produces a folder bundle → `zodiacal info` (extended to recognize bundles) reads it back.
+- `Index::load` on a bundle path returns an Index that survives `solve()` against a tiny field.
+
+**Depends on:** PR 3 (build), PR 4 (tidy), PR 5 (reader).
+
+### PR 7 — Production benchmark + docs + analyze tool
+
+The capstone. Run the format on the real G ≤ 20 bycell excerpt, prove out the README baseline, lock in regression coverage.
+
+**Scope**
+- Run `build-from-excerpt-series` on the production bycell excerpt at the recommended params (G ≤ 20, depth 5–7 sweep, 12 bands, 100–200 quads/cell/band) and benchmark against the 1000-case test corpus.
+- Document the result in `docs/uniform-coverage.md` (replace the depth-5-1000-quads baseline currently there with the multi-band numbers).
+- Update README solve-rate table with the new bundle-format results.
+- Extend `scripts/analyze_index.py` to consume bundles in addition to single .zdcl files (per-band figures, multi-band quad-centroid Mollweide, depth-vs-quads-per-FOV from the actual on-disk band table).
+- File any tail-end issues that come out of the bench (e.g. update #73 with the resolution).
+
+**Tests**
+- Bench run (manual; data committed to `scratch/` is not part of CI).
+- analyze_index.py runs against a bundle without errors, produces the expected figure set.
+
+**Depends on:** PR 6 (the working pipeline end-to-end).
+
+---
+
+### Dependency graph
+
+```
+PR 1 ── PR 2 ── PR 3 ── PR 4 ── PR 5 ── PR 6 ── PR 7
+       (formats + manifest + builder + tidy + reader + CLI + bench)
+```
+
+Strictly linear. Each PR is small enough to review in one pass, and no PR sits idle waiting for two parents. The whole sequence ships v1 of the bundle format with the README's 98.5 %-baseline-class solve rate as the final integration test.
