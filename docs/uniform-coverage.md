@@ -123,6 +123,34 @@ build, independent artifact path. The orchestrator runs the cell loop via
 ~10× wall-clock; the bottleneck is then disk bandwidth on the chunk + sidecar
 writes.
 
+### Build speed enables iteration
+
+The combined effect of (a) cell-driven streaming, (b) parallel
+`par_iter` over cells, and (c) bounded per-cell RAM is that a full
+G ≤ 20 build of all 12,288 level-5 cells finishes in **~10 min on a
+16-core workstation** (cold cache, all cells processed). The same
+work serialised on the legacy in-RAM path was an order of magnitude
+slower *and* needed > 64 GB RAM to even start.
+
+That speed is itself a feature, not just a nicety:
+
+- Sweep `--quads-per-cell`, `--max-stars-per-cell`, and the
+  scale band over A/B builds and pick the combination whose
+  `analyze_index.py` output looks best for your FOV / camera /
+  catalog depth, instead of tuning blindly.
+- Re-run after small changes to the per-cell quad logic (e.g. the
+  `max_reuse` fix that scattered quad centroids within each cell)
+  without losing the morning to it.
+- Cheap to keep multiple indexes around — one tuned for narrow-FOV
+  star trackers (`--quads-per-cell 300`, deeper mag), one for
+  wide-FOV ground rigs (`--quads-per-cell 50`), all from the same
+  excerpt directory.
+
+When the build was 30+ minutes (or hours, for the legacy path),
+you'd build once and live with whatever you got. At ~10 minutes
+parallel, the build *is* part of the dev loop, and the analyzer
+script's figures are part of the feedback signal you tune against.
+
 ### Output stability
 
 Parallelism is only safe if the output bytes don't depend on cell completion
