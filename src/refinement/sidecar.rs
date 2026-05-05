@@ -427,8 +427,7 @@ impl SidecarStreamWriter {
     }
 
     fn chunk_path(&self, idx: u64) -> PathBuf {
-        self.scratch_dir
-            .join(format!("chunk_{idx:04}.sidecar-tmp"))
+        self.scratch_dir.join(format!("chunk_{idx:04}.sidecar-tmp"))
     }
 }
 
@@ -991,7 +990,8 @@ mod tests {
         let scratch = tmp_dir("resume-scratch");
         let final_path = tmp_dir("resume-final");
 
-        let all_records: Vec<SidecarRecord> = (0..500u64).map(|i| rec(i * 11 + 3, 0.1, 0.2)).collect();
+        let all_records: Vec<SidecarRecord> =
+            (0..500u64).map(|i| rec(i * 11 + 3, 0.1, 0.2)).collect();
         let split = 300;
 
         // Phase 1: writer crashes after committing the first 3 chunks.
@@ -1023,7 +1023,9 @@ mod tests {
         let reader = SidecarReader::open(&final_path).unwrap();
         assert_eq!(reader.len(), all_records.len());
         for r in &all_records {
-            let got = reader.get(r.source_id).expect("missing record after resume");
+            let got = reader
+                .get(r.source_id)
+                .expect("missing record after resume");
             assert_eq!(got.source_id, r.source_id);
         }
 

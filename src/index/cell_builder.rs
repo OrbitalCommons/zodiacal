@@ -46,7 +46,7 @@ use crate::geom::sphere::{angular_distance, radec_to_xyz, star_midpoint};
 use crate::quads::{Code, DIMCODES, DIMQUADS, Quad, compute_canonical_code};
 use crate::refinement::{SidecarRecord, SidecarStreamWriter};
 
-use super::{IndexStar};
+use super::IndexStar;
 use super::build_manifest::{BuildManifest, CellStats};
 
 /// One star produced by a [`CellStarSource`]. Carries everything the
@@ -330,8 +330,7 @@ fn build_quads_for_cell(stars: &[CellStar], config: &CellBuildConfig) -> (Vec<Qu
                         continue;
                     }
 
-                    if use_count[c_idx] >= config.max_reuse
-                        || use_count[d_idx] >= config.max_reuse
+                    if use_count[c_idx] >= config.max_reuse || use_count[d_idx] >= config.max_reuse
                     {
                         continue;
                     }
@@ -738,7 +737,10 @@ mod tests {
     fn make_paths(name: &str) -> BuildPaths {
         let work = tmp_dir(name);
         let final_index = work.parent().unwrap().join(format!("{name}-final.zdcl"));
-        let final_sidecar = work.parent().unwrap().join(format!("{name}-final.zdcl.gaia"));
+        let final_sidecar = work
+            .parent()
+            .unwrap()
+            .join(format!("{name}-final.zdcl.gaia"));
         BuildPaths {
             work_dir: work,
             final_index,
