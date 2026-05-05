@@ -44,6 +44,11 @@ use std::io::{self, Write};
 
 use crate::quads::{Code, DIMCODES, DIMQUADS, Quad};
 
+#[cfg(target_endian = "big")]
+compile_error!(
+    "Quad shard on-disk layout assumes little-endian; big-endian targets are not supported."
+);
+
 /// 8-byte file magic identifying a per-cell quad shard.
 pub const QUAD_SHARD_MAGIC: &[u8; 8] = b"ZDCLQUAD";
 
@@ -365,9 +370,9 @@ impl<'a> QuadShard<'a> {
                     ),
                 ));
             }
-            // Empty bands are allowed (n_quads == 0); the offsets must
-            // still land inside the file but the blocks have zero length.
             if nq > 0 {
+                // Populated bands' offsets must clear the header +
+                // band-table region.
                 if (quads_offset as usize) < band_table_end {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
@@ -386,6 +391,32 @@ impl<'a> QuadShard<'a> {
                         ),
                     ));
                 }
+            } else {
+                // Invariant for empty bands (n_quads == 0): the writer
+                // emits zero bytes between the quads_offset and
+                // codes_offset bookmarks, so the two must compare equal
+                // and must point at a valid in-slice byte (at or beyond
+                // the band table, at or before the slice end).
+                if quads_offset != codes_offset {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "empty band {band_idx} has quads_offset={quads_offset} != \
+                             codes_offset={codes_offset}; expected equal offsets"
+                        ),
+                    ));
+                }
+                if (quads_offset as usize) < band_table_end || (quads_offset as usize) > bytes.len()
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "empty band {band_idx} offset {quads_offset} outside data \
+                             region [{band_table_end}, {})",
+                            bytes.len()
+                        ),
+                    ));
+                }
             }
 
             band_table.push(BandEntry {
@@ -396,8 +427,9 @@ impl<'a> QuadShard<'a> {
             });
         }
 
-        // The on-disk band table is required to be monotonic (the writer
-        // sorts; readers rely on that for binary-search lookup).
+        // The on-disk band table is required to be strictly monotonic in
+        // band_idx (the writer sorts; readers rely on that for
+        // binary-search lookup).
         for pair in band_table.windows(2) {
             if pair[0].band_idx >= pair[1].band_idx {
                 return Err(io::Error::new(
@@ -406,6 +438,40 @@ impl<'a> QuadShard<'a> {
                         "band table not strictly ascending by band_idx: \
                          {} followed by {}",
                         pair[0].band_idx, pair[1].band_idx
+                    ),
+                ));
+            }
+        }
+
+        // Validate that no two band data regions overlap. Each populated
+        // band contributes two regions (quads block, codes block); empty
+        // bands contribute none. We collect, sort by start, then walk
+        // pairwise.
+        let mut regions: Vec<(usize, usize, u32, &'static str)> =
+            Vec::with_capacity(band_table.len() * 2);
+        for entry in &band_table {
+            let nq = entry.n_quads as usize;
+            if nq == 0 {
+                continue;
+            }
+            let q_start = entry.quads_offset as usize;
+            let q_end = q_start + nq * QUAD_RECORD_SIZE;
+            let c_start = entry.codes_offset as usize;
+            let c_end = c_start + nq * CODE_RECORD_SIZE;
+            regions.push((q_start, q_end, entry.band_idx, "quads"));
+            regions.push((c_start, c_end, entry.band_idx, "codes"));
+        }
+        regions.sort_by_key(|r| r.0);
+        for w in regions.windows(2) {
+            let (a_start, a_end, a_band, a_kind) = w[0];
+            let (b_start, b_end, b_band, b_kind) = w[1];
+            if a_end > b_start {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "band data regions overlap: band {a_band} {a_kind} \
+                         [{a_start}, {a_end}) vs band {b_band} {b_kind} \
+                         [{b_start}, {b_end})"
                     ),
                 ));
             }
@@ -852,6 +918,215 @@ mod tests {
         )
         .expect_err("mismatch must reject");
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn header_and_first_band_byte_layout() {
+        // Pin the exact 32-byte header + first 24-byte band-table entry.
+        // Single band, 1 quad, so the resulting offsets are determinate.
+        let q: Vec<Quad> = vec![make_quad(0xDEAD_BEEF, 1, 2, 3)];
+        let c: Vec<Code> = vec![[1.0_f64, 2.0, 3.0, 4.0]];
+        let bytes = write_to_vec(
+            0x0123_4567_89AB_CDEF,
+            &[BandEmit {
+                band_idx: 7,
+                quads: &q,
+                codes: &c,
+            }],
+        );
+
+        // Expected header (32 B):
+        let expected_head: [u8; 32] = [
+            // magic "ZDCLQUAD"
+            b'Z', b'D', b'C', b'L', b'Q', b'U', b'A', b'D', // version = 1 (u32 LE)
+            0x01, 0x00, 0x00, 0x00, // reserved
+            0x00, 0x00, 0x00, 0x00, // cell_id (u64 LE)
+            0xEF, 0xCD, 0xAB, 0x89, 0x67, 0x45, 0x23, 0x01, // n_bands = 1
+            0x01, 0x00, 0x00, 0x00, // reserved (pad)
+            0x00, 0x00, 0x00, 0x00,
+        ];
+        assert_eq!(&bytes[..HEADER_SIZE], &expected_head[..]);
+
+        // First band entry: 24 B at byte 32.
+        // band_idx = 7, n_quads = 1.
+        // quads_offset = HEADER_SIZE + BAND_ENTRY_SIZE = 32 + 24 = 56
+        // codes_offset = 56 + 16 = 72
+        let q_off: u64 = (HEADER_SIZE + BAND_ENTRY_SIZE) as u64;
+        let c_off: u64 = q_off + QUAD_RECORD_SIZE as u64;
+        let mut expected_entry = [0u8; BAND_ENTRY_SIZE];
+        expected_entry[0..4].copy_from_slice(&7u32.to_le_bytes());
+        expected_entry[4..8].copy_from_slice(&1u32.to_le_bytes());
+        expected_entry[8..16].copy_from_slice(&q_off.to_le_bytes());
+        expected_entry[16..24].copy_from_slice(&c_off.to_le_bytes());
+        assert_eq!(
+            &bytes[HEADER_SIZE..HEADER_SIZE + BAND_ENTRY_SIZE],
+            &expected_entry[..]
+        );
+    }
+
+    #[test]
+    fn roundtrip_many_bands() {
+        // Twelve bands with varying quad counts, including a mid-table
+        // empty band, to exercise band-table indexing under load.
+        let mut bands_data: Vec<(u32, Vec<Quad>, Vec<Code>)> = Vec::new();
+        for k in 0..12u32 {
+            let n = if k == 5 { 0 } else { (k as usize) + 1 };
+            let qs: Vec<Quad> = (0..n)
+                .map(|i| make_quad(k as usize * 100 + i, i + 1, i + 2, i + 3))
+                .collect();
+            let cs: Vec<Code> = (0..n)
+                .map(|i| make_code((k as f64) * 10.0 + i as f64))
+                .collect();
+            bands_data.push((k, qs, cs));
+        }
+        let bands: Vec<BandEmit<'_>> = bands_data
+            .iter()
+            .map(|(idx, qs, cs)| BandEmit {
+                band_idx: *idx,
+                quads: qs,
+                codes: cs,
+            })
+            .collect();
+
+        let bytes = write_to_vec(0xABCD, &bands);
+        let shard = QuadShard::parse(&bytes).expect("parse 12-band shard");
+        assert_eq!(shard.n_bands(), 12);
+
+        for (idx, qs, cs) in &bands_data {
+            let view = shard.band(*idx).expect("band exists");
+            let got_q: Vec<Quad> = view.quads_iter().collect();
+            let got_c: Vec<Code> = view.codes_iter().collect();
+            assert_eq!(got_q.len(), qs.len(), "band {idx} quad count");
+            for (g, w) in got_q.iter().zip(qs.iter()) {
+                assert_eq!(g.star_ids, w.star_ids);
+            }
+            assert_eq!(got_c, *cs, "band {idx} codes");
+        }
+    }
+
+    #[test]
+    fn nan_and_infinity_codes_roundtrip_bitwise() {
+        // Codes carry arbitrary f64s including NaN/Inf. The on-disk
+        // format is "raw bits" so these must round-trip bit-for-bit
+        // (PartialEq on NaN would lie).
+        let q: Vec<Quad> = vec![make_quad(1, 2, 3, 4), make_quad(5, 6, 7, 8)];
+        let c: Vec<Code> = vec![
+            [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 1.5],
+            // A signaling-NaN-ish payload: pin it via from_bits.
+            [
+                f64::from_bits(0x7FF0_0000_0000_0001),
+                f64::from_bits(0xFFF8_0000_DEAD_BEEF),
+                0.0,
+                -0.0,
+            ],
+        ];
+        let bytes = write_to_vec(
+            1,
+            &[BandEmit {
+                band_idx: 0,
+                quads: &q,
+                codes: &c,
+            }],
+        );
+        let shard = QuadShard::parse(&bytes).expect("parse");
+        let got: Vec<Code> = shard.band(0).unwrap().codes_iter().collect();
+        assert_eq!(got.len(), c.len());
+        for (g, w) in got.iter().zip(c.iter()) {
+            for (gi, wi) in g.iter().zip(w.iter()) {
+                assert_eq!(
+                    gi.to_bits(),
+                    wi.to_bits(),
+                    "f64 bit pattern mismatch in code"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn overlapping_band_regions_rejected() {
+        // Hand-craft a shard with two bands whose quad blocks overlap.
+        // Both bands carry n_quads = 1 (16 B for quads, 32 B for codes),
+        // but we point both at the same quads_offset. The codes_offset
+        // values are non-overlapping so only the quads regions clash.
+        let header_size = HEADER_SIZE;
+        let n_bands: u32 = 2;
+        let band_table_size = (n_bands as usize) * BAND_ENTRY_SIZE;
+        let body_start = header_size + band_table_size;
+        // Layout in the body:
+        //   [body_start         .. body_start + 16)   shared quads block
+        //   [body_start + 16    .. body_start + 48)   band 0 codes
+        //   [body_start + 48    .. body_start + 80)   band 1 codes
+        let total = body_start + 16 + 32 + 32;
+        let mut bytes = vec![0u8; total];
+
+        // Header.
+        bytes[0..8].copy_from_slice(QUAD_SHARD_MAGIC);
+        bytes[8..12].copy_from_slice(&QUAD_SHARD_VERSION.to_le_bytes());
+        bytes[12..16].copy_from_slice(&0u32.to_le_bytes());
+        bytes[16..24].copy_from_slice(&0u64.to_le_bytes()); // cell_id
+        bytes[24..28].copy_from_slice(&n_bands.to_le_bytes());
+        bytes[28..32].copy_from_slice(&0u32.to_le_bytes());
+
+        let q_off = body_start as u64;
+        let c0_off = (body_start + 16) as u64;
+        let c1_off = (body_start + 48) as u64;
+
+        // Band 0.
+        let off0 = header_size;
+        bytes[off0..off0 + 4].copy_from_slice(&0u32.to_le_bytes());
+        bytes[off0 + 4..off0 + 8].copy_from_slice(&1u32.to_le_bytes());
+        bytes[off0 + 8..off0 + 16].copy_from_slice(&q_off.to_le_bytes());
+        bytes[off0 + 16..off0 + 24].copy_from_slice(&c0_off.to_le_bytes());
+
+        // Band 1 — shares the same quads_offset, which must trigger the
+        // overlap check.
+        let off1 = header_size + BAND_ENTRY_SIZE;
+        bytes[off1..off1 + 4].copy_from_slice(&1u32.to_le_bytes());
+        bytes[off1 + 4..off1 + 8].copy_from_slice(&1u32.to_le_bytes());
+        bytes[off1 + 8..off1 + 16].copy_from_slice(&q_off.to_le_bytes());
+        bytes[off1 + 16..off1 + 24].copy_from_slice(&c1_off.to_le_bytes());
+
+        let err = QuadShard::parse(&bytes).expect_err("overlapping regions must reject");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("overlap"), "got: {err}");
+    }
+
+    #[test]
+    fn out_of_order_band_idx_rejected() {
+        // Hand-craft a band table whose band_idx values are not
+        // strictly ascending. The writer always sorts, so the only way
+        // to exercise this path is to mutate the on-disk band table by
+        // hand.
+        let q0: Vec<Quad> = vec![make_quad(1, 2, 3, 4)];
+        let c0: Vec<Code> = vec![make_code(0.0)];
+        let q1: Vec<Quad> = vec![make_quad(5, 6, 7, 8)];
+        let c1: Vec<Code> = vec![make_code(1.0)];
+        let mut bytes = write_to_vec(
+            0,
+            &[
+                BandEmit {
+                    band_idx: 1,
+                    quads: &q0,
+                    codes: &c0,
+                },
+                BandEmit {
+                    band_idx: 2,
+                    quads: &q1,
+                    codes: &c1,
+                },
+            ],
+        );
+
+        // Swap the band_idx values in the on-disk band table so the
+        // table reads [2, 1] — i.e., not strictly ascending.
+        let off0 = HEADER_SIZE;
+        let off1 = HEADER_SIZE + BAND_ENTRY_SIZE;
+        bytes[off0..off0 + 4].copy_from_slice(&2u32.to_le_bytes());
+        bytes[off1..off1 + 4].copy_from_slice(&1u32.to_le_bytes());
+
+        let err = QuadShard::parse(&bytes).expect_err("out-of-order band_idx must reject");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("ascending"), "got: {err}");
     }
 
     /// Regression for issue #84: shard offsets must be slice-relative, so

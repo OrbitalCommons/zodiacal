@@ -166,12 +166,15 @@ pub struct BandInfo {
 impl BundleManifest {
     /// Atomic write: serialize to `path.with_extension("json.partial")` (or
     /// a `.partial` sibling for non-`.json` paths), fsync, then rename
-    /// onto `path`.
+    /// onto `path`. After the rename, fsync the parent directory so the
+    /// rename is durable across power loss.
     ///
     /// On crash mid-write the only on-disk artifact is the orphaned
     /// `.partial` file; the canonical `path` is untouched. The next
     /// `save` (or the tidy-phase rerun) overwrites the partial
-    /// idempotently.
+    /// idempotently. If serialization or write fails before the rename,
+    /// the partial file is removed before this function returns the
+    /// error so the on-disk tree stays clean.
     pub fn save(&self, path: &Path) -> io::Result<()> {
         if let Some(parent) = path.parent()
             && !parent.as_os_str().is_empty()
@@ -180,13 +183,38 @@ impl BundleManifest {
         }
         let tmp = partial_path_for(path);
 
-        let json = serde_json::to_vec_pretty(self).map_err(io::Error::other)?;
-        {
+        // Wrap pre-rename work in a closure so any failure path can fall
+        // through to the cleanup step. Rust has no try/finally, so we
+        // match on the result and remove the partial on error.
+        let result: io::Result<()> = (|| {
+            let json = serde_json::to_vec_pretty(self).map_err(io::Error::other)?;
             let mut f = File::create(&tmp)?;
             f.write_all(&json)?;
             f.sync_all()?;
+            Ok(())
+        })();
+        if let Err(e) = result {
+            // Best-effort cleanup of the partial; ignore NotFound (the
+            // File::create may have failed before the file was created).
+            match std::fs::remove_file(&tmp) {
+                Ok(()) => {}
+                Err(rm_err) if rm_err.kind() == io::ErrorKind::NotFound => {}
+                Err(_) => {}
+            }
+            return Err(e);
         }
+
         std::fs::rename(&tmp, path)?;
+
+        // fsync the parent directory so the rename's directory-entry
+        // change is durable. Unix-only; we don't support Windows.
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            // Read-only handle is sufficient for sync_all on a directory.
+            let dir = File::open(parent)?;
+            dir.sync_all()?;
+        }
         Ok(())
     }
 
@@ -417,6 +445,33 @@ mod tests {
         assert!(path.exists());
         // And the file parses cleanly.
         let _loaded = BundleManifest::load(&path).unwrap();
+    }
+
+    #[test]
+    fn save_with_missing_parent_errors_and_leaves_no_partial() {
+        // Point the save at a path whose parent directory does not
+        // exist. The save must error and must not leave a stray
+        // `.partial` file behind.
+        let dir = tempfile::tempdir().expect("tmpdir");
+        let nonexistent_parent = dir.path().join("does_not_exist");
+        let path = nonexistent_parent.join("nope").join("manifest.json");
+
+        let m = sample_manifest(1);
+        // Force the parent-dir failure by making the intermediate path
+        // *not creatable*: pre-create a regular file at the spot where
+        // create_dir_all would need a directory.
+        std::fs::write(&nonexistent_parent, b"i am not a directory").expect("seed blocking file");
+        let err = m.save(&path).expect_err("save should fail");
+        let _ = err.kind();
+
+        // No `.partial` should have been created at the canonical path
+        // (which itself does not exist) or alongside the blocking file.
+        let partial = partial_path_for(&path);
+        assert!(
+            !partial.exists(),
+            "leftover partial after failed save: {}",
+            partial.display()
+        );
     }
 
     #[test]
