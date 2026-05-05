@@ -62,9 +62,13 @@ enum Commands {
         #[arg(long, default_value = "1800.0")]
         scale_upper: f64,
 
-        /// Maximum number of quads to generate (default: 1,000,000).
+        /// Maximum number of quads to generate. Required: there is no
+        /// default because the right value depends on the catalog
+        /// depth, FOV target, and host RAM — picking one for the user
+        /// hides the trade-off and (for the brightness-first builder)
+        /// concentrates the budget in a few dense sky regions.
         #[arg(long)]
-        max_quads: Option<usize>,
+        max_quads: usize,
 
         /// HEALPix depth used to group stars in the v3 `.zdcl` file.
         #[arg(long, default_value_t = DEFAULT_CELL_DEPTH)]
