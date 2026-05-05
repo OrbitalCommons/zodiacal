@@ -187,8 +187,8 @@ band_table    n_bands × 24 B
               for each band:
                 band_idx     4 B  u32 LE
                 n_quads      4 B  u32 LE
-                quads_offset 8 B  u64 LE  — byte offset of this band's quads block, from file start
-                codes_offset 8 B  u64 LE  — byte offset of this band's codes block, from file start
+                quads_offset 8 B  u64 LE  — byte offset of this band's quads block, relative to shard start
+                codes_offset 8 B  u64 LE  — byte offset of this band's codes block, relative to shard start
 
 padding to 8-byte boundary
 
