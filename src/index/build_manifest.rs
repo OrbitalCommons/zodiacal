@@ -52,6 +52,21 @@ pub struct BuildManifest {
     /// and avoids a sum on resume.
     pub n_stars: u64,
     pub n_quads: u64,
+    /// Per-scale-band per-cell completion tracking for the multi-band
+    /// cell-driven builder.
+    ///
+    /// `completed_per_band[k]` is the set of cells that have committed
+    /// quads for band `k` to the work-dir's per-cell `.zqd` file. A
+    /// build that crashed after committing bands `[0..3]` for a cell
+    /// but before band `4` resumes only band `4` for that cell.
+    ///
+    /// Empty when the build is single-band (legacy compat). The
+    /// `#[serde(default)]` makes manifests written by the OLD code
+    /// (without this field) still parse cleanly under the new code.
+    /// Multi-band builders call [`BuildManifest::ensure_per_band`] at
+    /// start to size this to `n_bands` empty sets.
+    #[serde(default)]
+    pub completed_per_band: Vec<BTreeSet<u32>>,
 }
 
 impl Default for BuildManifest {
@@ -62,6 +77,7 @@ impl Default for BuildManifest {
             cell_stats: Vec::new(),
             n_stars: 0,
             n_quads: 0,
+            completed_per_band: Vec::new(),
         }
     }
 }
@@ -162,6 +178,50 @@ impl BuildManifest {
     /// already-committed cells on resume.
     pub fn is_complete(&self, cell_id: u32) -> bool {
         self.completed_cells.contains(&cell_id)
+    }
+
+    /// Initialize `completed_per_band` to `n_bands` empty sets, *if* it
+    /// is currently empty. Idempotent: calling this once at the start
+    /// of a multi-band build is safe; calling it again on resume with
+    /// the same `n_bands` is a no-op.
+    ///
+    /// This intentionally does **not** truncate or grow a non-empty
+    /// `completed_per_band`. A multi-band build that wants to rebuild
+    /// at a different band count must clear `completed_per_band`
+    /// explicitly first; otherwise resume would silently change band
+    /// semantics.
+    pub fn ensure_per_band(&mut self, n_bands: usize) {
+        if self.completed_per_band.is_empty() && n_bands > 0 {
+            self.completed_per_band.resize_with(n_bands, BTreeSet::new);
+        }
+    }
+
+    /// True if cell `cell_id`'s band `band_idx` has been committed.
+    ///
+    /// Returns `false` for any `band_idx` outside the current
+    /// `completed_per_band` length (including the legacy empty-vec
+    /// case), so single-band call sites that never call
+    /// `ensure_per_band` get a sensible default.
+    pub fn is_band_complete(&self, cell_id: u32, band_idx: u32) -> bool {
+        self.completed_per_band
+            .get(band_idx as usize)
+            .is_some_and(|set| set.contains(&cell_id))
+    }
+
+    /// Mark cell `cell_id`'s band `band_idx` as committed.
+    ///
+    /// Idempotent: marking the same `(cell, band)` twice is a no-op.
+    /// If `completed_per_band` is shorter than `band_idx + 1` it is
+    /// extended with empty sets to fit. This means callers that build
+    /// without an explicit `ensure_per_band` still get correct
+    /// per-band tracking, just with a `completed_per_band.len()` that
+    /// reflects only the bands actually marked.
+    pub fn mark_band_complete(&mut self, cell_id: u32, band_idx: u32) {
+        let needed = band_idx as usize + 1;
+        if self.completed_per_band.len() < needed {
+            self.completed_per_band.resize_with(needed, BTreeSet::new);
+        }
+        self.completed_per_band[band_idx as usize].insert(cell_id);
     }
 }
 
@@ -291,5 +351,84 @@ mod tests {
         assert!(!partial.exists(), "leftover partial: {}", partial.display());
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn per_band_legacy_compat() {
+        // A manifest written by the OLD code (pre-`completed_per_band`)
+        // must round-trip through the NEW deserializer with an empty
+        // `completed_per_band`. The `#[serde(default)]` attribute is
+        // what makes this work.
+        let dir = tmp_dir("legacy");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let path = BuildManifest::path_in(&dir);
+        // Hand-rolled JSON without the new field. Mirrors what the
+        // pre-PR2 code would have written.
+        std::fs::write(
+            &path,
+            r#"{"version":1,"completed_cells":[3,7],"cell_stats":[[3,{"n_stars":10,"n_quads":4}],[7,{"n_stars":5,"n_quads":2}]],"n_stars":15,"n_quads":6}"#,
+        )
+        .unwrap();
+
+        let loaded = BuildManifest::load(&dir).unwrap().expect("manifest");
+        assert!(loaded.completed_per_band.is_empty());
+        // Existing fields still populate from the legacy JSON.
+        assert_eq!(loaded.completed_cells.len(), 2);
+        assert!(loaded.is_complete(3));
+        assert!(loaded.is_complete(7));
+        assert_eq!(loaded.n_stars, 15);
+        assert_eq!(loaded.n_quads, 6);
+        // And band queries on the legacy manifest answer false (no
+        // band tracking yet).
+        assert!(!loaded.is_band_complete(3, 0));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn mark_band_complete_grows_set() {
+        let mut m = BuildManifest::default();
+        m.ensure_per_band(3);
+        assert_eq!(m.completed_per_band.len(), 3);
+        for set in &m.completed_per_band {
+            assert!(set.is_empty());
+        }
+
+        m.mark_band_complete(5, 1);
+        assert!(m.is_band_complete(5, 1));
+        assert!(!m.is_band_complete(5, 0));
+        assert!(!m.is_band_complete(5, 2));
+        // Out-of-range bands answer false rather than panicking.
+        assert!(!m.is_band_complete(5, 99));
+        // Other cells unaffected.
+        assert!(!m.is_band_complete(4, 1));
+    }
+
+    #[test]
+    fn mark_band_complete_idempotent() {
+        let mut m = BuildManifest::default();
+        m.ensure_per_band(2);
+
+        m.mark_band_complete(7, 0);
+        m.mark_band_complete(7, 0);
+        m.mark_band_complete(7, 0);
+
+        assert!(m.is_band_complete(7, 0));
+        // BTreeSet membership is set semantics — len stays 1.
+        assert_eq!(m.completed_per_band[0].len(), 1);
+    }
+
+    #[test]
+    fn ensure_per_band_is_idempotent() {
+        // Two calls in a row must not clobber per-band state. This is
+        // the "resume of a multi-band build" path.
+        let mut m = BuildManifest::default();
+        m.ensure_per_band(4);
+        m.mark_band_complete(11, 2);
+
+        m.ensure_per_band(4);
+        assert_eq!(m.completed_per_band.len(), 4);
+        assert!(m.is_band_complete(11, 2));
     }
 }
