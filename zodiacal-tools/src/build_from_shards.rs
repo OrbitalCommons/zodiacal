@@ -138,7 +138,7 @@ pub struct BuildFromShardsConfig {
     pub scale_lower_arcsec: f64,
     /// Upper scale bound in arcseconds.
     pub scale_upper_arcsec: f64,
-    pub max_quads: Option<usize>,
+    pub max_quads: usize,
     pub cell_depth: u8,
     /// Rayon thread pool size; pass `None` to use rayon's default.
     pub threads: Option<usize>,
@@ -259,11 +259,7 @@ pub fn run(cfg: &BuildFromShardsConfig) -> Result<(), String> {
 
     let scale_lower_rad = (cfg.scale_lower_arcsec / 3600.0).to_radians();
     let scale_upper_rad = (cfg.scale_upper_arcsec / 3600.0).to_radians();
-    // Default max_quads is 1M unless the caller overrides — empirically
-    // a reasonable balance of index size and matching quality. The
-    // direct `build_index` path doesn't HEALPix-uniformize, so without
-    // a cap it can balloon to 8× n_stars and OOM on large inputs.
-    let max_quads = cfg.max_quads.unwrap_or(1_000_000);
+    let max_quads = cfg.max_quads;
     let max_stars = n_stars;
     let builder_cfg = IndexBuilderConfig {
         scale_lower: scale_lower_rad,
@@ -432,7 +428,7 @@ mod tests {
             mag_limit: 19.5,
             scale_lower_arcsec: 60.0,
             scale_upper_arcsec: 1800.0,
-            max_quads: Some(1000),
+            max_quads: 1000,
             cell_depth: 5,
             threads: Some(1),
         };
@@ -448,7 +444,7 @@ mod tests {
             mag_limit: 14.0,
             scale_lower_arcsec: 1800.0,
             scale_upper_arcsec: 60.0,
-            max_quads: Some(1000),
+            max_quads: 1000,
             cell_depth: 5,
             threads: Some(1),
         };
