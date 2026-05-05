@@ -15,6 +15,8 @@ use std::collections::BinaryHeap;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use memmap2::Mmap;
 
@@ -134,10 +136,16 @@ where
 pub struct SidecarStreamWriter {
     scratch_dir: PathBuf,
     /// (chunk_path, n_records) — appended in the order chunks were
-    /// committed. Order doesn't matter for the merge (records are sorted
-    /// by source_id inside each file), but stable order helps debugging.
-    chunks: Vec<(PathBuf, u64)>,
-    next_chunk_idx: u64,
+    /// committed. Order doesn't affect the final merge output (records
+    /// are sorted by source_id inside each file and the k-way merge
+    /// re-sorts globally), but a stable list helps debugging.
+    /// `Mutex` so multiple threads can `append_chunk` concurrently;
+    /// the lock is held only for the small `Vec::push`.
+    chunks: Mutex<Vec<(PathBuf, u64)>>,
+    /// Atomic counter so concurrent `append_chunk` calls each receive
+    /// a distinct chunk index (and therefore a distinct on-disk path)
+    /// without coordinating through a lock.
+    next_chunk_idx: AtomicU64,
 }
 
 impl SidecarStreamWriter {
@@ -154,8 +162,8 @@ impl SidecarStreamWriter {
         std::fs::create_dir_all(&scratch_dir)?;
         Ok(Self {
             scratch_dir,
-            chunks: Vec::new(),
-            next_chunk_idx: 0,
+            chunks: Mutex::new(Vec::new()),
+            next_chunk_idx: AtomicU64::new(0),
         })
     }
 
@@ -200,19 +208,22 @@ impl SidecarStreamWriter {
 
         Ok(Self {
             scratch_dir,
-            chunks,
-            next_chunk_idx,
+            chunks: Mutex::new(chunks),
+            next_chunk_idx: AtomicU64::new(next_chunk_idx),
         })
     }
 
     /// Write a chunk of records to a numbered temp file, sorted by
-    /// `source_id`. Returns the chunk's index and on-disk path.
+    /// `source_id`. Returns the chunk's index. Safe to call from
+    /// multiple threads concurrently — chunk indices and paths are
+    /// distinct, the per-chunk file write is independent, and the
+    /// only shared state (the `chunks` list) is updated under a
+    /// short-held mutex.
     ///
     /// Empty chunks are accepted but produce no temp file — the caller
     /// can use the returned index to drive a manifest without special-casing.
-    pub fn append_chunk(&mut self, mut records: Vec<SidecarRecord>) -> io::Result<u64> {
-        let idx = self.next_chunk_idx;
-        self.next_chunk_idx += 1;
+    pub fn append_chunk(&self, mut records: Vec<SidecarRecord>) -> io::Result<u64> {
+        let idx = self.next_chunk_idx.fetch_add(1, Ordering::Relaxed);
 
         if records.is_empty() {
             return Ok(idx);
@@ -245,18 +256,18 @@ impl SidecarStreamWriter {
         }
         std::fs::rename(&tmp_path, &path)?;
 
-        self.chunks.push((path, n_records));
+        self.chunks.lock().unwrap().push((path, n_records));
         Ok(idx)
     }
 
     /// Number of chunks committed so far.
     pub fn chunk_count(&self) -> usize {
-        self.chunks.len()
+        self.chunks.lock().unwrap().len()
     }
 
     /// Total records committed across all chunks (sum of chunk sizes).
     pub fn total_records(&self) -> u64 {
-        self.chunks.iter().map(|(_, n)| *n).sum()
+        self.chunks.lock().unwrap().iter().map(|(_, n)| *n).sum()
     }
 
     /// Merge all committed chunks into `final_path`, build the pivot
@@ -273,7 +284,15 @@ impl SidecarStreamWriter {
     pub fn finalize(self, final_path: &Path, pivot_stride: u32) -> io::Result<()> {
         assert!(pivot_stride > 0, "pivot_stride must be positive");
 
-        let n_records: u64 = self.chunks.iter().map(|(_, n)| *n).sum();
+        // Take the chunk list out of the mutex by consuming self. Sort
+        // by chunk path so the merge sees chunks in a deterministic
+        // order — under parallel `append_chunk` calls the push order
+        // is non-deterministic, but the chunk filename embeds its
+        // atomically-allocated index, giving a stable sort key.
+        let mut chunks = self.chunks.into_inner().unwrap_or_default();
+        chunks.sort_by(|a, b| a.0.cmp(&b.0));
+
+        let n_records: u64 = chunks.iter().map(|(_, n)| *n).sum();
         let pivot_count = if n_records == 0 {
             0u32
         } else {
@@ -292,8 +311,8 @@ impl SidecarStreamWriter {
         };
 
         // Open chunk readers; collect first-record peeks for the heap.
-        let mut readers: Vec<ChunkReader> = Vec::with_capacity(self.chunks.len());
-        for (path, n) in &self.chunks {
+        let mut readers: Vec<ChunkReader> = Vec::with_capacity(chunks.len());
+        for (path, n) in &chunks {
             if *n == 0 {
                 continue;
             }
@@ -415,7 +434,7 @@ impl SidecarStreamWriter {
 
         // Clean up chunk temp files; only after the rename succeeds so
         // a crashed finalize stays resumable.
-        for (path, _) in &self.chunks {
+        for (path, _) in &chunks {
             let _ = std::fs::remove_file(path);
         }
         // Best-effort: remove scratch dir if empty. Caller may share it
@@ -937,7 +956,7 @@ mod tests {
 
         // Streaming writer: chunk into 7 pieces of varying sizes, with
         // overlapping source_id ranges to mimic cell ordering.
-        let mut writer = SidecarStreamWriter::new(&scratch).unwrap();
+        let writer = SidecarStreamWriter::new(&scratch).unwrap();
         let chunks: Vec<Vec<SidecarRecord>> = (0..7)
             .map(|c| {
                 records
@@ -996,7 +1015,7 @@ mod tests {
 
         // Phase 1: writer crashes after committing the first 3 chunks.
         {
-            let mut writer = SidecarStreamWriter::new(&scratch).unwrap();
+            let writer = SidecarStreamWriter::new(&scratch).unwrap();
             for c in 0..3 {
                 let lo = c * 100;
                 let hi = lo + 100;
@@ -1008,7 +1027,7 @@ mod tests {
 
         // Phase 2: resume, add the remaining chunks, finalize.
         {
-            let mut writer = SidecarStreamWriter::resume(&scratch).unwrap();
+            let writer = SidecarStreamWriter::resume(&scratch).unwrap();
             assert_eq!(writer.chunk_count(), 3);
             assert_eq!(writer.total_records(), split as u64);
             for c in 3..5 {
@@ -1040,7 +1059,7 @@ mod tests {
         let scratch = tmp_dir("skip-scratch");
         let final_path = tmp_dir("skip-final");
 
-        let mut writer = SidecarStreamWriter::new(&scratch).unwrap();
+        let writer = SidecarStreamWriter::new(&scratch).unwrap();
         writer.append_chunk(Vec::new()).unwrap();
         writer.append_chunk(vec![rec(42, 0.0, 0.0)]).unwrap();
         writer.append_chunk(Vec::new()).unwrap();

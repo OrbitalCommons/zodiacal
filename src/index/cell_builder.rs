@@ -41,6 +41,10 @@ use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU32, Ordering};
+
+use rayon::prelude::*;
 
 use crate::geom::sphere::{angular_distance, radec_to_xyz, star_midpoint};
 use crate::quads::{Code, DIMCODES, DIMQUADS, Quad, compute_canonical_code};
@@ -146,8 +150,11 @@ fn cell_artifact_path(work_dir: &Path, cell_id: u32) -> PathBuf {
 /// exist on disk in `work_dir` (the manifest + on-disk artifacts are
 /// the durable state).
 ///
-/// Cells are processed sequentially. Parallelism is a follow-up — the
-/// per-cell artifact writer + manifest are designed to allow it.
+/// Cells are processed in parallel via the ambient `rayon` thread
+/// pool (so callers may control thread count by installing the work
+/// inside a custom `rayon::ThreadPool`). Output is byte-stable
+/// regardless of thread count or completion order — see
+/// `parallel_build_matches_sequential` for the verification.
 pub fn build_index_cell_driven<S: CellStarSource + ?Sized>(
     source: &S,
     config: &CellBuildConfig,
@@ -175,56 +182,81 @@ pub fn build_index_cell_driven<S: CellStarSource + ?Sized>(
     std::fs::create_dir_all(&cell_artifacts_dir)?;
     std::fs::create_dir_all(&sidecar_chunks_dir)?;
 
-    let mut manifest = BuildManifest::load(work_dir)?.unwrap_or_default();
-    let mut sidecar_writer = if manifest.completed_cells.is_empty() {
+    let initial_manifest = BuildManifest::load(work_dir)?.unwrap_or_default();
+    let sidecar_writer = if initial_manifest.completed_cells.is_empty() {
         SidecarStreamWriter::new(&sidecar_chunks_dir)?
     } else {
         SidecarStreamWriter::resume(&sidecar_chunks_dir)?
     };
+    let manifest = Mutex::new(initial_manifest);
 
     let cell_count = source.cell_count();
-    let mut summary = BuildSummary::default();
+    let n_resumed = AtomicU32::new(0);
+    let n_processed = AtomicU32::new(0);
+    let n_empty = AtomicU32::new(0);
 
-    for cell_id in 0..cell_count {
-        if manifest.is_complete(cell_id) {
-            summary.n_cells_resumed += 1;
-            continue;
-        }
+    // Cells are independent: per-cell I/O, quad building, artifact
+    // writing, and sidecar chunk emit all touch unique paths or
+    // shared-but-thread-safe state. The only contended resource is
+    // the manifest mutex, held briefly per per-cell commit.
+    //
+    // Output stability under parallelism: the SidecarStreamWriter's
+    // chunk indices come from an atomic counter (so per-cell chunk
+    // *paths* differ between runs), but `finalize` sorts chunks by
+    // path and the k-way merge produces a stream sorted by source_id
+    // — so the final `.zdcl.gaia` bytes are independent of cell
+    // completion order. Per-cell index artifacts are named by
+    // `cell_id` (stable), and `finalize_index` iterates them in the
+    // manifest's `BTreeSet` cell-id order.
+    (0..cell_count)
+        .into_par_iter()
+        .try_for_each(|cell_id| -> io::Result<()> {
+            if manifest.lock().unwrap().is_complete(cell_id) {
+                n_resumed.fetch_add(1, Ordering::Relaxed);
+                return Ok(());
+            }
 
-        let stars = source.stars_in_cell(cell_id)?;
-        if stars.is_empty() {
-            // Mark complete (with zero stats) so a subsequent rerun
-            // doesn't re-query an empty cell.
-            manifest.commit_cell(work_dir, cell_id, CellStats::default())?;
-            summary.n_cells_empty += 1;
-            continue;
-        }
+            let stars = source.stars_in_cell(cell_id)?;
+            if stars.is_empty() {
+                manifest
+                    .lock()
+                    .unwrap()
+                    .commit_cell(work_dir, cell_id, CellStats::default())?;
+                n_empty.fetch_add(1, Ordering::Relaxed);
+                return Ok(());
+            }
 
-        let (cell_quads, cell_codes) = build_quads_for_cell(&stars, config);
+            let (cell_quads, cell_codes) = build_quads_for_cell(&stars, config);
 
-        // Persist per-cell index artifact.
-        let artifact_path = cell_artifact_path(work_dir, cell_id);
-        write_cell_artifact(&artifact_path, &stars, &cell_quads, &cell_codes)?;
+            let artifact_path = cell_artifact_path(work_dir, cell_id);
+            write_cell_artifact(&artifact_path, &stars, &cell_quads, &cell_codes)?;
 
-        // Append sidecar chunk (records sorted internally by the writer).
-        let sidecar_records: Vec<SidecarRecord> = stars.iter().map(|s| s.sidecar).collect();
-        sidecar_writer.append_chunk(sidecar_records)?;
+            let sidecar_records: Vec<SidecarRecord> = stars.iter().map(|s| s.sidecar).collect();
+            sidecar_writer.append_chunk(sidecar_records)?;
 
-        // Atomically commit the cell to the manifest. From here, a
-        // crash can resume cleanly because the artifact + chunk + this
-        // manifest update are all durable.
-        let stats = CellStats {
-            n_stars: stars.len() as u64,
-            n_quads: cell_quads.len() as u64,
-        };
-        manifest.commit_cell(work_dir, cell_id, stats)?;
+            let stats = CellStats {
+                n_stars: stars.len() as u64,
+                n_quads: cell_quads.len() as u64,
+            };
+            manifest
+                .lock()
+                .unwrap()
+                .commit_cell(work_dir, cell_id, stats)?;
 
-        summary.n_cells_processed += 1;
-    }
+            n_processed.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        })?;
+
+    let manifest = manifest.into_inner().unwrap();
+    let summary = BuildSummary {
+        n_cells_processed: n_processed.load(Ordering::Relaxed),
+        n_cells_resumed: n_resumed.load(Ordering::Relaxed),
+        n_cells_empty: n_empty.load(Ordering::Relaxed),
+        n_stars: manifest.n_stars,
+        n_quads: manifest.n_quads,
+    };
 
     // Finalize: assemble the .zdcl from per-cell artifacts.
-    summary.n_stars = manifest.n_stars;
-    summary.n_quads = manifest.n_quads;
     finalize_index(&manifest, work_dir, paths, config)?;
 
     // Finalize the sidecar.
@@ -842,26 +874,21 @@ mod tests {
     /// the resumed run produces the same final output as a clean run.
     #[test]
     fn resumes_after_simulated_crash() {
-        use std::cell::Cell;
+        use std::sync::atomic::AtomicBool;
 
         struct CrashOnce {
-            crashed: Cell<bool>,
+            crashed: AtomicBool,
             crash_at_cell: u32,
             n_cells: u32,
             stars_per_cell: usize,
         }
-
-        // SAFETY: tests are single-threaded; Cell is sufficient. The
-        // trait requires Sync, so wrap in a stub Sync impl.
-        unsafe impl Sync for CrashOnce {}
 
         impl CellStarSource for CrashOnce {
             fn cell_count(&self) -> u32 {
                 self.n_cells
             }
             fn stars_in_cell(&self, cell_id: u32) -> io::Result<Vec<CellStar>> {
-                if cell_id == self.crash_at_cell && !self.crashed.get() {
-                    self.crashed.set(true);
+                if cell_id == self.crash_at_cell && !self.crashed.swap(true, Ordering::Relaxed) {
                     return Err(io::Error::other("simulated crash"));
                 }
                 let mut out = Vec::with_capacity(self.stars_per_cell);
@@ -881,10 +908,13 @@ mod tests {
         let paths = make_paths("resume");
         let cfg = default_config();
 
-        // Phase 1: crash partway. Source crashes on cell 2, so cells
-        // 0 and 1 should already be committed when we abort.
+        // Phase 1: crash partway. The source crashes on cell 2 the
+        // first time; under parallel execution other cells may finish
+        // concurrently, so we don't assert an exact post-crash
+        // committed count — only that *the crashing cell itself* is
+        // not in the manifest, and that the manifest survives.
         let source = CrashOnce {
-            crashed: Cell::new(false),
+            crashed: AtomicBool::new(false),
             crash_at_cell: 2,
             n_cells: 4,
             stars_per_cell: 6,
@@ -892,26 +922,30 @@ mod tests {
         let err = build_index_cell_driven(&source, &cfg, &paths).unwrap_err();
         assert!(err.to_string().contains("simulated crash"));
 
-        // Manifest should record the committed cells.
         let manifest = BuildManifest::load(&paths.work_dir)
             .unwrap()
             .expect("manifest must persist after crash");
-        assert_eq!(manifest.completed_cells.len(), 2, "{:?}", manifest);
-        assert!(manifest.is_complete(0));
-        assert!(manifest.is_complete(1));
-        assert!(!manifest.is_complete(2));
+        assert!(
+            !manifest.is_complete(2),
+            "crashing cell should not be marked complete: {manifest:?}",
+        );
 
-        // Phase 2: resume — same paths, fresh `crashed` flag so the
-        // source doesn't crash again.
+        // Phase 2: resume — `crashed` already set, so the source
+        // doesn't crash again.
         let source = CrashOnce {
-            crashed: Cell::new(true), // already "crashed once"
+            crashed: AtomicBool::new(true),
             crash_at_cell: 2,
             n_cells: 4,
             stars_per_cell: 6,
         };
         let summary = build_index_cell_driven(&source, &cfg, &paths).unwrap();
-        assert_eq!(summary.n_cells_resumed, 2);
-        assert_eq!(summary.n_cells_processed, 2);
+        // Total work covers every cell exactly once across the two
+        // phases. Per-phase split depends on parallel scheduling.
+        assert_eq!(
+            summary.n_cells_processed + summary.n_cells_resumed,
+            4,
+            "every cell must be accounted for after resume: {summary:?}",
+        );
         assert_eq!(summary.n_stars, 24);
 
         // Verify resumed final output matches a clean rebuild byte-for-byte.
@@ -922,7 +956,7 @@ mod tests {
 
         let clean_paths = make_paths("resume-clean");
         let clean_source = CrashOnce {
-            crashed: Cell::new(true),
+            crashed: AtomicBool::new(true),
             crash_at_cell: u32::MAX,
             n_cells: 4,
             stars_per_cell: 6,
@@ -1021,5 +1055,66 @@ mod tests {
 
         std::fs::remove_file(&paths.final_index).ok();
         std::fs::remove_file(&paths.final_sidecar).ok();
+    }
+
+    /// Output stability under parallelism: building the same source
+    /// once on a single-threaded rayon pool and once on a multi-thread
+    /// pool must produce byte-identical `.zdcl` and `.zdcl.gaia`
+    /// files. This is the invariant that lets us parallelize without
+    /// losing reproducibility.
+    ///
+    /// Mechanism behind the guarantee: per-cell artifact files are
+    /// named by `cell_id` (stable), `finalize_index` iterates the
+    /// manifest's `BTreeSet` of cell_ids (sorted), and the streaming
+    /// sidecar's k-way merge sorts chunks by path before merging
+    /// (paths embed atomically-allocated chunk indices, so the sort
+    /// order is reproducible) and emits records in source_id order.
+    #[test]
+    fn parallel_build_matches_sequential() {
+        let source = SyntheticSource {
+            n_cells: 8,
+            stars_per_cell: 12,
+        };
+        let cfg = default_config();
+
+        let seq_paths = make_paths("stability-seq");
+        let par_paths = make_paths("stability-par");
+
+        // Single-thread pool: forced sequential cell processing.
+        let seq_pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap();
+        seq_pool
+            .install(|| build_index_cell_driven(&source, &cfg, &seq_paths))
+            .unwrap();
+
+        // 4-thread pool: cells dispatch concurrently.
+        let par_pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .unwrap();
+        par_pool
+            .install(|| build_index_cell_driven(&source, &cfg, &par_paths))
+            .unwrap();
+
+        let seq_zdcl = std::fs::read(&seq_paths.final_index).unwrap();
+        let par_zdcl = std::fs::read(&par_paths.final_index).unwrap();
+        let seq_sidecar = std::fs::read(&seq_paths.final_sidecar).unwrap();
+        let par_sidecar = std::fs::read(&par_paths.final_sidecar).unwrap();
+
+        std::fs::remove_file(&seq_paths.final_index).ok();
+        std::fs::remove_file(&par_paths.final_index).ok();
+        std::fs::remove_file(&seq_paths.final_sidecar).ok();
+        std::fs::remove_file(&par_paths.final_sidecar).ok();
+
+        assert_eq!(
+            seq_zdcl.len(),
+            par_zdcl.len(),
+            "zdcl byte length differs between sequential and parallel runs",
+        );
+        assert_eq!(seq_zdcl, par_zdcl, ".zdcl bytes diverged");
+        assert_eq!(seq_sidecar.len(), par_sidecar.len());
+        assert_eq!(seq_sidecar, par_sidecar, ".zdcl.gaia bytes diverged");
     }
 }
