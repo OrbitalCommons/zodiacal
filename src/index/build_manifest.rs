@@ -180,20 +180,27 @@ impl BuildManifest {
         self.completed_cells.contains(&cell_id)
     }
 
-    /// Initialize `completed_per_band` to `n_bands` empty sets, *if* it
-    /// is currently empty. Idempotent: calling this once at the start
-    /// of a multi-band build is safe; calling it again on resume with
-    /// the same `n_bands` is a no-op.
+    /// Resize `completed_per_band` to exactly `n_bands` entries, padding
+    /// with empty `BTreeSet`s and discarding any extra entries beyond
+    /// `n_bands`.
     ///
-    /// This intentionally does **not** truncate or grow a non-empty
-    /// `completed_per_band`. A multi-band build that wants to rebuild
-    /// at a different band count must clear `completed_per_band`
-    /// explicitly first; otherwise resume would silently change band
-    /// semantics.
+    /// Intended to be called once per build session before any
+    /// [`BuildManifest::mark_band_complete`] calls, with the *current*
+    /// band count from the bundle manifest (which is the source of
+    /// truth for band layout). The `completed_per_band` field is a
+    /// build-time scratchpad, so reconciling it to the current
+    /// `n_bands` is always safe.
+    ///
+    /// If a manifest is loaded from disk with a stale
+    /// `completed_per_band.len()` (because the band layout has changed
+    /// since the previous run), calling `ensure_per_band` reconciles
+    /// it: growing with empty sets when `n_bands` is larger, or
+    /// truncating when `n_bands` is smaller. Stale completion records
+    /// for removed bands are discarded by design — the bundle
+    /// manifest's bands array is authoritative, and a band that no
+    /// longer exists has no meaningful "completed" state.
     pub fn ensure_per_band(&mut self, n_bands: usize) {
-        if self.completed_per_band.is_empty() && n_bands > 0 {
-            self.completed_per_band.resize_with(n_bands, BTreeSet::new);
-        }
+        self.completed_per_band.resize_with(n_bands, BTreeSet::new);
     }
 
     /// True if cell `cell_id`'s band `band_idx` has been committed.
@@ -430,5 +437,86 @@ mod tests {
         m.ensure_per_band(4);
         assert_eq!(m.completed_per_band.len(), 4);
         assert!(m.is_band_complete(11, 2));
+    }
+
+    #[test]
+    fn ensure_per_band_from_empty_produces_n_empty_sets() {
+        let mut m = BuildManifest::default();
+        assert!(m.completed_per_band.is_empty());
+
+        m.ensure_per_band(5);
+        assert_eq!(m.completed_per_band.len(), 5);
+        for set in &m.completed_per_band {
+            assert!(set.is_empty());
+        }
+    }
+
+    #[test]
+    fn ensure_per_band_same_size_preserves_contents() {
+        let mut m = BuildManifest::default();
+        m.ensure_per_band(3);
+        m.mark_band_complete(1, 0);
+        m.mark_band_complete(2, 1);
+        m.mark_band_complete(3, 2);
+
+        m.ensure_per_band(3);
+        assert_eq!(m.completed_per_band.len(), 3);
+        assert!(m.is_band_complete(1, 0));
+        assert!(m.is_band_complete(2, 1));
+        assert!(m.is_band_complete(3, 2));
+    }
+
+    #[test]
+    fn ensure_per_band_grows_preserving_existing_entries() {
+        let mut m = BuildManifest::default();
+        m.ensure_per_band(3);
+        m.mark_band_complete(1, 0);
+        m.mark_band_complete(2, 1);
+        m.mark_band_complete(3, 2);
+
+        m.ensure_per_band(5);
+        assert_eq!(m.completed_per_band.len(), 5);
+        // First N entries preserved.
+        assert!(m.is_band_complete(1, 0));
+        assert!(m.is_band_complete(2, 1));
+        assert!(m.is_band_complete(3, 2));
+        // New entries are empty.
+        assert!(m.completed_per_band[3].is_empty());
+        assert!(m.completed_per_band[4].is_empty());
+    }
+
+    #[test]
+    fn ensure_per_band_truncates_discarding_extra_entries() {
+        let mut m = BuildManifest::default();
+        m.ensure_per_band(4);
+        m.mark_band_complete(1, 0);
+        m.mark_band_complete(2, 1);
+        m.mark_band_complete(3, 2);
+        m.mark_band_complete(99, 3); // last band — will be discarded.
+
+        m.ensure_per_band(3);
+        assert_eq!(m.completed_per_band.len(), 3);
+        // Surviving bands keep their contents.
+        assert!(m.is_band_complete(1, 0));
+        assert!(m.is_band_complete(2, 1));
+        assert!(m.is_band_complete(3, 2));
+        // The discarded band's entries are gone — the band index is
+        // out of range now, so the query returns false.
+        assert!(!m.is_band_complete(99, 3));
+    }
+
+    #[test]
+    fn mark_band_complete_works_after_ensure_per_band() {
+        let mut m = BuildManifest::default();
+        m.ensure_per_band(4);
+
+        // Marking any band index < n_bands must succeed without
+        // panicking, for any cell_id.
+        for band_idx in 0..4u32 {
+            m.mark_band_complete(100 + band_idx, band_idx);
+        }
+        for band_idx in 0..4u32 {
+            assert!(m.is_band_complete(100 + band_idx, band_idx));
+        }
     }
 }
