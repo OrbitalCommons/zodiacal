@@ -9,3 +9,4 @@
 
 pub mod accessor;
 pub mod gaia_shard;
+pub mod quad_shard;
