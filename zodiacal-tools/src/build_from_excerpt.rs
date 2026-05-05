@@ -26,49 +26,197 @@ use zodiacal::index::cell_builder::{
 };
 use zodiacal::refinement::SidecarRecord;
 
-/// CLI configuration for `build-from-excerpt`.
+/// Validated configuration for [`run`]. Construct via
+/// [`BuildFromExcerptConfig::builder`] — fields are private so the
+/// only path to a value goes through builder validation, and `run`
+/// trusts what it gets.
+#[derive(Debug)]
 pub struct BuildFromExcerptConfig {
-    pub excerpt_dir: PathBuf,
-    pub output_prefix: PathBuf,
-    pub work_dir: PathBuf,
-    pub mag_limit: f64,
-    pub max_stars_per_cell: usize,
-    pub quads_per_cell: usize,
-    pub max_reuse: usize,
-    pub scale_lower_arcsec: f64,
-    pub scale_upper_arcsec: f64,
-    pub final_cell_depth: u8,
-    pub pivot_stride: u32,
-    /// Rayon thread pool size; `None` uses rayon's default (all logical cores).
-    pub threads: Option<usize>,
+    excerpt_dir: PathBuf,
+    output_prefix: PathBuf,
+    work_dir: PathBuf,
+    mag_limit: f64,
+    max_stars_per_cell: usize,
+    quads_per_cell: usize,
+    max_reuse: usize,
+    scale_lower_arcsec: f64,
+    scale_upper_arcsec: f64,
+    final_cell_depth: u8,
+    pivot_stride: u32,
+    threads: Option<usize>,
 }
 
-/// Top-level entry point.
-pub fn run(cfg: &BuildFromExcerptConfig) -> Result<BuildSummary, String> {
-    if !cfg.mag_limit.is_finite() || cfg.mag_limit <= 0.0 {
-        return Err(format!("invalid --mag-limit: {}", cfg.mag_limit));
+impl BuildFromExcerptConfig {
+    pub fn builder() -> BuildFromExcerptConfigBuilder {
+        BuildFromExcerptConfigBuilder::default()
     }
-    if cfg.max_stars_per_cell == 0 {
-        return Err("--max-stars-per-cell must be positive".into());
+}
+
+/// Fluent builder for [`BuildFromExcerptConfig`]. Required fields
+/// (`excerpt_dir`, `output_prefix`, `work_dir`, `mag_limit`,
+/// `max_stars_per_cell`, `quads_per_cell`, `max_reuse`,
+/// `scale_lower_arcsec`, `scale_upper_arcsec`, `final_cell_depth`,
+/// `pivot_stride`) error out at `build()` if not set. Defaults for
+/// optional knobs live in the clap layer (`main.rs`), not here, so
+/// the API boundary stays declarative.
+#[derive(Default)]
+pub struct BuildFromExcerptConfigBuilder {
+    excerpt_dir: Option<PathBuf>,
+    output_prefix: Option<PathBuf>,
+    work_dir: Option<PathBuf>,
+    mag_limit: Option<f64>,
+    max_stars_per_cell: Option<usize>,
+    quads_per_cell: Option<usize>,
+    max_reuse: Option<usize>,
+    scale_lower_arcsec: Option<f64>,
+    scale_upper_arcsec: Option<f64>,
+    final_cell_depth: Option<u8>,
+    pivot_stride: Option<u32>,
+    threads: Option<usize>,
+}
+
+impl BuildFromExcerptConfigBuilder {
+    pub fn excerpt_dir(mut self, v: PathBuf) -> Self {
+        self.excerpt_dir = Some(v);
+        self
     }
-    if cfg.quads_per_cell == 0 {
-        return Err("--quads-per-cell must be positive".into());
+    pub fn output_prefix(mut self, v: PathBuf) -> Self {
+        self.output_prefix = Some(v);
+        self
     }
-    if cfg.scale_lower_arcsec <= 0.0 || cfg.scale_upper_arcsec <= cfg.scale_lower_arcsec {
-        return Err(format!(
-            "invalid scale range: lower={}\" upper={}\" (must satisfy 0 < lower < upper)",
-            cfg.scale_lower_arcsec, cfg.scale_upper_arcsec
-        ));
+    pub fn work_dir(mut self, v: PathBuf) -> Self {
+        self.work_dir = Some(v);
+        self
+    }
+    pub fn mag_limit(mut self, v: f64) -> Self {
+        self.mag_limit = Some(v);
+        self
+    }
+    pub fn max_stars_per_cell(mut self, v: usize) -> Self {
+        self.max_stars_per_cell = Some(v);
+        self
+    }
+    pub fn quads_per_cell(mut self, v: usize) -> Self {
+        self.quads_per_cell = Some(v);
+        self
+    }
+    pub fn max_reuse(mut self, v: usize) -> Self {
+        self.max_reuse = Some(v);
+        self
+    }
+    pub fn scale_lower_arcsec(mut self, v: f64) -> Self {
+        self.scale_lower_arcsec = Some(v);
+        self
+    }
+    pub fn scale_upper_arcsec(mut self, v: f64) -> Self {
+        self.scale_upper_arcsec = Some(v);
+        self
+    }
+    pub fn final_cell_depth(mut self, v: u8) -> Self {
+        self.final_cell_depth = Some(v);
+        self
+    }
+    pub fn pivot_stride(mut self, v: u32) -> Self {
+        self.pivot_stride = Some(v);
+        self
+    }
+    pub fn threads(mut self, v: Option<usize>) -> Self {
+        self.threads = v;
+        self
     }
 
+    /// Validate fields and finalise the config. Same checks the
+    /// `run` function used to do up front, hoisted here so a
+    /// constructed `BuildFromExcerptConfig` is always usable.
+    pub fn build(self) -> Result<BuildFromExcerptConfig, String> {
+        let excerpt_dir = self
+            .excerpt_dir
+            .ok_or_else(|| "excerpt_dir is required".to_string())?;
+        let output_prefix = self
+            .output_prefix
+            .ok_or_else(|| "output_prefix is required".to_string())?;
+        let work_dir = self
+            .work_dir
+            .ok_or_else(|| "work_dir is required".to_string())?;
+        let mag_limit = self
+            .mag_limit
+            .ok_or_else(|| "mag_limit is required".to_string())?;
+        let max_stars_per_cell = self
+            .max_stars_per_cell
+            .ok_or_else(|| "max_stars_per_cell is required".to_string())?;
+        let quads_per_cell = self
+            .quads_per_cell
+            .ok_or_else(|| "quads_per_cell is required".to_string())?;
+        let max_reuse = self
+            .max_reuse
+            .ok_or_else(|| "max_reuse is required".to_string())?;
+        let scale_lower_arcsec = self
+            .scale_lower_arcsec
+            .ok_or_else(|| "scale_lower_arcsec is required".to_string())?;
+        let scale_upper_arcsec = self
+            .scale_upper_arcsec
+            .ok_or_else(|| "scale_upper_arcsec is required".to_string())?;
+        let final_cell_depth = self
+            .final_cell_depth
+            .ok_or_else(|| "final_cell_depth is required".to_string())?;
+        let pivot_stride = self
+            .pivot_stride
+            .ok_or_else(|| "pivot_stride is required".to_string())?;
+
+        if !mag_limit.is_finite() || mag_limit <= 0.0 {
+            return Err(format!("invalid mag_limit: {mag_limit}"));
+        }
+        if max_stars_per_cell == 0 {
+            return Err("max_stars_per_cell must be positive".into());
+        }
+        if quads_per_cell == 0 {
+            return Err("quads_per_cell must be positive".into());
+        }
+        if max_reuse == 0 {
+            return Err("max_reuse must be positive".into());
+        }
+        if pivot_stride == 0 {
+            return Err("pivot_stride must be positive".into());
+        }
+        if scale_lower_arcsec <= 0.0 || scale_upper_arcsec <= scale_lower_arcsec {
+            return Err(format!(
+                "invalid scale range: lower={scale_lower_arcsec}\" upper={scale_upper_arcsec}\" \
+                 (must satisfy 0 < lower < upper)",
+            ));
+        }
+
+        Ok(BuildFromExcerptConfig {
+            excerpt_dir,
+            output_prefix,
+            work_dir,
+            mag_limit,
+            max_stars_per_cell,
+            quads_per_cell,
+            max_reuse,
+            scale_lower_arcsec,
+            scale_upper_arcsec,
+            final_cell_depth,
+            pivot_stride,
+            threads: self.threads,
+        })
+    }
+}
+
+/// Top-level entry point. Trusts the config — validation happened in
+/// `BuildFromExcerptConfigBuilder::build`.
+pub fn run(cfg: &BuildFromExcerptConfig) -> Result<BuildSummary, String> {
     if let Some(n) = cfg.threads {
         let _ = rayon::ThreadPoolBuilder::new()
             .num_threads(n)
             .build_global();
     }
 
-    let lazy = LazyLoadingCatalog::<Dr3>::open(&cfg.excerpt_dir)
-        .map_err(|e| format!("LazyLoadingCatalog::open({}): {e}", cfg.excerpt_dir.display()))?;
+    let lazy = LazyLoadingCatalog::<Dr3>::open(&cfg.excerpt_dir).map_err(|e| {
+        format!(
+            "LazyLoadingCatalog::open({}): {e}",
+            cfg.excerpt_dir.display()
+        )
+    })?;
 
     eprintln!(
         "Excerpt: {} ({} cells at HEALPix level {}, {} rows committed)",
@@ -180,7 +328,8 @@ impl CellStarSource for LazyExcerptSource {
         // Max-heap on magnitude: faintest at top → ready to evict when
         // a brighter row arrives. Same shape as `HeapStar` in the
         // in-process uniformizer (`src/index/builder.rs`).
-        let mut heap: BinaryHeap<MagOrdered> = BinaryHeap::with_capacity(self.max_stars_per_cell + 1);
+        let mut heap: BinaryHeap<MagOrdered> =
+            BinaryHeap::with_capacity(self.max_stars_per_cell + 1);
         for r in it {
             let entry = r.map_err(|e| {
                 std::io::Error::other(format!("entries_in_cell({cell_id}) row: {e}"))
@@ -281,52 +430,76 @@ fn with_suffix(prefix: &std::path::Path, suffix: &str) -> PathBuf {
 mod tests {
     use super::*;
 
-    #[test]
-    fn rejects_invalid_mag_limit() {
-        let cfg = base_cfg(f64::NAN);
-        assert!(run(&cfg).unwrap_err().contains("--mag-limit"));
+    fn valid_builder() -> BuildFromExcerptConfigBuilder {
+        BuildFromExcerptConfig::builder()
+            .excerpt_dir(PathBuf::from("/nonexistent"))
+            .output_prefix(PathBuf::from("/tmp/_zte_test"))
+            .work_dir(PathBuf::from("/tmp/_zte_work"))
+            .mag_limit(14.0)
+            .max_stars_per_cell(100)
+            .quads_per_cell(10)
+            .max_reuse(8)
+            .scale_lower_arcsec(30.0)
+            .scale_upper_arcsec(1800.0)
+            .final_cell_depth(5)
+            .pivot_stride(4096)
+            .threads(Some(1))
     }
 
     #[test]
-    fn rejects_zero_max_stars_per_cell() {
-        let mut cfg = base_cfg(14.0);
-        cfg.max_stars_per_cell = 0;
-        assert!(
-            run(&cfg)
-                .unwrap_err()
-                .contains("max-stars-per-cell")
-        );
+    fn build_rejects_nan_mag_limit() {
+        let err = valid_builder().mag_limit(f64::NAN).build().unwrap_err();
+        assert!(err.contains("mag_limit"), "got: {err}");
     }
 
     #[test]
-    fn rejects_zero_quads_per_cell() {
-        let mut cfg = base_cfg(14.0);
-        cfg.quads_per_cell = 0;
-        assert!(run(&cfg).unwrap_err().contains("quads-per-cell"));
+    fn build_rejects_negative_mag_limit() {
+        let err = valid_builder().mag_limit(-1.0).build().unwrap_err();
+        assert!(err.contains("mag_limit"), "got: {err}");
     }
 
     #[test]
-    fn rejects_inverted_scale_range() {
-        let mut cfg = base_cfg(14.0);
-        cfg.scale_lower_arcsec = 1800.0;
-        cfg.scale_upper_arcsec = 30.0;
-        assert!(run(&cfg).unwrap_err().contains("scale range"));
+    fn build_rejects_zero_max_stars_per_cell() {
+        let err = valid_builder().max_stars_per_cell(0).build().unwrap_err();
+        assert!(err.contains("max_stars_per_cell"), "got: {err}");
     }
 
-    fn base_cfg(mag_limit: f64) -> BuildFromExcerptConfig {
-        BuildFromExcerptConfig {
-            excerpt_dir: PathBuf::from("/nonexistent"),
-            output_prefix: PathBuf::from("/tmp/_zte_test"),
-            work_dir: PathBuf::from("/tmp/_zte_work"),
-            mag_limit,
-            max_stars_per_cell: 100,
-            quads_per_cell: 10,
-            max_reuse: 8,
-            scale_lower_arcsec: 30.0,
-            scale_upper_arcsec: 1800.0,
-            final_cell_depth: 5,
-            pivot_stride: 4096,
-            threads: Some(1),
-        }
+    #[test]
+    fn build_rejects_zero_quads_per_cell() {
+        let err = valid_builder().quads_per_cell(0).build().unwrap_err();
+        assert!(err.contains("quads_per_cell"), "got: {err}");
+    }
+
+    #[test]
+    fn build_rejects_zero_max_reuse() {
+        let err = valid_builder().max_reuse(0).build().unwrap_err();
+        assert!(err.contains("max_reuse"), "got: {err}");
+    }
+
+    #[test]
+    fn build_rejects_zero_pivot_stride() {
+        let err = valid_builder().pivot_stride(0).build().unwrap_err();
+        assert!(err.contains("pivot_stride"), "got: {err}");
+    }
+
+    #[test]
+    fn build_rejects_inverted_scale_range() {
+        let err = valid_builder()
+            .scale_lower_arcsec(1800.0)
+            .scale_upper_arcsec(30.0)
+            .build()
+            .unwrap_err();
+        assert!(err.contains("scale range"), "got: {err}");
+    }
+
+    #[test]
+    fn build_rejects_missing_required_fields() {
+        let err = BuildFromExcerptConfig::builder().build().unwrap_err();
+        assert!(err.contains("excerpt_dir"), "got: {err}");
+    }
+
+    #[test]
+    fn build_succeeds_on_valid_inputs() {
+        valid_builder().build().expect("valid builder must succeed");
     }
 }

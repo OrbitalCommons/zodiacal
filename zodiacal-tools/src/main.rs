@@ -166,15 +166,22 @@ fn main() {
             cell_depth,
             threads,
         } => {
-            let cfg = BuildFromShardsConfig {
-                shards_dir: shards_dir.clone(),
-                output_prefix: output_prefix.clone(),
-                mag_limit: *mag_limit,
-                scale_lower_arcsec: *scale_lower,
-                scale_upper_arcsec: *scale_upper,
-                max_quads: *max_quads,
-                cell_depth: *cell_depth,
-                threads: *threads,
+            let cfg = match BuildFromShardsConfig::builder()
+                .shards_dir(shards_dir.clone())
+                .output_prefix(output_prefix.clone())
+                .mag_limit(*mag_limit)
+                .scale_lower_arcsec(*scale_lower)
+                .scale_upper_arcsec(*scale_upper)
+                .max_quads(*max_quads)
+                .cell_depth(*cell_depth)
+                .threads(*threads)
+                .build()
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("build-from-shards: invalid config: {e}");
+                    process::exit(1);
+                }
             };
             if let Err(e) = run_build_from_shards(&cfg) {
                 eprintln!("build-from-shards failed: {e}");
@@ -195,19 +202,26 @@ fn main() {
             pivot_stride,
             threads,
         } => {
-            let cfg = BuildFromExcerptConfig {
-                excerpt_dir: excerpt_dir.clone(),
-                output_prefix: output_prefix.clone(),
-                work_dir: work_dir.clone(),
-                mag_limit: *mag_limit,
-                max_stars_per_cell: *max_stars_per_cell,
-                quads_per_cell: *quads_per_cell,
-                max_reuse: *max_reuse,
-                scale_lower_arcsec: *scale_lower,
-                scale_upper_arcsec: *scale_upper,
-                final_cell_depth: *cell_depth,
-                pivot_stride: *pivot_stride,
-                threads: *threads,
+            let cfg = match BuildFromExcerptConfig::builder()
+                .excerpt_dir(excerpt_dir.clone())
+                .output_prefix(output_prefix.clone())
+                .work_dir(work_dir.clone())
+                .mag_limit(*mag_limit)
+                .max_stars_per_cell(*max_stars_per_cell)
+                .quads_per_cell(*quads_per_cell)
+                .max_reuse(*max_reuse)
+                .scale_lower_arcsec(*scale_lower)
+                .scale_upper_arcsec(*scale_upper)
+                .final_cell_depth(*cell_depth)
+                .pivot_stride(*pivot_stride)
+                .threads(*threads)
+                .build()
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("build-from-excerpt: invalid config: {e}");
+                    process::exit(1);
+                }
             };
             if let Err(e) = run_build_from_excerpt(&cfg) {
                 eprintln!("build-from-excerpt failed: {e}");

@@ -126,41 +126,141 @@ fn read_shard(path: &Path, mag_limit: f64) -> Result<Vec<ShardRow>, String> {
     Ok(out)
 }
 
-/// Configuration for `run`.
+/// Validated configuration for [`run`].
+///
+/// Construct via [`BuildFromShardsConfig::builder`]. Fields are
+/// private so the only way to obtain a value is through the builder,
+/// which validates on `build()` — `run` then trusts every field.
 ///
 /// `shards_dir = None` tells the tool to use the shard set cached by
 /// `starfield-gaia` (i.e. files under `~/.cache/starfield/gaia/dr3/`).
+#[derive(Debug)]
 pub struct BuildFromShardsConfig {
-    pub shards_dir: Option<PathBuf>,
-    pub output_prefix: PathBuf,
-    pub mag_limit: f64,
-    /// Lower scale bound in arcseconds.
-    pub scale_lower_arcsec: f64,
-    /// Upper scale bound in arcseconds.
-    pub scale_upper_arcsec: f64,
-    pub max_quads: usize,
-    pub cell_depth: u8,
-    /// Rayon thread pool size; pass `None` to use rayon's default.
-    pub threads: Option<usize>,
+    shards_dir: Option<PathBuf>,
+    output_prefix: PathBuf,
+    mag_limit: f64,
+    scale_lower_arcsec: f64,
+    scale_upper_arcsec: f64,
+    max_quads: usize,
+    cell_depth: u8,
+    threads: Option<usize>,
 }
 
-/// Top-level entry point.
-pub fn run(cfg: &BuildFromShardsConfig) -> Result<(), String> {
-    if !cfg.mag_limit.is_finite() || cfg.mag_limit > MAX_MAG_LIMIT {
-        return Err(format!(
-            "--mag-limit {} exceeds hard cap {}; v1 sidecar writer holds all records in RAM, \
-             and going deeper than ~17 won't fit on a 64 GB box. Either tighten the limit or \
-             wait for the streaming sidecar writer.",
-            cfg.mag_limit, MAX_MAG_LIMIT,
-        ));
+impl BuildFromShardsConfig {
+    /// Begin assembling a config; call [`BuildFromShardsConfigBuilder::build`]
+    /// to validate and finalise.
+    pub fn builder() -> BuildFromShardsConfigBuilder {
+        BuildFromShardsConfigBuilder::default()
     }
-    if cfg.scale_lower_arcsec <= 0.0 || cfg.scale_upper_arcsec <= cfg.scale_lower_arcsec {
-        return Err(format!(
-            "invalid scale range: lower={}\" upper={}\" (must satisfy 0 < lower < upper)",
-            cfg.scale_lower_arcsec, cfg.scale_upper_arcsec
-        ));
+}
+
+/// Fluent builder for [`BuildFromShardsConfig`]. Required fields
+/// (`output_prefix`, `mag_limit`, `scale_lower_arcsec`,
+/// `scale_upper_arcsec`, `max_quads`, `cell_depth`) error out at
+/// `build()` if not set; optional fields (`shards_dir`, `threads`)
+/// default to `None`.
+#[derive(Default)]
+pub struct BuildFromShardsConfigBuilder {
+    shards_dir: Option<PathBuf>,
+    output_prefix: Option<PathBuf>,
+    mag_limit: Option<f64>,
+    scale_lower_arcsec: Option<f64>,
+    scale_upper_arcsec: Option<f64>,
+    max_quads: Option<usize>,
+    cell_depth: Option<u8>,
+    threads: Option<usize>,
+}
+
+impl BuildFromShardsConfigBuilder {
+    pub fn shards_dir(mut self, v: Option<PathBuf>) -> Self {
+        self.shards_dir = v;
+        self
+    }
+    pub fn output_prefix(mut self, v: PathBuf) -> Self {
+        self.output_prefix = Some(v);
+        self
+    }
+    pub fn mag_limit(mut self, v: f64) -> Self {
+        self.mag_limit = Some(v);
+        self
+    }
+    pub fn scale_lower_arcsec(mut self, v: f64) -> Self {
+        self.scale_lower_arcsec = Some(v);
+        self
+    }
+    pub fn scale_upper_arcsec(mut self, v: f64) -> Self {
+        self.scale_upper_arcsec = Some(v);
+        self
+    }
+    pub fn max_quads(mut self, v: usize) -> Self {
+        self.max_quads = Some(v);
+        self
+    }
+    pub fn cell_depth(mut self, v: u8) -> Self {
+        self.cell_depth = Some(v);
+        self
+    }
+    pub fn threads(mut self, v: Option<usize>) -> Self {
+        self.threads = v;
+        self
     }
 
+    /// Validate fields and produce a [`BuildFromShardsConfig`]. The
+    /// checks here used to live at the top of `run`; lifting them
+    /// into the builder means a constructed config is always usable.
+    pub fn build(self) -> Result<BuildFromShardsConfig, String> {
+        let output_prefix = self
+            .output_prefix
+            .ok_or_else(|| "output_prefix is required".to_string())?;
+        let mag_limit = self
+            .mag_limit
+            .ok_or_else(|| "mag_limit is required".to_string())?;
+        let scale_lower_arcsec = self
+            .scale_lower_arcsec
+            .ok_or_else(|| "scale_lower_arcsec is required".to_string())?;
+        let scale_upper_arcsec = self
+            .scale_upper_arcsec
+            .ok_or_else(|| "scale_upper_arcsec is required".to_string())?;
+        let max_quads = self
+            .max_quads
+            .ok_or_else(|| "max_quads is required".to_string())?;
+        let cell_depth = self
+            .cell_depth
+            .ok_or_else(|| "cell_depth is required".to_string())?;
+
+        if !mag_limit.is_finite() || mag_limit > MAX_MAG_LIMIT {
+            return Err(format!(
+                "--mag-limit {mag_limit} exceeds hard cap {MAX_MAG_LIMIT}; v1 sidecar writer holds \
+                 all records in RAM, and going deeper than ~17 won't fit on a 64 GB box. Either \
+                 tighten the limit or wait for the streaming sidecar writer.",
+            ));
+        }
+        if scale_lower_arcsec <= 0.0 || scale_upper_arcsec <= scale_lower_arcsec {
+            return Err(format!(
+                "invalid scale range: lower={scale_lower_arcsec}\" upper={scale_upper_arcsec}\" \
+                 (must satisfy 0 < lower < upper)",
+            ));
+        }
+        if max_quads == 0 {
+            return Err("max_quads must be positive".into());
+        }
+
+        Ok(BuildFromShardsConfig {
+            shards_dir: self.shards_dir,
+            output_prefix,
+            mag_limit,
+            scale_lower_arcsec,
+            scale_upper_arcsec,
+            max_quads,
+            cell_depth,
+            threads: self.threads,
+        })
+    }
+}
+
+/// Top-level entry point. Trusts the config — validation happened at
+/// `BuildFromShardsConfigBuilder::build` time.
+pub fn run(cfg: &BuildFromShardsConfig) -> Result<(), String> {
     let t0 = Instant::now();
 
     // Resolve shards. If --shards-dir is provided, scan that directory.
@@ -420,35 +520,49 @@ mod tests {
         assert!(record.sigma_parallax.is_nan());
     }
 
+    fn valid_builder() -> BuildFromShardsConfigBuilder {
+        BuildFromShardsConfig::builder()
+            .shards_dir(Some(PathBuf::from("/nonexistent")))
+            .output_prefix(PathBuf::from("/tmp/_zt_test"))
+            .mag_limit(14.0)
+            .scale_lower_arcsec(60.0)
+            .scale_upper_arcsec(1800.0)
+            .max_quads(1000)
+            .cell_depth(5)
+            .threads(Some(1))
+    }
+
     #[test]
-    fn run_rejects_excessive_mag_limit() {
-        let cfg = BuildFromShardsConfig {
-            shards_dir: Some(PathBuf::from("/nonexistent")),
-            output_prefix: PathBuf::from("/tmp/_zt_test"),
-            mag_limit: 19.5,
-            scale_lower_arcsec: 60.0,
-            scale_upper_arcsec: 1800.0,
-            max_quads: 1000,
-            cell_depth: 5,
-            threads: Some(1),
-        };
-        let err = run(&cfg).unwrap_err();
+    fn build_rejects_excessive_mag_limit() {
+        let err = valid_builder().mag_limit(19.5).build().unwrap_err();
         assert!(err.contains("exceeds hard cap"), "got: {err}");
     }
 
     #[test]
-    fn run_rejects_inverted_scale_range() {
-        let cfg = BuildFromShardsConfig {
-            shards_dir: Some(PathBuf::from("/nonexistent")),
-            output_prefix: PathBuf::from("/tmp/_zt_test"),
-            mag_limit: 14.0,
-            scale_lower_arcsec: 1800.0,
-            scale_upper_arcsec: 60.0,
-            max_quads: 1000,
-            cell_depth: 5,
-            threads: Some(1),
-        };
-        let err = run(&cfg).unwrap_err();
+    fn build_rejects_inverted_scale_range() {
+        let err = valid_builder()
+            .scale_lower_arcsec(1800.0)
+            .scale_upper_arcsec(60.0)
+            .build()
+            .unwrap_err();
         assert!(err.contains("invalid scale range"), "got: {err}");
+    }
+
+    #[test]
+    fn build_rejects_zero_max_quads() {
+        let err = valid_builder().max_quads(0).build().unwrap_err();
+        assert!(err.contains("max_quads"), "got: {err}");
+    }
+
+    #[test]
+    fn build_rejects_missing_required_fields() {
+        let err = BuildFromShardsConfig::builder().build().unwrap_err();
+        // Required fields fail in declaration order.
+        assert!(err.contains("output_prefix"), "got: {err}");
+    }
+
+    #[test]
+    fn build_succeeds_on_valid_inputs() {
+        valid_builder().build().expect("valid builder must succeed");
     }
 }
