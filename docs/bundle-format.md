@@ -11,10 +11,10 @@ This doc specifies a directory-or-zip "bundle" layout that delivers both, with a
 
 ## Top-level layout
 
-A bundle is identified by its top-level path. The internal logical layout is identical in either packaging form; the reader abstracts the difference behind a `SubfileAccessor` trait (see Reader API):
+A bundle is identified by its top-level path. The internal logical layout is identical in either packaging form, and **both are equally first-class shippable artifacts** — the choice is operational (one file you can scp / object-store / cdn around, or a directory you can rsync deltas of and serve directly). The reader abstracts the difference behind a `SubfileAccessor` trait (see Reader API), so consumer code is agnostic to which form it's reading.
 
-- **Directory:** `path/to/index.zdcl.bundle/` — files on disk, mmap-friendly. Hot-path serving.
-- **Zip:** `path/to/index.zdcl.bundle.zip` — same logical entries packed in a zip archive. Convenient for distribution; entries decompress on read so it's a colder access path than the directory form, but the API is identical.
+- **Directory:** `path/to/index.zdcl.bundle/` — files on disk. Reader mmaps each entry on first touch.
+- **Zip:** `path/to/index.zdcl.bundle.zip` — same logical entries packed in a zip archive. Reader decompresses entries into owned buffers on first touch.
 
 The same internal layout in both:
 
@@ -93,11 +93,14 @@ When all cells are committed, a single-threaded finalize step:
 
 1. Sweeps `work_dir/quads/` and `work_dir/gaia/` for any leftover `*.part.*` files (crashed-mid-rename droppings) and removes them.
 2. Constructs the final `manifest.json` from the build-manifest's totals and the user-supplied experiment / build-metadata fields.
-3. Packages the work dir into the chosen output form:
+3. Packages the work dir into the chosen output form. Both forms are equally first-class build outputs; the operator picks via `--output` extension (or an explicit `--output-format dir|zip`):
    - **Folder output** (`--output path/to/index.zdcl.bundle`): `mv work_dir path.partial && rename(path.partial, path)`. Cheap — usually a single atomic directory rename if work_dir was on the same filesystem as the output. Otherwise a recursive copy + atomic rename.
    - **Zip output** (`--output path/to/index.zdcl.bundle.zip`): stream-zip the work dir's contents into `path.partial.zip` (entry order: `manifest.json` last; per-cell files in cell-id order for predictable seeks), fsync, then `rename(path.partial.zip, path.zip)`.
+
+   Either output is shippable as-is; the reader's `SubfileAccessor` abstraction means consumers can't tell the difference at the API level. A pipeline can publish both forms from the same build by re-running tidy with the alternate `--output` after the first one finalizes (work_dir is preserved unless `--prune-work-dir` is set).
+
 4. The **final manifest is the commit edge** — folder rename or zip rename is what makes the bundle "exist." Pre-tidy crashes leave the work_dir intact; tidy-mid crashes leave a `.partial` artifact that the next finalize will overwrite.
-5. After successful tidy, the work_dir can be removed (or kept around for debug — the user-facing CLI should default to keep, with `--prune-work-dir` opt-in).
+5. After successful tidy, the work_dir can be removed (or kept around for debug or for a second tidy pass producing the alternate output form — the user-facing CLI should default to keep, with `--prune-work-dir` opt-in).
 
 ### Atomicity & resume summary
 
