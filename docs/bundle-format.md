@@ -11,13 +11,15 @@ This doc specifies a directory-or-zip "bundle" layout that delivers both, with a
 
 ## Top-level layout
 
-A bundle is identified by its top-level path. The reader treats two physical forms identically:
+A bundle is identified by its top-level path. The internal logical layout is identical in either packaging form; the reader abstracts the difference behind a `SubfileAccessor` trait (see Reader API):
 
-- **Directory:** `path/to/index.zdcl.bundle/` — files on disk, mmap-friendly.
-- **Zip:** `path/to/index.zdcl.bundle.zip` — same internal layout, packaged for distribution. mmap not supported (entries decompress on read); use directory form for hot-path serving.
+- **Directory:** `path/to/index.zdcl.bundle/` — files on disk, mmap-friendly. Hot-path serving.
+- **Zip:** `path/to/index.zdcl.bundle.zip` — same logical entries packed in a zip archive. Convenient for distribution; entries decompress on read so it's a colder access path than the directory form, but the API is identical.
+
+The same internal layout in both:
 
 ```
-index.zdcl.bundle/
+index.zdcl.bundle/   (or as entries inside the .zip)
 ├── manifest.json               # the canonical commit point — present iff bundle is finalized
 ├── quads/
 │   ├── cell_00000.zqd          # ALL bands' quads + codes for cell 0, in one file
@@ -55,6 +57,59 @@ When the source excerpt is sharded at one depth and the bundle is built at anoth
 - **Coarser bundle** (`bundle_depth < source_depth`): the builder aggregates `4^(source_depth - bundle_depth)` source cells per output cell during `stars_in_cell`. The cell-source adapter expands one bundle cell into a list of source cells and concatenates their stars.
 - **Finer bundle** (`bundle_depth > source_depth`): the builder iterates source cells, then partitions each one's stars by HEALPix hash at the deeper bundle depth. Each star is re-hashed at write time.
 - **Equal** (default; bycell excerpt at level 5 → bundle at level 5): no remapping, identity passthrough — the fast path.
+
+## Build pipeline
+
+A bundle is produced by **two phases**: a parallel build phase that emits HEALPix per-cell shards into a temporary work directory, and a single-threaded tidy phase that packages the work dir into the final folder or zip artifact and writes the manifest as the commit point.
+
+```
+                (parallel)                   (single-threaded)
+[bycell excerpt] ──build──▶ [work_dir/...]   ──tidy──▶ [final folder or .zip]
+                                                                │
+                                                       manifest.json is
+                                                       the commit edge
+```
+
+### Phase 1 — parallel shard build
+
+Workers iterate cells in parallel via the cell-driven builder (#70). For each `cell_id` a worker:
+
+1. Pulls the cell's stars via the `CellStarSource` adapter (e.g. `LazyExcerptSource` reading from the bycell excerpt).
+2. Brightness-truncates to `max_stars_per_cell`.
+3. Builds quads for every band over the same star buffer (one I/O hit, N bands of quad emission).
+4. Writes two intermediate files into the **work directory**:
+   - `work_dir/quads/cell_NNNNN.zqd.part.HHHHHHHH`
+   - `work_dir/gaia/cell_NNNNN.zga.part.HHHHHHHH`
+5. fsyncs each, then atomically `rename(2)`s onto the canonical names `cell_NNNNN.zqd` and `cell_NNNNN.zga` within `work_dir/`.
+6. Updates the build manifest (`work_dir/.build-manifest.json`, the in-build resume primitive — distinct from the final bundle `manifest.json`) to mark this cell complete.
+
+`HHHHHHHH` is an 8-hex-digit per-worker-invocation nonce (e.g. `xxh3-64` of pid + thread_id + nanos + cell_id) so concurrent workers never collide on a partial filename. If two workers race the same cell, the rename winner commits and the loser deletes its `.part.*` (build is deterministic per (cell, config), so the losing file would be byte-equivalent anyway).
+
+A crashed build is identified at re-run by **the absence of the final bundle manifest** in the eventual output path; the work_dir survives, partial files survive, and the existing `BuildManifest` skip-completed-cells logic resumes from where it left off. No lost work.
+
+### Phase 2 — tidy sweep into final artifact
+
+When all cells are committed, a single-threaded finalize step:
+
+1. Sweeps `work_dir/quads/` and `work_dir/gaia/` for any leftover `*.part.*` files (crashed-mid-rename droppings) and removes them.
+2. Constructs the final `manifest.json` from the build-manifest's totals and the user-supplied experiment / build-metadata fields.
+3. Packages the work dir into the chosen output form:
+   - **Folder output** (`--output path/to/index.zdcl.bundle`): `mv work_dir path.partial && rename(path.partial, path)`. Cheap — usually a single atomic directory rename if work_dir was on the same filesystem as the output. Otherwise a recursive copy + atomic rename.
+   - **Zip output** (`--output path/to/index.zdcl.bundle.zip`): stream-zip the work dir's contents into `path.partial.zip` (entry order: `manifest.json` last; per-cell files in cell-id order for predictable seeks), fsync, then `rename(path.partial.zip, path.zip)`.
+4. The **final manifest is the commit edge** — folder rename or zip rename is what makes the bundle "exist." Pre-tidy crashes leave the work_dir intact; tidy-mid crashes leave a `.partial` artifact that the next finalize will overwrite.
+5. After successful tidy, the work_dir can be removed (or kept around for debug — the user-facing CLI should default to keep, with `--prune-work-dir` opt-in).
+
+### Atomicity & resume summary
+
+| Event | What's on disk afterwards | Recovery |
+|---|---|---|
+| Worker crashes mid-cell | `cell_NNNNN.{zqd,zga}.part.HHHHHHHH` orphaned in work_dir | Resume re-runs that cell's build; partials are swept on next tidy. |
+| Worker crashes after rename, before manifest update | Canonical shard exists, build-manifest doesn't list the cell | Resume re-runs the cell (deterministic; produces same bytes). |
+| All workers done, builder process killed before tidy | Work_dir complete, final bundle manifest absent | Re-run; build-manifest sees all cells done; tidy phase runs. |
+| Tidy crashes mid-rename | `path.partial` (or `.partial.zip`) on disk; no final manifest | Re-run tidy; existing `.partial` is overwritten. |
+| Tidy completes | Final folder/zip with `manifest.json` as last entry | Bundle is committed; reader sees a consistent artifact. |
+
+**Verification.** The reader's first check on `open` is "does `manifest.json` parse and pass schema validation?" If yes, every per-cell file referenced by the manifest's `populated_cells` set is expected to exist; the reader can optionally validate every file's magic + version + cell_id + size on open (`bundle.verify()` — opt-in, since region-load shouldn't pay it). For stronger integrity than structural checks, see the format-version-bump note in the critique (per-block `xxh3-64` payload hashes).
 
 ## Manifest
 
@@ -249,39 +304,63 @@ Cheap presence checks via bitfield avoid hot-path NaN comparisons; the float fie
 
 The cell-level pivot table is omitted — at typical depths each cell has at most a few × 10⁵ records, so a direct binsearch over the mmapped record array is one cache-line probe per O(log n) step. A pivot table would be wasted bookkeeping at this granularity.
 
-## Build-time partial files
-
-Workers writing in parallel can collide on the same canonical filename if two of them concurrently rebuild a cell (e.g. resume race, retry after error). To keep writes lockless and atomic:
-
-- A worker writes to `cell_NNNNN.zqd.part.HHHHHHHH` where `HHHHHHHH` is a hex hash unique to that worker invocation (e.g. `xxh3-64` of pid + thread_id + nanos + cell_id, truncated to 8 hex digits).
-- After fsync + close, the worker `rename(2)`s the partial file to `cell_NNNNN.zqd`. POSIX guarantees rename is atomic on the same filesystem.
-- If the rename target exists (another worker won the race), the loser deletes its `.part.HHHHHHHH` file. The committed file is content-equivalent because the build is deterministic per (cell, band, config).
-- A finalize step at the end of the build sweeps `quads/` and `gaia/` for any `*.part.*` leftovers and removes them. Then it writes `manifest.json` last.
-- A crashed build is identified at re-run by `manifest.json`'s absence. The work directory survives crashes, partial files survive crashes, and the next run picks up where the previous left off (the cell-driven builder's existing `BuildManifest` (#70) handles the per-cell skip/redo logic and is still the durable resume primitive — the bundle layout above is purely the *output* shape).
-
 ## Reader API
+
+The reader works against any object that knows how to enumerate and read entries by relative path. That abstraction is the `SubfileAccessor` trait:
+
+```rust
+/// Storage-agnostic entry access for a bundle. Two concrete impls:
+///   - `FsAccessor`  — entries are files on disk under a directory root;
+///                     `read_entry` returns an `Mmap` (mmap-backed slice).
+///   - `ZipAccessor` — entries live in a zip archive; `read_entry` returns
+///                     an owned `Bytes` (decompressed copy of the entry).
+pub trait SubfileAccessor: Send + Sync {
+    /// True if an entry at this relative path exists.
+    fn exists(&self, rel: &str) -> bool;
+
+    /// Cheap "list everything under `prefix/`" — used at open to know
+    /// which cells are populated and which aren't (without a manifest
+    /// round-trip if the manifest has been deleted).
+    fn list_prefix(&self, prefix: &str) -> io::Result<Vec<String>>;
+
+    /// Return a read-only byte slice for `rel`. The returned `EntryBytes`
+    /// is either a borrowed `&[u8]` from an mmap (FsAccessor hot path) or
+    /// an owned `Bytes` from a decompressed zip entry. Either way, hot
+    /// code can binsearch / cast / slice it identically.
+    fn read_entry(&self, rel: &str) -> io::Result<EntryBytes<'_>>;
+}
+
+pub enum EntryBytes<'a> {
+    Mmap(&'a [u8]),
+    Owned(bytes::Bytes),
+}
+```
+
+`FsAccessor` mmaps each entry on first access and caches the mmap; `ZipAccessor` decompresses on each `read_entry`. The hot-path verifier and refinement code see `&[u8]` either way and don't have to care.
 
 ```rust
 pub struct ZdclBundle {
-    /// Path-like (folder or zip).
-    source: BundleSource,
+    accessor: Box<dyn SubfileAccessor>,
     manifest: Manifest,
-    /// Mmaps cached on first access; LRU eviction not implemented yet.
-    open_files: Mutex<HashMap<RelPath, Mmap>>,
+    /// Per-cell entry-bytes cached on first access.
+    cell_cache: Mutex<HashMap<u64, CellEntries>>,
 }
 
 impl ZdclBundle {
-    pub fn open(path: impl AsRef<Path>) -> io::Result<Self>;        // auto-detect dir vs zip
+    /// Auto-detect dir vs zip from the path; build the appropriate
+    /// `SubfileAccessor`; parse `manifest.json`.
+    pub fn open(path: impl AsRef<Path>) -> io::Result<Self>;
+
     pub fn manifest(&self) -> &Manifest;
     pub fn cell_depth(&self) -> u8;
     pub fn bands(&self) -> &[BandInfo];
 
     /// Slice every band over `region`. Returns a `MultiBandFragment` whose
-    /// stars are the union of `region`'s cells (cell-grouped, dedup'd) and
-    /// whose quads are partitioned by band.
+    /// gaia records are the union of `region`'s cells and whose quads are
+    /// partitioned by band.
     pub fn load_region(&self, region: &SkyRegion) -> io::Result<MultiBandFragment>;
 
-    /// Single band. Useful when the solver wants to dispatch one band's
+    /// Single band. Useful when the solver dispatches one band's
     /// code-tree at a time.
     pub fn load_region_band(&self, band_idx: usize, region: &SkyRegion) -> io::Result<IndexFragment>;
 
@@ -290,14 +369,17 @@ impl ZdclBundle {
     /// cell from the source_id's HEALPix prefix and the bundle's
     /// `cell_depth`.
     pub fn gaia_get(&self, source_id: u64, cell_hint: Option<u64>) -> io::Result<Option<GaiaRecord>>;
-
     pub fn gaia_get_many(&self, source_ids: &[u64]) -> io::Result<Vec<Option<GaiaRecord>>>;
+
+    /// Optional structural-integrity check (magic + version + cell_id +
+    /// size) over every populated cell. Skipped on the normal `open` path.
+    pub fn verify(&self) -> io::Result<VerifyReport>;
 }
 ```
 
-`MultiBandFragment` holds the shared per-cell `gaia/` records plus a `Vec<IndexFragment>` (one per band, all referencing the same gaia records via local index). The solver receives `&[&Index]` exactly as today; constructing those is `bundle.bands().iter().map(|b| &b.index).collect()`.
+`MultiBandFragment` holds the union of region cells' gaia records plus a `Vec<IndexFragment>` (one per band, all referencing the same gaia records via local index). The solver receives `&[&Index]` exactly as today; constructing those is `bundle.bands().iter().map(|b| &b.index).collect()`.
 
-For zip mode, the same API applies; internally `BundleSource::Zip` wraps a `zip::ZipArchive` and reads each requested entry into a `Bytes` buffer instead of mmapping. That's slower but lets us ship a single `.zdcl.bundle.zip` artifact for distribution.
+The directory and zip forms differ only in the `EntryBytes` variant returned and the access cost (mmap = lazy + fast; zip-decompress = eager + slower). The folder form is the hot-path serving target; the zip form is the distribution artifact.
 
 ---
 
@@ -306,37 +388,29 @@ For zip mode, the same API applies; internally `BundleSource::Zip` wraps a `zip:
 ### What this gets right
 
 - **Multi-band as first-class.** Solvers expecting `&[&Index]` already work; building a bundle is the only new construction path.
-- **One canonical per-star store.** Each cell has exactly one `cell_NNNNN.zga` carrying the 104 B Gaia record, referenced by every band's quads via local index. No duplication across bands the way `build-index-series` produces today (12× star block redundancy).
+- **One canonical per-star store.** Each cell has exactly one `cell_NNNNN.zga` carrying the 104 B Gaia record, referenced by every band's quads via local index. No duplication across bands the way `build-index-series` produces today (~12× star-block redundancy).
 - **The 104 B record covers both hot-path and refinement.** Verifier reads `phot_g_mean_mag` for its prior; refinement reads the full 2×2 astrometric covariance via `ra_dec_corr`; quality-aware consumers filter on `ruwe`. No "load stars for solving, load sidecar for refinement" split.
 - **Cell-sharded gaia records.** A FOV that touches K cells reads K gaia shards instead of binsearching one global sidecar. Per-cell shards are small enough that direct binsearch beats a pivot table.
-- **Region-load is unchanged in shape.** "Open manifest, list cells in region, mmap their files" is exactly the existing pattern, just spread across more files.
-- **Crash safety / parallelism.** `rename(2)` per file plus hex-hashed partials plus manifest-as-commit-point is a clean three-layer atomicity story.
-- **Folder-or-zip transparency.** The same code path serves a hot-cache directory and a distributable zip with one CLI flag (`--source-kind dir|zip|auto`).
+- **Region-load is unchanged in shape.** "Open manifest, list cells in region, read their entries" is exactly the existing pattern.
+- **Two-phase build with a clean commit edge.** Parallel shard build into a work_dir; single tidy phase packages it; the final manifest is the commit point. Crash anywhere along the way, restart picks up where it left off; the only "is this bundle valid" question reduces to "is the final `manifest.json` parseable?"
+- **Folder vs zip is a packaging-only choice.** The reader sees both via the `SubfileAccessor` trait; consumer code never branches on which form it's reading.
 
 ### What I'd push back on / open questions
 
-1. **File count.** Bundle file count is 2 × n_cells: one quad shard plus one gaia shard per populated cell, regardless of band count (all bands live in the single quad shard per cell). At depth 5 that's 2 × 12,288 = **24,576 files**. At depth 7 it's 2 × 196,608 ≈ **393k files** — manageable on ext4 / xfs but starts to hurt for `ls`, `tar`, `rsync`. Distribution wants the zip form to amortise the inode tax; serving wants the directory; both fine, but the zip → directory unpack is itself a large inode-creation pass.
-   - **Mitigation if it bites:** introduce shard *bucketing* — one file per bucket of M consecutive cells, each file with its own internal cell-table. Re-introduces v3-style internal grouping at a coarser-than-cell granularity. Worth weighing against how often "load region" actually needs sub-cell granularity (almost never — we always load whole cells), against the tooling cost of `tar`-ing and `rsync`-ing the bundle.
+1. **Cross-cell quads are still unsupported.** This isn't new — the cell-driven builder already drops quads whose backbones straddle cell boundaries — but the per-cell file format makes it harder to fix later. To support cross-cell quads we'd either need to (a) duplicate the quad in both cells' files, (b) introduce a "cross-cell quads" file type that lists referencing cell IDs explicitly, or (c) keep per-cell files only for "interior" quads and a global file for boundary quads. None of these is impossible but the per-cell-only assumption is now baked into more places.
 
-2. **mmap setup cost for region-load.** A 1° FOV at level 5 covers ~1 cell. Per cell that's 1 quad mmap + 1 gaia mmap = 2 mmaps (regardless of band count, since all bands live in the one quad shard). Across the 1–4 cells a typical FOV touches, you're at 2–8 mmaps. Each mmap is a syscall and a page-table allocation — cheap individually (microseconds) but for the realtime ground/space modes that load every solve, this adds up. The current single-file `ZdclFile` does it once.
-   - **Mitigation:** the bundle reader's `open_files` cache amortises across solves in the server case. In ground/space mode we have one `LiveIndex` that holds the current cell set; opening 12 mmaps per FOV change is fine.
-
-3. **Cross-cell quads are still unsupported.** This isn't new — the cell-driven builder already drops quads whose backbones straddle cell boundaries — but the per-cell file format makes it harder to fix later. To support cross-cell quads we'd either need to (a) duplicate the quad in both cells' files, (b) introduce a "cross-cell quads" file type that lists referencing cell IDs explicitly, or (c) keep per-cell files only for "interior" quads and a global file for boundary quads. None of these is impossible but the per-cell-only assumption is now baked into more places.
-
-4. **Sidecar binsearch within a cell, not globally.** Today the sidecar is a single global file with a pivot table — *any* `source_id` resolves with one binsearch. With per-cell shards, the reader has to know *which cell* the source_id belongs to before opening the right shard. Two ways:
+2. **Sidecar binsearch within a cell, not globally.** Today the sidecar is a single global file with a pivot table — *any* `source_id` resolves with one binsearch. With per-cell shards, the reader has to know *which cell* the source_id belongs to before opening the right shard. Two ways:
    - Derive from source_id's HEALPix-12 prefix → cell at depth N. This is robust for Gaia DR3 (source_ids encode HEALPix-12) but couples the layout to Gaia's id scheme.
    - Caller passes the cell hint (the index already knows what cell each matched star came from). Cleaner but requires plumbing changes through `RefinementCatalog::load_sidecar_filtered`.
    - This was foreshadowed in #66.
 
-5. **Format-version drift.** We've now got: a manifest version, a quad-shard version, a gaia-shard version. Each can evolve independently. That's actually a feature compared to the v3 monolith, but it means more code paths and more migration stories.
+3. **Format-version drift.** We've now got: a manifest version, a quad-shard version, a gaia-shard version. Each can evolve independently. That's actually a feature compared to the v3 monolith, but it means more code paths and more migration stories.
 
-6. **Free-text `experiment` is too permissive.** A free-text field is good for ops notes but tooling will want structured fields anyway (e.g., "show all bundles built from G ≤ 19 catalog with ≥ 100 quads/cell"). My instinct: keep the free-text field for human notes *and* add a structured `build_params` block in `build_metadata` that captures the salient knobs (mag_limit, max_stars_per_cell, scale-band list, max_reuse, source kind). Then tooling has a canonical place to look without parsing prose.
+4. **Free-text `experiment` is too permissive.** A free-text field is good for ops notes but tooling will want structured fields anyway (e.g., "show all bundles built from G ≤ 19 catalog with ≥ 100 quads/cell"). My instinct: keep the free-text field for human notes *and* add a structured `build_params` block in `build_metadata` that captures the salient knobs (mag_limit, max_stars_per_cell, scale-band list, max_reuse, source kind). Then tooling has a canonical place to look without parsing prose.
 
-7. **Atomic finalize is N+1 renames, not 1.** A bundle build that crashes between "all per-cell files renamed" and "manifest.json written" leaves a directory full of finalized shards but no manifest, which is correctly classified as "not committed." Good. But what if it crashes between "manifest.json.part.HHHH written" and "rename to manifest.json"? Same answer — manifest absent → not committed. The convention is consistent; just worth noting that the last rename is the commit edge.
+5. **No payload-level integrity check.** Structural checks (magic, version, cell_id, sizes) catch truncation and config drift; they don't catch silent bit-rot or a per-record byte that flipped without changing size. A future format-version bump could add per-block `xxh3-64` payload hashes (8 B in the band table per band, 8 B in the gaia header per cell). Until then, `bundle.verify()` is structural-only.
 
-8. **Zip mode performance.** Region-loading from zip is O(K) ZIP central-directory lookups + O(K) decompressions, where K = cells × bands. No mmap means per-record copies into Vec. Fine for one-shot solves, painful for streaming workloads. We should document this explicitly: zip = distribution artifact, directory = hot path.
-
-9. **Backward compat with v3 single files.** `Index::load(path)` today handles v1/v2/v3 transparently (after #72). Should it grow to also auto-detect "this path is a bundle" and delegate? Probably yes, with a clear "single-file vs bundle" branch at the top. `path.is_dir() || path.ends_with(".zip")` → bundle; else → single-file v3 reader.
+6. **Backward compat with v3 single files.** `Index::load(path)` today handles v1/v2/v3 transparently (after #72). Should it grow to also auto-detect "this path is a bundle" and delegate? Probably yes, with a clear "single-file vs bundle" branch at the top. `path.is_dir() || path.ends_with(".zip")` → bundle; else → single-file v3 reader.
 
 10. **Versioning of the bundle format itself.** `format_version: 1` in the manifest. Future changes (e.g. adding a per-cell distortion-model table, or a per-band quad-density adaptive scheme) bump the version. Bundles before v2 stay readable as v1; readers ship a known-version-handler table. Same pattern as the v3 layout in `source.rs`.
 
