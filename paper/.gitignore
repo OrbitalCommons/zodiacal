@@ -1,0 +1,14 @@
+# All figures are regenerated from data; see make_figures.py.
+figures/
+
+# LaTeX build artifacts
+*.aux
+*.bbl
+*.blg
+*.log
+*.out
+*.toc
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+*.pdf

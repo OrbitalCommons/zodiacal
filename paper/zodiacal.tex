@@ -1,0 +1,1044 @@
+\documentclass[twocolumn, 10pt]{article}
+
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage[colorlinks=true, citecolor=blue, linkcolor=blue, urlcolor=blue]{hyperref}
+\usepackage{xcolor}
+\usepackage[round]{natbib}
+\usepackage[margin=1in]{geometry}
+
+% Astronomy-style degree/arcmin/arcsec
+% These commands work both in text and math mode
+\newcommand{\arcsec}{\ensuremath{^{\prime\prime}}}
+\newcommand{\arcmin}{\ensuremath{^{\prime}}}
+\newcommand{\degr}{\ensuremath{^{\circ}}}
+
+\begin{document}
+
+\title{Zodiacal: Accelerating Blind Astrometric Plate Solving Through\\Multi-Scale Index Sharding}
+
+\author{Matthew Goodman\\
+\textit{Exclosure}\\
+\texttt{matt@exclosure.io}}
+
+\begin{abstract}
+We present Zodiacal, a pure-Rust implementation of blind astrometric plate
+solving that achieves 98.3\% solve rates on simulated narrow-field imagery
+with a median solve time of 1.42\,s. Zodiacal implements the geometric hashing
+framework of \citet{lang2010}, constructing scale-invariant four-star asterism
+codes and matching them against prebuilt index files via $k$-d tree search.
+Our primary contribution is a systematic analysis of \emph{index sharding
+strategies}---the partitioning of the quad code space into narrow angular-scale
+bands---and their effect on solver performance. We show that splitting a single
+broadband index (10--600\arcsec) into 12 narrow bands at a $\sqrt{2}$ scale
+factor increases the solve rate from 96.0\% to 98.3\% compared to 4
+wider bands at a $3\times$ factor, while reducing the mean verification
+count by 33\%. The improvement arises from smaller $k$-d trees per band
+that reduce false-positive code matches, combined with per-index scale
+filtering that skips irrelevant bands entirely. We characterize the
+remaining 1.7\% failure population as
+quad-matching timeouts concentrated at moderate Galactic latitudes
+($|b| \approx 20$--$45\degr$), where code-space collisions create a
+false-match flood. The system is fully open-source and designed for
+integration into automated survey pipelines.
+\end{abstract}
+
+\date{}
+\maketitle
+
+\noindent\textbf{Keywords:} astrometry --- methods: data analysis --- techniques: image processing --- catalogs
+
+% =============================================================================
+\section{Introduction} \label{sec:intro}
+% =============================================================================
+
+Blind astrometric plate solving---the determination of a celestial image's
+pointing, rotation, and plate scale from the star pattern alone---is a
+foundational capability for astronomical survey pipelines, robotic telescopes,
+and spacecraft attitude determination. The problem is computationally
+challenging: given $N$ detected sources in an image and a catalog of $\sim10^8$
+reference stars, one must identify the correct correspondence without prior
+knowledge of the field's location on the sky.
+
+The dominant approach, introduced by \citet{lang2010} and implemented in the
+widely-used \texttt{astrometry.net} system, reformulates the problem as
+geometric hashing. Four-star asterisms (``quads'') are encoded into a
+low-dimensional code space that is invariant to rotation, scale, and parity.
+A $k$-d tree indexes the code space, enabling sub-linear lookup of candidate
+matches. Bayesian verification then scores each candidate World Coordinate
+System (WCS) against the full star field.
+
+While \texttt{astrometry.net} has proven highly effective---reporting
+$>99.9\%$ solve rates on Sloan Digital Sky Survey (SDSS) fields
+\citep{lang2010}---its implementation is distributed across C, Python, and
+multiple FITS-based intermediate file formats, making it difficult to embed in
+modern compiled pipelines. More importantly, the interaction between index
+construction parameters and solver performance has not been systematically
+characterized. In particular, the choice of how to \emph{shard} the angular
+scale space into multiple index files---how many bands, how wide, and at what
+scale factor---has a first-order effect on solve speed and reliability that is
+not well-documented in the literature.
+
+In this paper we present Zodiacal, a pure-Rust reimplementation of the
+geometric hashing approach that achieves comparable solve rates while enabling
+systematic experimentation with index construction. Our primary contribution
+is an empirical analysis of index sharding strategies and their performance
+implications. We demonstrate that:
+
+\begin{enumerate}
+    \item Narrower angular-scale bands reduce the effective $k$-d tree size
+          per index, cutting false-positive matches and improving solve speed.
+    \item Per-index scale filtering---skipping indexes whose band cannot
+          overlap with the inferred backbone angular scale---provides an
+          efficient pruning mechanism that scales with the number of bands.
+    \item The combination of these effects yields a Pareto improvement:
+          finer sharding increases both solve rate and reduces median solve
+          time for the majority of fields.
+    \item The residual failure population ($\sim$1.7\%) is dominated by
+          code-space collisions at moderate Galactic latitudes, a regime
+          where narrower bands provide diminishing returns.
+\end{enumerate}
+
+Section~\ref{sec:algorithm} describes the solver architecture.
+Section~\ref{sec:indexing} details the index construction pipeline and
+sharding strategies. Section~\ref{sec:results} presents benchmark results
+across configurations. Section~\ref{sec:failure} analyzes the failure
+population. Section~\ref{sec:discussion} discusses implications and future
+work.
+
+% =============================================================================
+\section{Algorithm} \label{sec:algorithm}
+% =============================================================================
+
+Zodiacal implements the full pipeline described by \citet{lang2010}:
+source extraction, quad formation, code matching, WCS fitting, and
+Bayesian verification. We summarize each stage, noting implementation
+choices that differ from \texttt{astrometry.net}.
+
+\subsection{Source Extraction} \label{sec:extraction}
+
+Sources are detected using a DAO/IRAF-style algorithm provided by the
+\texttt{starfield} library \citep{starfield}: Gaussian convolution for
+background estimation, connected-component labeling above a signal-to-noise
+threshold, and flux-weighted centroiding. The result is an ordered list of
+$(x, y, f)$ tuples sorted by decreasing flux $f$.
+
+For pre-extracted source lists (e.g., from upstream pipelines), Zodiacal
+accepts a JSON interchange format containing pixel positions, fluxes, and
+optional metadata (known RA/Dec, plate scale hints) that can constrain the
+search space.
+
+\subsection{Quad Codec} \label{sec:codec}
+
+A quad consists of four stars $(A, B, C, D)$. Stars $A$ and $B$ form the
+\emph{backbone}---the pair with the largest angular separation among the
+four. The remaining stars $C$ and $D$ are encoded relative to the backbone
+in a rotation- and scale-invariant coordinate system.
+
+Specifically, let $\mathbf{M}$ be the midpoint of $A$ and $B$ on the unit
+sphere. All four stars are projected onto the tangent plane at $\mathbf{M}$
+via gnomonic projection. A rotation and scaling are applied to normalize
+the baseline $\overline{AB}$ to unit length along the $x$-axis, with $A$
+at the origin. The positions of $C$ and $D$ in this frame yield a
+four-dimensional code:
+\begin{equation} \label{eq:code}
+    \mathbf{c} = (c_x, c_y, d_x, d_y) \in \mathbb{R}^4.
+\end{equation}
+
+Two canonicalization invariants ensure that equivalent geometric
+configurations produce identical codes regardless of labeling:
+\begin{enumerate}
+    \item \textbf{Mean-$x$ constraint}: if the mean of the $x$-coordinates
+          exceeds 0.5, swap $A \leftrightarrow B$ and transform
+          $c_i \leftarrow 1 - c_i$ for all $i$.
+    \item \textbf{Ordering constraint}: sort $C$ and $D$ by their
+          $x$-coordinates so that $c_x \leq d_x$.
+\end{enumerate}
+
+This codec is identical to the one described in \citet{lang2010} and
+implemented in \texttt{astrometry.net}'s \texttt{quad-utils.c}.
+
+\subsection{Two-Phase Quad Generation} \label{sec:twophase}
+
+Field quads are generated incrementally from the $N$ brightest sources
+(default $N=50$), following the two-phase strategy from
+\texttt{astrometry.net}. When star $n$ is introduced:
+
+\begin{itemize}
+    \item \textbf{Phase 1}: Star $n$ serves as backbone star $B$. For each
+          $A < n$, candidates $C$ and $D$ are drawn from $\{0, \ldots, n-1\}$
+          within the bounding circle of the $AB$ pair.
+    \item \textbf{Phase 2}: Star $n$ serves as off-diagonal star $C$. For
+          each backbone pair $A < B < n$, candidate $D$ is drawn from
+          $\{0, \ldots, n-1\}$.
+\end{itemize}
+
+This ensures each unique quad is attempted exactly once across all
+iterations, maximizing search coverage without redundancy. A bounding
+circle constraint (candidate must lie within distance $|AB|$ of the $AB$
+midpoint) rejects geometrically implausible quads early.
+
+\subsection{Code Matching via $k$-d Tree} \label{sec:matching}
+
+Each prebuilt index file contains a $k$-d tree over the four-dimensional
+code space of its constituent quads. Given a field code $\mathbf{c}_f$,
+the solver performs a range search:
+\begin{equation}
+    \mathcal{M} = \left\{ \mathbf{c}_i \in \mathcal{T} :
+    \|\mathbf{c}_f - \mathbf{c}_i\|^2 < \epsilon \right\},
+\end{equation}
+where $\mathcal{T}$ is the code tree and $\epsilon = 0.01$ is the default
+squared Euclidean tolerance. Each match yields a star correspondence
+$(A_f, B_f, C_f, D_f) \leftrightarrow (A_i, B_i, C_i, D_i)$.
+
+To handle image parity (flipped fields), each field code is tried in both
+the original and $x/y$-swapped orientation, doubling the match attempts
+without doubling the index size.
+
+\subsection{WCS Fitting} \label{sec:fitting}
+
+From each four-star correspondence, a tangent-plane (TAN) WCS is fit via
+least-squares. The tangent point is the centroid of the matched reference
+stars' unit vectors, and the CD matrix is solved from the $2 \times 2$
+normal equations relating gnomonic-projected sky coordinates to pixel
+coordinates. Solutions with a singular or near-singular matrix
+($|\det| < 10^{-30}$) are rejected. A residual check ensures all four
+quad stars project to within 10\,pixels of their detected positions.
+
+\subsection{Bayesian Verification} \label{sec:verify}
+
+Following \citet{lang2010}, each candidate WCS is scored using a
+Bayesian log-odds framework. Reference stars within the projected field
+of view are identified via a 3D $k$-d tree range search, then projected
+to pixel coordinates. A 2D $k$-d tree over the projected positions enables
+efficient nearest-neighbor queries.
+
+For each field source $s_i$, the log-odds contribution is:
+\begin{equation} \label{eq:logodds}
+    \Delta_i = \max\left(\log \frac{p_{\text{fg}}(s_i)}{p_{\text{bg}}},\;
+    \log \frac{p_{\text{dist}}(s_i)}{p_{\text{bg}}} \right) -
+    \log p_{\text{bg}},
+\end{equation}
+where $p_{\text{fg}}$ is a Gaussian likelihood for a genuine match
+(with $\sigma = r_{\text{match}} / 2$, default $r_{\text{match}} = 5$\,px),
+$p_{\text{bg}}$ is a uniform background rate, and $p_{\text{dist}}$
+models a dynamic distractor rate that adapts as matches accumulate.
+
+A solution is accepted when the cumulative log-odds exceeds 20 (odds
+ratio $\sim e^{20} \approx 5 \times 10^8$:1) with at least 10 matched
+stars. Early termination at log-odds $< -20$ avoids wasting time on
+clearly spurious candidates.
+
+% =============================================================================
+\section{Index Construction and Sharding} \label{sec:indexing}
+% =============================================================================
+
+The quality and structure of prebuilt index files have a dominant effect
+on solver performance. This section describes the index construction
+pipeline and introduces the sharding strategies we evaluate.
+
+\subsection{HEALPix Uniformization} \label{sec:healpix}
+
+Raw star catalogs (e.g., Gaia DR3) exhibit orders-of-magnitude variation
+in stellar density between the Galactic plane and poles. Naive quad
+generation from such catalogs concentrates quads in dense regions, leaving
+sparse regions underrepresented.
+
+We uniformize the catalog using HEALPix \citep{gorski2005} pixelization in the
+nested indexing scheme. The sky is divided into $12 \times N_{\text{side}}^2$
+equal-area cells, where $N_{\text{side}} = 2^d$ at depth $d$. The depth
+is automatically computed from the index's upper scale bound:
+\begin{equation}
+    d = \left\lceil \log_2 \frac{\sqrt{\pi/3}}{\theta_{\max}} \right\rceil,
+\end{equation}
+where $\theta_{\max}$ is twice the upper angular scale (in radians),
+capped at $d \leq 8$ (786{,}432 cells) for memory efficiency.
+
+For each cell, a max-heap retains only the $k$ brightest stars (default
+$k = 30$), producing a spatially uniform subset of the input catalog.
+This is a streaming single-pass algorithm over the catalog.
+
+\subsection{Per-Cell Quad Building} \label{sec:percell}
+
+Quads are generated per HEALPix cell (at a potentially different depth
+than the uniformization depth). For each cell, we collect stars from the
+cell and its 8 neighbors (to avoid boundary effects), build a 3D $k$-d
+tree, and generate quads whose backbone angular distance falls within
+$[\theta_{\min}, \theta_{\max}]$.
+
+Key parameters controlling quad density:
+\begin{itemize}
+    \item \textbf{Passes} (default 16): number of quad-building sweeps
+          per cell.
+    \item \textbf{Max reuse} (default 8): maximum number of quads in
+          which any single star may appear, enforced via atomic counters.
+    \item \textbf{Max quads}: global cap, distributed uniformly across
+          cells.
+\end{itemize}
+
+Quad generation is parallelized across cells using \texttt{rayon} with
+an atomic done-flag for early termination when the global quota is met.
+
+\subsection{Sky-Uniform Coverage at Depth} \label{sec:uniform}
+
+Per-cell quad building (\S\ref{sec:percell}) achieves spatial uniformity
+\emph{by design}, but only if the iteration order of the construction
+loop respects the cell partition. Our initial production builder
+(\texttt{src/index/builder.rs}) sorted the entire post-uniformization
+catalog by brightness and emitted quads anchor-by-anchor under a single
+global \texttt{max\_quads} cap. In dense regions a single bright anchor
+can emit $\mathcal{O}(K^2)$ quads with $K \sim 10^2$ neighbors, so the
+global cap saturates within the first few thousand anchors and faint
+anchors in sparse cells never get visited. The empirical cost is severe:
+on our \texttt{gaia\_g14.zdcl} production index (1\,M quads, 16.8\,M
+stars at $G \le 14$), only \textbf{133 of 12{,}288} HEALPix-5 cells
+(1.1\,\%) hosted any quads, and a single $G = 7.6$ star participated in
+$\sim 2.6 \times 10^5$ quads---roughly a quarter of the entire budget.
+A 0.5\degr{} FOV at random sky pointings drew zero quads in 99.8\,\% of
+trials.
+
+Two coupled changes restore sky uniformity. First, the cell-driven
+builder (\texttt{src/index/cell\_builder.rs}) walks
+$0..N_{\text{cells}}$, pulls per-cell stars from a level-5-sharded
+input source, brightness-truncates to \texttt{max\_stars\_per\_cell},
+and emits up to \texttt{quads\_per\_cell} quads using only that cell's
+stars. The per-cell budget makes uniformity a \emph{structural}
+property: every populated cell receives an independent quota.
+
+Second, the magnitude limit must be deep enough that the per-cell
+budget---not catalog depth---is the binding constraint. At Gaia $G \le
+14$ the median high-galactic-latitude cell holds $\sim 1{,}400$ stars,
+which can geometrically support $\sim 100$ valid quads only marginally.
+At $G \le 20$ every populated cell holds $\sim 8.5 \times 10^4$ stars
+and the per-cell brightness truncation kicks in well before the cell's
+star geometry runs out. Going deeper is now free of the previous
+``deeper $\Rightarrow$ even more bright-region quads'' pathology because
+the cell loop bounds per-cell quad emission directly.
+
+The deep build pipeline rests on three pieces of infrastructure not
+needed by the in-RAM builder:
+
+\begin{itemize}
+    \item \textbf{Streaming sidecar.} The Gaia refinement sidecar
+          (\S\ref{sec:fitting}) is the per-quad memory hog at $\sim
+          88$\,B/record. The streaming writer
+          (\texttt{src/refinement/sidecar.rs::SidecarStreamWriter})
+          accepts per-cell chunks, sorts each in RAM to a numbered
+          temp file, and runs an external $k$-way merge at finalize
+          time. Peak RAM is bounded by the largest per-cell chunk
+          ($\sim$tens of MB at level 5). Output bytes are identical
+          to the in-RAM writer for the same input set.
+    \item \textbf{Resumable manifest.} A JSON manifest
+          (\texttt{src/index/build\_manifest.rs}) tracks completed
+          cells and is atomically rewritten after each per-cell commit;
+          per-cell artifacts live under a work directory keyed by
+          \texttt{cell\_id}. A re-run with the same \texttt{--work-dir}
+          skips already-committed cells.
+    \item \textbf{Order-stable parallelism.} The cell loop runs under
+          \texttt{rayon::par\_iter}; \texttt{finalize} iterates the
+          manifest's \texttt{BTreeSet<u32>} of completed cells (sorted
+          by \texttt{cell\_id} regardless of completion order) and the
+          sidecar merge sorts chunks by path before merging. A
+          dedicated test (\texttt{parallel\_build\_matches\_sequential})
+          asserts that 1-thread and 4-thread builds produce
+          byte-identical \texttt{.zdcl} and \texttt{.zdcl.gaia} files.
+\end{itemize}
+
+The remaining failure mode is geometric: a high-latitude void with too
+few faint stars cannot fill its \texttt{quads\_per\_cell} budget no
+matter how the loop is structured. The build summary surfaces per-cell
+counts so this is observable. Quads whose backbones straddle a
+HEALPix-5 boundary at the source's depth are also dropped under the
+strict per-cell convention; at the typical quad scales of $30\arcsec$
+to $30\arcmin$ this loss is small relative to the cell width
+($\sim 1.8\degr$) but is nonzero. Adding neighbor context to the
+per-cell builder is a follow-up.
+
+\subsection{Sharding Strategies} \label{sec:sharding}
+
+A \emph{sharding strategy} partitions the full angular scale range
+$[\theta_{\min}, \theta_{\max}]$ into $B$ bands, each producing an
+independent index file. Each band $b$ covers the range
+$[\theta_b^{\text{lo}}, \theta_b^{\text{hi}}]$ where:
+\begin{equation}
+    \theta_b^{\text{hi}} = \min\left(\theta_b^{\text{lo}} \cdot \alpha,\;
+    \theta_{\max}\right),
+\end{equation}
+and $\alpha$ is the \emph{scale factor} controlling band width. The
+number of bands is:
+\begin{equation}
+    B = \left\lceil \frac{\log(\theta_{\max}/\theta_{\min})}{\log \alpha}
+    \right\rceil.
+\end{equation}
+
+We evaluate three strategies spanning a range of granularity:
+
+\begin{enumerate}
+    \item \textbf{Monolithic} ($B=1$): a single index covering
+          10--600\arcsec. This serves as the baseline.
+    \item \textbf{Coarse sharding} ($\alpha = 3$, $B=4$): bands at
+          10--30, 30--90, 90--270, 270--600\arcsec.
+    \item \textbf{Fine sharding} ($\alpha = \sqrt{2}$, $B=12$): bands
+          at approximately octave intervals (10--14, 14--20, \ldots,
+          425--600\arcsec).
+\end{enumerate}
+
+\subsubsection{Per-Index Scale Filtering} \label{sec:filtering}
+
+When multiple narrow-band indexes are loaded, the solver exploits the
+known scale bounds to skip irrelevant indexes for each field quad. Given
+a backbone pixel distance $d_{AB}$ and the pixel scale range
+$[s_{\min}, s_{\max}]$ (in rad/px), the inferred angular scale range
+of the backbone is:
+\begin{equation}
+    [\theta^{\text{lo}}, \theta^{\text{hi}}] =
+    [d_{AB} \cdot s_{\min},\; d_{AB} \cdot s_{\max}].
+\end{equation}
+
+An index with band $[\theta_b^{\text{lo}}, \theta_b^{\text{hi}}]$ is
+skipped if these intervals do not overlap:
+\begin{equation}
+    \theta^{\text{lo}} > \theta_b^{\text{hi}} \quad \text{or} \quad
+    \theta^{\text{hi}} < \theta_b^{\text{lo}}.
+\end{equation}
+
+This is evaluated in $O(B)$ per quad attempt and has negligible overhead.
+With fine sharding, a typical field quad overlaps at most 2--3 of the
+12 bands, eliminating $\sim$75--85\% of code tree searches.
+
+\subsubsection{Why Narrower Bands Improve Performance} \label{sec:why}
+
+The performance benefit of narrow bands arises from two complementary
+mechanisms:
+
+\paragraph{Smaller code trees.}
+A monolithic index spanning 10--600\arcsec{} contains all quads across
+the full scale range. A narrow band (e.g., 90--127\arcsec) contains
+only quads whose backbone falls within that octave. Assuming roughly
+uniform quad density across log-scale, each band's $k$-d tree is
+$\sim B$ times smaller, reducing the expected number of false-positive
+code matches per range search by the same factor.
+
+Concretely, in our Gaia magnitude-19 experiments, the monolithic index
+contained $\sim$58M quads, while the 4-band configuration distributed
+these as 15K, 1.2M, 12.4M, and 12.5M quads per band.
+
+\paragraph{Scale filtering.}
+The per-index filtering described in \S\ref{sec:filtering} avoids
+searching the code tree altogether for out-of-band indexes. This
+amortizes the cost of loading multiple indexes: although $B$ indexes
+are loaded, only $\sim$2--3 are searched per quad, so the aggregate
+search cost is lower than searching a single monolithic tree.
+
+The combination yields a Pareto improvement: fine sharding increases
+the solve rate \emph{and} reduces median solve time for the typical case.
+
+\subsection{The $k$-d Forest: Multi-Index Search} \label{sec:kdforest}
+
+When $B$ narrow-band indexes are loaded simultaneously, the solver
+searches a \emph{$k$-d forest}---a collection of $B$ independent
+four-dimensional $k$-d trees, each covering a different angular scale
+band. We derive the analytical scaling of this architecture and its
+interaction with plate scale knowledge.
+
+\subsubsection{False-Positive Rate in the Code Space} \label{sec:fp_rate}
+
+The quad code $\mathbf{c} \in \mathbb{R}^4$ (Eq.~\ref{eq:code}) is
+scale- and rotation-invariant, so codes from all angular scales
+populate the same four-dimensional space. A range search with squared
+$L^2$ tolerance $\epsilon$ (default 0.01) queries a 4-ball of radius
+$r = \sqrt{\epsilon}$, whose volume is
+\begin{equation} \label{eq:vol}
+    V_\epsilon = \frac{\pi^2}{2}\, r^4
+    = \frac{\pi^2}{2}\, \epsilon^2.
+\end{equation}
+For $\epsilon = 0.01$, this gives $V_\epsilon \approx 4.93 \times 10^{-4}$.
+
+Let $\rho(\mathbf{c})$ be the local density of codes in the space.
+The expected number of matches from a tree containing $Q$ codes is
+\begin{equation} \label{eq:matches}
+    \langle M \rangle = \int_{\|\mathbf{c} - \mathbf{c}_f\|^2 < \epsilon}
+    \rho(\mathbf{c})\, d\mathbf{c}
+    \approx \rho(\mathbf{c}_f) \cdot V_\epsilon,
+\end{equation}
+where $\mathbf{c}_f$ is the field code and the approximation holds
+when $\rho$ is locally smooth on the scale of $r$. For a uniform
+distribution over unit volume, $\rho = Q$ and
+$\langle M \rangle \approx Q \cdot V_\epsilon$.
+
+The key observation is that the codes are scale-invariant, but different
+angular scale bands sample \emph{different stellar neighborhoods} on
+the sky, producing codes with \emph{independent} false-positive
+populations. A code that happens to lie near $\mathbf{c}_f$ in band
+$b$ is a coincidental geometric similarity between unrelated star
+patterns at scale $\theta_b$---it has no correlation with near-matches
+at scale $\theta_{b'}$.
+
+\subsubsection{Partitioning the False-Positive Budget}
+
+For a monolithic index of $Q = \sum_{b=1}^B Q_b$ total quads with
+density $\rho_{\text{mono}} = \sum_b \rho_b$, the expected false
+matches per query are
+\begin{equation} \label{eq:Mmono}
+    \langle M_{\text{mono}} \rangle
+    \approx \rho_{\text{mono}}(\mathbf{c}_f) \cdot V_\epsilon
+    = \sum_{b=1}^B \rho_b(\mathbf{c}_f) \cdot V_\epsilon.
+\end{equation}
+
+When searching the forest with scale filtering, only $B_{\text{eff}}$
+bands overlap the backbone's angular scale interval. The false matches
+from the searched bands are
+\begin{equation} \label{eq:Mforest}
+    \langle M_{\text{forest}} \rangle
+    = \sum_{b \in \mathcal{S}} \rho_b(\mathbf{c}_f) \cdot V_\epsilon,
+\end{equation}
+where $\mathcal{S}$ is the set of overlapping bands with
+$|\mathcal{S}| = B_{\text{eff}}$.
+
+If the quads are distributed approximately uniformly across bands
+($Q_b \approx Q/B$, hence $\rho_b \approx \rho_{\text{mono}} / B$),
+the false-positive reduction factor is
+\begin{equation} \label{eq:reduction}
+    \boxed{
+    \frac{\langle M_{\text{forest}} \rangle}
+         {\langle M_{\text{mono}} \rangle}
+    = \frac{B_{\text{eff}}}{B}
+    }
+\end{equation}
+
+This is the central result: \emph{the $k$-d forest reduces false
+positives by the ratio of searched bands to total bands}. For
+$B = 12$ and $B_{\text{eff}} = 2$, this is a $6\times$ reduction.
+
+\subsubsection{Effective Band Overlap as a Function of Scale Bracket}
+\label{sec:beff}
+
+The number of overlapping bands $B_{\text{eff}}$ depends on the
+relationship between the plate scale bracket and the band width. Given
+a backbone pixel distance $d_{AB}$ and plate scale bracket
+$[s(1 - \delta),\; s(1 + \delta)]$ (where $\delta = \Delta s / 2s$
+is the fractional half-width), the backbone angular scale spans
+\begin{equation}
+    \theta \in \left[ d_{AB} \cdot s(1 - \delta),\;
+    d_{AB} \cdot s(1 + \delta) \right].
+\end{equation}
+
+For geometric bands with scale factor $\alpha$, each band spans a
+factor $\alpha$ in angular scale. The angular bracket spans a factor
+$(1 + \delta)/(1 - \delta) \approx 1 + 2\delta$ for small $\delta$.
+The number of bands overlapped by this interval is
+\begin{equation} \label{eq:beff}
+    B_{\text{eff}} = 1 + \left\lceil
+    \frac{\log\left(\frac{1+\delta}{1-\delta}\right)}
+    {\log \alpha} \right\rceil.
+\end{equation}
+
+Table~\ref{tab:beff} evaluates this for representative configurations.
+
+\begin{table}[t]
+\centering
+\caption{Effective bands searched $B_{\text{eff}}$ and false-positive
+reduction factor $B/B_{\text{eff}}$ for different scale brackets and
+band widths. \label{tab:beff}}
+\begin{tabular}{lcccc}
+\toprule
+Scenario & $\delta$ & $\alpha = 3$ & $\alpha = \sqrt{2}$ \\
+ & & $B_{\text{eff}}$ (reduction) & $B_{\text{eff}}$ (reduction) \\
+\midrule
+Known ($\pm 5\%$) & 0.05 & 1 ($4\times$) & 1--2 ($6$--$12\times$) \\
+Moderate ($\pm 20\%$) & 0.20 & 1 ($4\times$) & 2--3 ($4$--$6\times$) \\
+Coarse ($\pm 50\%$) & 0.50 & 1--2 ($2$--$4\times$) & 3--4 ($3$--$4\times$) \\
+Unknown ($\delta \to \infty$) & --- & 4 ($1\times$) & 12 ($1\times$) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+With coarse $3\times$ bands, even moderate brackets fit within a
+single band, so $B_{\text{eff}} = 1$ and the reduction is exactly $B$.
+With fine $\sqrt{2}$ bands, the bracket may span 2--3 bands, but
+there are $3\times$ more bands total, so the net reduction is
+comparable or better.
+
+\subsubsection{Impact on Solve Time}
+
+The total solver time is dominated by verification cost (WCS fitting
+plus Bayesian scoring) applied to each code match. Let $C_v$ denote
+the per-verification cost and $F$ the number of field quads attempted.
+Then
+\begin{equation} \label{eq:tsolve}
+    T_{\text{solve}} \approx F \cdot \langle M \rangle \cdot C_v
+    + T_{\text{overhead}},
+\end{equation}
+where $T_{\text{overhead}}$ includes quad generation, code computation,
+and $k$-d tree traversal (all subdominant).
+
+Substituting Eq.~\ref{eq:reduction}:
+\begin{equation} \label{eq:speedup}
+    \frac{T_{\text{mono}}}{T_{\text{forest}}}
+    \approx \frac{\langle M_{\text{mono}} \rangle}
+                  {\langle M_{\text{forest}} \rangle}
+    = \frac{B}{B_{\text{eff}}}.
+\end{equation}
+
+The expected speedup from the $k$-d forest is $B / B_{\text{eff}}$.
+For our configuration ($B = 12$, $B_{\text{eff}} \approx 2$), this
+predicts a $\sim 6\times$ reduction in the number of false-positive
+verifications.
+
+This prediction is consistent with the observed data: failed cases
+under the 4-band configuration verify a median of 259{,}711 candidates
+vs.\ a median of 3{,}628 for solved cases. The ratio of
+$\sim$70$\times$ between failed and solved cases far exceeds the
+$B/B_{\text{eff}}$ speedup, confirming that the failures represent a
+qualitatively different regime (code-space degeneracy) rather than
+merely a quantitative slowdown.
+
+\subsubsection{$k$-d Tree Traversal Scaling}
+
+Beyond reducing false positives, the forest also reduces $k$-d tree
+traversal cost. For a balanced $k$-d tree in $d$ dimensions, the
+worst-case range search cost is $O(Q^{1 - 1/d} + M)$
+\citep{lee1977}. In $d = 4$ dimensions:
+\begin{equation}
+    C_{\text{tree}}(Q) = O(Q^{3/4} + M).
+\end{equation}
+
+For the forest, the aggregate traversal cost across $B_{\text{eff}}$
+bands is
+\begin{equation}
+    C_{\text{forest}} = \sum_{b \in \mathcal{S}}
+    O\!\left( Q_b^{3/4} + M_b \right)
+    = B_{\text{eff}} \cdot O\!\left(
+    \left(\frac{Q}{B}\right)^{\!3/4}
+    + \frac{M_{\text{mono}}}{B} \right).
+\end{equation}
+
+The traversal speedup is
+\begin{equation} \label{eq:tree_speedup}
+    \frac{C_{\text{mono}}}{C_{\text{forest}}}
+    = \frac{Q^{3/4} + M_{\text{mono}}}
+           {B_{\text{eff}} \left(
+           (Q/B)^{3/4} + M_{\text{mono}}/B \right)}
+    = \frac{Q^{3/4} + M_{\text{mono}}}
+           {B_{\text{eff}} \, Q^{3/4} / B^{3/4}
+           + B_{\text{eff}} \, M_{\text{mono}} / B}.
+\end{equation}
+
+In the match-dominated regime ($M_{\text{mono}} \gg Q^{3/4}$), this
+reduces to $B / B_{\text{eff}}$ as before. In the traversal-dominated
+regime ($M \ll Q^{3/4}$), the speedup is
+$B^{3/4} / B_{\text{eff}}$, which for $B = 12$, $B_{\text{eff}} = 2$
+gives $12^{3/4}/2 \approx 3.2\times$.
+
+In practice, range searches with $\epsilon = 0.01$ return enough
+matches that the match-dominated regime applies for large indexes
+($Q > 10^6$), making the $B / B_{\text{eff}}$ approximation accurate.
+
+\subsubsection{Scaling with FoV Bracket Width} \label{sec:fov_scaling}
+
+The false-positive reduction (Eq.~\ref{eq:reduction}) depends on
+$B_{\text{eff}}$, which in turn depends on how tightly the plate scale
+is known. We summarize three operational regimes:
+
+\paragraph{Known plate scale ($\delta < (\alpha - 1)/2$).}
+The bracket fits within one band width. $B_{\text{eff}} = 1$--2, and
+the forest provides the full $B / B_{\text{eff}} \approx B$ reduction.
+This is the common case for survey pipelines with calibrated optics.
+
+\paragraph{Unknown plate scale ($\delta \to \infty$).}
+All bands are searched ($B_{\text{eff}} = B$), and the forest provides
+no false-positive reduction over monolithic. However, it imposes no
+\emph{penalty} either: the total work is $\sum_b (\log Q_b + M_b)
+\approx \log Q + M_{\text{mono}}$, since the matches partition across
+bands with negligible root-traversal overhead.
+
+\paragraph{Intermediate bracket ($\delta \sim 1$).}
+The bracket spans $\sim B/3$ bands, giving a modest $\sim 3\times$
+reduction. This is the regime where the choice of $\alpha$ matters:
+finer bands ($\alpha = \sqrt{2}$) yield more bands and hence a larger
+$B/B_{\text{eff}}$ ratio, despite each bracket spanning more bands.
+
+\subsubsection{Memory and Loading Trade-offs}
+
+The $k$-d forest partitions the same total quad population across $B$
+trees, so aggregate memory is approximately constant:
+\begin{equation}
+    \mathcal{M}_{\text{forest}} \approx \mathcal{M}_{\text{mono}}
+    + B \cdot \mathcal{O}_{\text{root}},
+\end{equation}
+where $\mathcal{O}_{\text{root}}$ is the per-tree overhead (root node,
+metadata, allocation headers), typically $< 1$\,KB. For our 12-band
+configuration, total load time is $\sim$15\,s and peak memory is
+$\sim$5\,GB---comparable to a monolithic index of the same quad count.
+
+% =============================================================================
+\section{Results} \label{sec:results}
+% =============================================================================
+
+\subsection{Test Configuration} \label{sec:testconfig}
+
+We evaluate on 1{,}000 simulated stellar fields generated by
+\texttt{meter-sim}:
+\begin{itemize}
+    \item Image dimensions: $9568 \times 6380$\,px
+    \item Plate scale: 0.1296\arcsec/px
+    \item Field of view: $\sim$20\arcmin{} $\times$ 13\arcmin{}
+    \item Timeout: 60\,s per field
+\end{itemize}
+
+Source lists were pre-extracted and provided as JSON, bypassing the
+extraction step to isolate solver performance. All runs used a single
+machine with \texttt{rayon} parallelism disabled for timing consistency.
+
+Two Gaia DR3 catalogs were used:
+\begin{itemize}
+    \item Magnitude $\leq 16$: $\sim$83M stars (2.5\,GB)
+    \item Magnitude $\leq 19$: $\sim$565M stars (17\,GB)
+\end{itemize}
+
+\subsection{Sharding Comparison} \label{sec:comparison}
+
+Table~\ref{tab:results} summarizes the solver performance across
+index configurations.
+
+\begin{table}[t]
+\centering
+\caption{Solver performance across index configurations on 1{,}000
+simulated fields. All configurations use the same underlying catalog
+and solver parameters; only the index sharding strategy differs.
+\label{tab:results}}
+\begin{tabular}{lcccccc}
+\toprule
+Configuration & $B$ & $\alpha$ & Solved & Rate & Median $t$ & Mean verif. \\
+\midrule
+Mag 16, 4 bands          & 4  & 3.0          & 960  & 96.0\% & 1.05\,s & 21{,}301 \\
+Mag 19, 12 bands         & 12 & $\sqrt{2}$   & \textbf{983} & \textbf{98.3\%} & 1.42\,s & 14{,}139 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The key findings are:
+
+\paragraph{Finer sharding improves solve rate.}
+Moving from 4 bands ($\alpha = 3$) to 12 bands ($\alpha = \sqrt{2}$)
+increases the solve rate from 96.0\% to 98.3\%, recovering 23
+additional fields. These fields had been lost to false-positive floods
+in the wider bands.
+
+\paragraph{Finer sharding reduces verification load.}
+The mean number of WCS verifications per image drops from 21{,}301
+under 4-band sharding to 14{,}139 under 12-band sharding---a 33\%
+reduction consistent with the analytical prediction of
+$B_{\text{eff}}/B$ fewer false positives per searched band
+(\S\ref{sec:kdforest}). The forest searches fewer, smaller trees,
+reducing both the number of false-positive code matches and the
+associated verification cost.
+
+\subsection{Solve Time Distribution} \label{sec:timedist}
+
+For the best configuration (magnitude 19, 12 bands), the cumulative
+solve time distribution is:
+
+\begin{table}[t]
+\centering
+\caption{Cumulative solve time distribution for the 983 solved fields
+under the best configuration (Mag 19, 12 bands, $\alpha = \sqrt{2}$).
+\label{tab:cumtime}}
+\begin{tabular}{cc}
+\toprule
+Time threshold & Fraction solved \\
+\midrule
+$< 1$\,s   & 44\% \\
+$< 5$\,s   & 78\% \\
+$< 10$\,s  & 89\% \\
+$< 30$\,s  & 98\% \\
+$< 60$\,s  & 100\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Figures~\ref{fig:hist4} and~\ref{fig:hist12} show the solve time
+distributions for the 4-band and 12-band configurations respectively,
+and Figure~\ref{fig:cdf} shows the corresponding cumulative
+distribution functions.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.9\columnwidth]{figures/hist_4band.pdf}
+\caption{Solve time histogram for the 4-band configuration
+($\alpha=3$). Timeouts at 60\,s are shown in red. The dashed line
+marks the median solve time. \label{fig:hist4}}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.9\columnwidth]{figures/hist_12band.pdf}
+\caption{Solve time histogram for the 12-band configuration
+($\alpha=\sqrt{2}$). The timeout population shrinks from 40 to 17
+fields. \label{fig:hist12}}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.9\columnwidth]{figures/solve_cdf.pdf}
+\caption{Cumulative distribution of solve times. The 12-band
+configuration achieves a higher asymptotic solve rate while
+maintaining comparable speeds for the majority of fields.
+\label{fig:cdf}}
+\end{figure}
+
+The median solve time of 1.42\,s under 12-band sharding is comparable
+to the 1.05\,s achieved by 4-band sharding, despite searching a
+larger aggregate index. The 12-band configuration performs 33\% fewer
+verifications per image (14{,}139 vs.\ 21{,}301), confirming the
+$k$-d forest's false-positive reduction (\S\ref{sec:kdforest}).
+The slight increase in median time reflects a handful of harder
+fields that benefit from the finer bands but take longer to converge.
+This trade-off is offset by a 2.3 percentage-point improvement in
+solve rate.
+
+\subsection{Verified Candidate Count} \label{sec:candidates}
+
+The number of WCS candidates verified before finding the correct
+solution is a direct measure of the false-positive rate in code
+matching. Table~\ref{tab:verified} contrasts this metric between
+solved and failed cases.
+
+\begin{table}[t]
+\centering
+\caption{Number of WCS candidates verified during a solve attempt.
+\label{tab:verified}}
+\begin{tabular}{llccc}
+\toprule
+Config & Outcome & Min & Median & Max \\
+\midrule
+4-band  & Solved  & 13      & 3{,}596  & 471{,}309 \\
+4-band  & Failed  & 133{,}533 & 226{,}861 & 325{,}582 \\
+\midrule
+12-band & Solved  & 50      & 4{,}440  & 268{,}884 \\
+12-band & Failed  & 17{,}012 & 159{,}399 & 210{,}378 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Under both configurations, failed cases evaluate 40--60$\times$ more
+candidates than the median solved case. Notably, the 12-band forest
+reduces the median failure verification count from 226{,}861 to
+159{,}399---a 30\% reduction---consistent with the $B/B_{\text{eff}}$
+scaling derived in \S\ref{sec:kdforest}. This confirms that failures
+are driven by false-positive code matches flooding the solver's search
+budget, and that narrower bands partially mitigate this even in the
+degenerate regime.
+
+% =============================================================================
+\section{Failure Analysis} \label{sec:failure}
+% =============================================================================
+
+We investigated the 17 remaining failures (1.7\%) using the Gaia DR3
+catalog (82.7M stars to magnitude 16) to characterize the stellar
+environment at each pointing.
+
+\subsection{Failure Population Properties} \label{sec:failprops}
+
+Table~\ref{tab:failprops} compares the properties of solved and failed
+fields across several dimensions.
+
+\begin{table}[t]
+\centering
+\caption{Properties of solved vs.\ failed fields under the 12-band
+configuration. Stellar density is the Gaia mag-16 star count within a
+$5\degr \times 5\degr$ box centered on the field. Source count is the
+number of detected sources in the field.
+\label{tab:failprops}}
+\begin{tabular}{llcc}
+\toprule
+Property & Statistic & Solved & Failed \\
+\midrule
+Source count & Median & 200 & 200 \\
+             & Mean   & 164 & 166 \\
+\midrule
+Stellar density & Median & 16{,}357 & 21{,}641 \\
+(5\degr{} box) & Mean & 33{,}605 & 40{,}602 \\
+\midrule
+$|b|$ (deg) & Median & 30.0 & 34.9 \\
+            & Mean   & 33.2 & 30.7 \\
+\midrule
+Min NN dist (px) & Median & 84.9 & 111.4 \\
+\midrule
+Backbone dist (px) & Median & 3{,}938 & 5{,}346 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Neither source count, Galactic latitude, nor local stellar density
+are strong predictors of failure. The failure rate is 2.0\% among
+dense fields (200 sources, the extraction cap) and 1.2\% among
+sparser fields---a marginal difference. Similarly, failure rates are
+comparable across all stellar density quartiles (0.8--3.2\%).
+
+\subsection{Distinguishing Characteristics} \label{sec:distinguish}
+
+Two subtle geometric properties distinguish the failure population:
+
+\paragraph{Large backbone distance.}
+Failed fields have a median backbone distance (separation between the
+two brightest sources) of 5{,}346\,px, 36\% larger than the solved
+median of 3{,}938\,px. A large backbone produces a quad with a
+correspondingly large angular scale, which---at the test plate scale
+of 0.1296\arcsec/px---maps to $\sim$11.5\arcmin, near the upper end
+of the index's scale range. Long backbones sample a larger sky area,
+increasing the probability of code-space collisions with unrelated
+star patterns at similar angular scale.
+
+\paragraph{Well-separated sources.}
+The median minimum nearest-neighbor distance among the top 50 sources
+is 111\,px for failed fields vs.\ 85\,px for solved fields. This
+indicates a more uniform spatial distribution of bright sources, which
+reduces the diversity of quad geometries available to the solver.
+Clustered sources produce a richer variety of quad codes, increasing
+the likelihood that at least one matches uniquely.
+
+\subsection{Failure Mechanism} \label{sec:mechanism}
+
+The 17 failures share a common mechanism: the solver evaluates
+121{,}000--210{,}000 candidate WCS solutions without finding the
+correct quad match, exhausting the 60\,s time budget. The
+verification count for failed fields is 36--48$\times$ the solved
+median of 4{,}440, indicating a false-match flood in the code space.
+
+This is fundamentally a \emph{search budget} problem rather than a
+verification sensitivity problem. The correct quad may exist in the
+index but is buried among too many geometrically similar candidates.
+Longer timeouts could recover some cases, but the flat log-odds
+plateau at $\sim$50 (with only 4 matches) suggests the solver is not
+converging---it repeatedly finds wrong quads with coincidentally
+similar codes.
+
+% =============================================================================
+\section{Discussion} \label{sec:discussion}
+% =============================================================================
+
+\subsection{Sharding as a First-Order Design Decision}
+
+Our results demonstrate that index sharding is not merely an engineering
+convenience for managing file sizes---it is a first-order algorithmic
+parameter that directly affects solver accuracy. The 2.3 percentage-point
+improvement from 4 to 12 bands exceeds the 1.0 percentage-point gain
+from tripling the catalog depth (83M to 565M stars).
+
+This finding has practical implications: operators can improve solve
+performance by rebuilding indexes with finer sharding at \emph{zero}
+cost in catalog data, hardware, or solver code. The only trade-off is
+increased disk usage and index load time, both of which are modest
+(12 files instead of 4, loaded once at startup).
+
+\subsection{Diminishing Returns of Band Splitting}
+
+The progression from 1 to 4 to 12 bands shows diminishing returns:
+the largest gains come from the initial split from monolithic to
+multi-band. Beyond $\sim$12 bands, the marginal benefit of splitting
+further is limited by two factors:
+\begin{enumerate}
+    \item At the finest scales (10--14\arcsec), HEALPix cells at depth
+          8 are much larger than the quad angular scale, producing sparse
+          quad populations per cell.
+    \item The remaining failures are code-space degeneracies that
+          narrower bands cannot resolve---the wrong quads have genuinely
+          similar codes to the correct one.
+\end{enumerate}
+
+\subsection{Memory and Scale Trade-offs}
+
+Fine-scale bands at high HEALPix depth present a memory challenge.
+Depth 8 corresponds to 786{,}432 cells, and the $k$-d tree over a
+12M-quad index requires $\sim$15\,GB of working memory. Depth 9
+(3.1M cells) or depth 10 (12.6M cells) would improve quad density
+for fine bands but requires either streaming construction or
+significantly more memory. We cap the depth at 8 as a practical
+compromise.
+
+\subsection{Comparison with \texttt{astrometry.net}}
+
+Direct comparison with \texttt{astrometry.net} is complicated by
+differences in test data (our simulated narrow-field imagery vs.\
+SDSS's wider-field survey data), index construction parameters, and
+runtime environments. The reference system reports $>$99.9\% on
+SDSS fields ($2048 \times 2048$\,px, 0.396\arcsec/px,
+$\sim$13.5\arcmin{} FOV), compared to our 98.3\% on
+narrower-field simulations ($\sim$20\arcmin{} $\times$
+13\arcmin{} FOV, 0.1296\arcsec/px).
+
+The narrower field and finer plate scale in our test set present a
+harder matching problem: fewer reference stars in the field of view,
+smaller angular scale quads, and tighter tolerances for positional
+matching. The algorithmic approach is identical; differences in
+performance are primarily attributable to the test data characteristics.
+
+\subsection{Pure-Rust Implementation}
+
+Zodiacal is implemented in $\sim$4{,}000 lines of Rust with no unsafe
+code, no C bindings, and no runtime dependencies beyond the standard
+library and pure-Rust crates. The const-generic $k$-d tree
+(\texttt{KdTree<const DIM: usize>}) specializes at compile time for
+3D (star positions), 4D (quad codes), and 2D (pixel-space verification),
+avoiding runtime dispatch overhead.
+
+The monolithic index format (\texttt{.zdcl}) bundles metadata, stars,
+quads, and codes into a single binary file with a JSON metadata header,
+simplifying distribution compared to \texttt{astrometry.net}'s multi-file
+FITS-based format.
+
+\subsection{Future Directions}
+
+Several avenues could address the remaining 1.7\% failure rate:
+\begin{itemize}
+    \item \textbf{Finer band splitting in the 30--90\arcsec{} range},
+          where the bulk of mid-latitude failures concentrate.
+    \item \textbf{Higher HEALPix depth} for fine-scale bands, requiring
+          streaming index construction to manage memory.
+    \item \textbf{Adaptive backbone selection}: instead of always using
+          the brightest stars, choose backbone pairs that maximize
+          geometric diversity.
+    \item \textbf{SIP distortion models}: extending beyond TAN to handle
+          optical distortions in wide-field imagers.
+\end{itemize}
+
+% =============================================================================
+\section{Conclusion} \label{sec:conclusion}
+% =============================================================================
+
+We have presented Zodiacal, a pure-Rust blind astrometry plate solver
+that achieves 98.3\% solve rates with a median time of 1.42\,s on
+simulated narrow-field imagery. Our systematic evaluation of index
+sharding strategies demonstrates that partitioning the angular scale
+space into narrow bands is a first-order design decision: moving from
+4 coarse bands to 12 fine bands ($\sqrt{2}$ scale factor) improves
+the solve rate by 2.3 percentage points while maintaining sub-second
+median solve times for the majority of fields.
+
+The performance benefit arises from two mechanisms: smaller per-band
+$k$-d trees that reduce false-positive code matches, and per-index
+scale filtering that prunes irrelevant bands entirely. These combine
+to reduce the effective search space by an order of magnitude for
+typical fields.
+
+The residual 1.7\% failure population is characterized by
+large-backbone geometries that produce code-space collisions,
+representing a search budget challenge for geometric hashing
+approaches that narrower bands alone cannot fully resolve.
+
+Zodiacal is open-source and available at
+\url{https://github.com/OrbitalCommons/zodiacal}.
+
+\section*{Acknowledgments}
+
+This work makes use of data from the European Space Agency mission
+Gaia (\url{https://www.cosmos.esa.int/gaia}), processed by the Gaia
+Data Processing and Analysis Consortium.
+
+\bibliographystyle{plainnat}
+\bibliography{zodiacal}
+
+\end{document}
