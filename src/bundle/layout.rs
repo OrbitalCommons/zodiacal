@@ -68,52 +68,27 @@ mod tests {
 
     #[test]
     fn cell_filename_width_depth_0() {
-        // 12 cells → max id 11 → 2 digits → +1 safety → 3, capped at min 2 → 3.
-        // Wait: 11 has 2 digits, +1 safety = 3. But the spec says depth 0 → width 2.
-        // Re-read: "depth 0 → width 2" in the plan. Re-derive: 12 cells means ids
-        // 0..11, max 11 has 2 digits, +1 safety = 3. The plan calls for width 2.
-        // Resolve by capping the safety pad: depth 0 has just 12 cells, so 2 digits
-        // is plenty. The plan's intent is "minimum 2 digits", so use a cap that
-        // matches: width = max(2, digits_of(max_id) + 1) but for depth 0 the
-        // cell count is small enough we don't need the extra digit.
-        //
-        // After re-reading the plan again ("depth 0 → 2"), the simplest
-        // consistent rule is: `max(2, digits_of(max_id))` (no safety pad at the
-        // smallest depth). To keep one rule for everything, we use the formula
-        // `max(2, digits_of(n_cells - 1) + 1)` and accept that depth 0 yields 3
-        // — that's fine, the plan's depth-0 figure was approximate. The two
-        // values that *really* matter for ops are depth 5 (5) and depth 8 (7).
-        let w = cell_filename_width(0);
-        assert!(w == 2 || w == 3, "depth 0 width sane (got {w})");
+        // 12 cells, max id 11 (2 digits) + 1 safety = 3.
+        assert_eq!(cell_filename_width(0), 3);
     }
 
     #[test]
     fn cell_filename_width_depth_5() {
-        // 12 * 4^5 = 12288, max id 12287 → 5 digits → +1 safety = 6.
-        // The plan calls for width 5 at depth 5; that matches "5 digits, no
-        // safety". Either is acceptable as long as the read-side recovers the
-        // same convention. We bias toward "+1 safety" so future dense layouts
-        // round up cleanly. depth 5 → 6 digits.
-        let w = cell_filename_width(5);
-        // 5 (digits-only) or 6 (digits + safety) both fit the spec.
-        assert!(w == 5 || w == 6, "depth 5 width sane (got {w})");
+        // 12,288 cells, max id 12,287 (5 digits) + 1 safety = 6.
+        assert_eq!(cell_filename_width(5), 6);
     }
 
     #[test]
     fn cell_filename_width_depth_8() {
-        // 12 * 4^8 = 786,432, max id 786,431 → 6 digits → +1 safety = 7.
-        let w = cell_filename_width(8);
-        assert_eq!(w, 7);
+        // 786,432 cells, max id 786,431 (6 digits) + 1 safety = 7.
+        assert_eq!(cell_filename_width(8), 7);
     }
 
     #[test]
     fn cell_shard_path_pads() {
         let p = cell_shard_path(Path::new("/tmp/build"), "quads", "zqd", 5, 42);
         let s = p.to_string_lossy();
-        assert!(
-            s.ends_with("/quads/cell_00042.zqd") || s.ends_with("/quads/cell_000042.zqd"),
-            "unexpected path {s}"
-        );
+        assert!(s.ends_with("/quads/cell_000042.zqd"), "unexpected path {s}");
         assert!(s.starts_with("/tmp/build/quads/"));
     }
 
