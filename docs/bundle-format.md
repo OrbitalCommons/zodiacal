@@ -23,21 +23,18 @@ index.zdcl.bundle/
 │   ├── cell_00000.zqd          # ALL bands' quads + codes for cell 0, in one file
 │   ├── cell_00001.zqd
 │   └── …
-├── stars/
-│   ├── cell_00000.zst          # star records for cell 0 (shared across bands)
-│   ├── cell_00001.zst
-│   └── …
-└── sidecar/
-    ├── cell_00000.zsc          # sidecar records for cell 0, sorted by source_id
-    ├── cell_00001.zsc
+└── gaia/
+    ├── cell_00000.zga          # per-star Gaia records for cell 0, sorted by source_id
+    ├── cell_00001.zga
     └── …
 ```
 
+- One file per cell for quads (multi-band, with band-table at the head), one file per cell for the per-star Gaia records. The gaia per-cell file is the canonical per-star store, and the quad file's local indices point into it (see file format below).
 - A quad goes into the file of the HEALPix cell containing its **centroid** (unit-vector mean of the 4 member stars). For the current cell-driven builder, all four members already live in the same cell, so centroid-cell == anchor-cell; once the builder gains cross-cell support (#65 follow-up), a straddle quad lands in whichever cell its centroid falls in, no matter where its anchors live.
 - All bands' quads for the same cell sit in **one** file with a band-table at the head — both because it cuts file count by `n_bands` (often 10–12×) and because region-load + multi-band-solve naturally reads "everything that quad-matters for this cell" with one mmap.
 - `cell_NNNNN` is zero-padded decimal at the bundle's `cell_depth`. Width is computed from `cell_depth` at write time (`12·4^depth` decimal-digits + 1 for safety) and read from the manifest, not assumed.
 - Empty cells are simply absent from disk — no zero-byte files. The manifest's `populated_cells` block tells the reader what exists.
-- File extensions: `.zqd` (quads + codes, multi-band per cell), `.zst` (stars per cell), `.zsc` (sidecar per cell). Distinct so a quick `find . -name '*.zqd'` always tells you "all per-cell quad shards."
+- File extensions: `.zqd` (quads + codes, multi-band per cell), `.zga` (per-star Gaia records, per cell). Distinct so a quick `find . -name '*.zqd'` always tells you "all per-cell quad shards."
 
 ### `cell_depth` is a build-time knob
 
@@ -80,16 +77,13 @@ When the source excerpt is sharded at one depth and the bundle is built at anoth
       "path": "~/.cache/starfield/gaia-excerpts/dr3-mag20-bycell"
     }
   },
-  "stars": {
+  "gaia": {
     "n_total": 112080742,
+    "record_size": 104,
+    "schema_version": 1,
     "max_stars_per_cell": 10000,
     "mag_limit": 20.0,
     "populated_cells": 12288
-  },
-  "sidecar": {
-    "n_total": 112080742,
-    "record_size": 88,
-    "schema_version": 1
   },
   "bands": [
     {
@@ -119,21 +113,9 @@ The free-text `experiment` field is for human ops notes — a one-liner summariz
 
 ## Per-cell file formats
 
-### `stars/cell_NNNNN.zst` — star records
-
-```
-magic         8 B  "ZDCLSTAR"
-version       4 B  u32 LE = 1
-reserved      4 B
-cell_id       8 B  u64 LE — defensive duplication; filename is the source of truth
-n_stars       4 B  u32 LE
-reserved      4 B  → align to 8
-records       n_stars × 32 B  (catalog_id u64, ra_rad f64, dec_rad f64, mag f64)
-```
-
 ### `quads/cell_NNNNN.zqd` — quads + codes for one cell, all bands
 
-One file per HEALPix cell holds **every band's quads** for that cell, with a band table at the head pointing at each band's quad/code blocks. Indices are **into this cell's `cell_NNNNN.zst` file** — local indices, not global. (Cross-cell quads are not supported by the current cell-driven builder; once they are, a straddle quad lives in the file of whichever cell contains its centroid.)
+One file per HEALPix cell holds **every band's quads** for that cell, with a band table at the head pointing at each band's quad/code blocks. Indices are **into this cell's `cell_NNNNN.zga` file** — local indices, not global. (Cross-cell quads are not supported by the current cell-driven builder; once they are, a straddle quad lives in the file of whichever cell contains its centroid.)
 
 ```
 magic         8 B  "ZDCLQUAD"
@@ -169,17 +151,73 @@ Loading "all bands' quads for one cell" is a single mmap. Loading "one band's qu
 
 The 24-byte-per-band table is small (288 B for 12 bands) and lets the writer emit blocks in any order — useful when the cell-driven builder runs band-N quad emission in parallel and finalizes the per-cell file by stitching in-memory band buffers. Empty bands (n_quads == 0) take only 24 B in the table; the offsets point at zero-length blocks and the reader handles that as a no-op slice.
 
-### `sidecar/cell_NNNNN.zsc` — sidecar records, sorted by source_id, binsearchable
+### `gaia/cell_NNNNN.zga` — Gaia source records, sorted by source_id, binsearchable
+
+This file replaces the prior split between a verifier-facing stars block and a refinement-facing sidecar. One canonical 104-byte record per star covers both: enough fields for the verifier's brightness prior, full astrometric covariance for weighted refinement (#47), and the universal Gaia DR3 quality flag.
 
 ```
-magic         8 B  "ZDCLSIDE"
+magic         8 B  "ZDCLGAIA"
 version       4 B  u32 LE = 1
-record_size   4 B  u32 LE = 88
+record_size   4 B  u32 LE = 104
 cell_id       8 B  u64 LE
 n_records     4 B  u32 LE
 reserved      4 B  → align to 8
-records       n_records × 88 B  (sorted ascending by source_id)
+records       n_records × 104 B  (sorted ascending by source_id)
 ```
+
+#### Record layout — 104 B fixed-width
+
+```
+offset  size   field                        notes
+------  ----   --------------------------   ------------------------------------------------------
+   0    8 B   source_id           u64 LE   Gaia source_id; also indexed in
+                                            the quad file via local idx.
+   8    8 B   ref_epoch           f64 LE   Epoch of the position; J2016.0 for DR3.
+  16    8 B   ra                  f64 LE   degrees, ICRS, at ref_epoch.
+  24    8 B   dec                 f64 LE   degrees, ICRS, at ref_epoch.
+  32    8 B   pmra                f64 LE   mas/yr, with cos(dec) factor applied (Gaia convention).
+                                            NaN if Gaia did not publish a 5-parameter solution.
+  40    8 B   pmdec               f64 LE   mas/yr; NaN if missing.
+  48    8 B   parallax            f64 LE   mas; NaN if missing.
+  56    8 B   radial_velocity     f64 LE   km/s; NaN for the ~98 % of DR3 sources without RVS.
+  64    8 B   phot_g_mean_mag     f64 LE   Gaia G-band apparent magnitude. Always present.
+  72    4 B   sigma_ra            f32 LE   mas; 1-σ along the RA direction.
+  76    4 B   sigma_dec           f32 LE   mas; 1-σ along Dec.
+  80    4 B   sigma_pmra          f32 LE   mas/yr.
+  84    4 B   sigma_pmdec         f32 LE   mas/yr.
+  88    4 B   sigma_parallax      f32 LE   mas.
+  92    4 B   ra_dec_corr         f32 LE   Pearson correlation in [-1, +1]. NaN if Gaia did
+                                            not publish a 5-parameter solution. Without
+                                            this, the (RA, Dec) error covariance is treated
+                                            as diagonal and any chi-square is wrong.
+  96    4 B   ruwe                f32 LE   Renormalized Unit Weight Error. RUWE > ~1.4 flags
+                                            "astrometry suspect" (binary, blended, high-PM).
+                                            NaN if missing.
+ 100    4 B   flags               u32 LE   bitfield (presence flags + future quality bits)
+ ------------
+ 104 B total
+```
+
+#### `flags` bitfield
+
+```
+bit  0   has_pm                  pmra/pmdec/sigma_pm* are non-NaN
+bit  1   has_parallax            parallax/sigma_parallax are non-NaN
+bit  2   has_radial_velocity     radial_velocity is non-NaN
+bit  3   has_ra_dec_corr         ra_dec_corr is non-NaN
+bit  4   has_ruwe                ruwe is non-NaN
+bit  5   …                        reserved for ipd_frac_multi_peak / duplicated_source / etc.
+                                  if a future schema bump promotes them.
+bits 6..31  reserved.
+```
+
+Cheap presence checks via bitfield avoid hot-path NaN comparisons; the float fields still carry NaN as a sentinel for self-describing reads.
+
+#### Why 104 B (not 96, not 128)
+
+- **96 B** would carry only `phot_g_mean_mag` on top of today's 88 B. Sufficient to drop `stars/`, but leaves the weighted-refinement covariance and the Gaia quality flag *missing forever* unless we bump format-version later — and retrofitting the covariance after consumers exist is expensive.
+- **128 B** would tack on photometric extras (BP, RP, sigma_RV, n_obs_al, ipd_frac_multi_peak) that aren't needed by zodiacal itself; downstream code can re-pull those from a separate excerpt query if it cares. The 24 B cost is real (45 % bigger than today, 33 % fewer records per page during binsearch).
+- **104 B** carries exactly the fields zodiacal *uses*: brightness for the verifier, full 2×2 astrometric covariance for refinement, RUWE for quality screening. Stops there.
 
 The cell-level pivot table is omitted — at typical depths each cell has at most a few × 10⁵ records, so a direct binsearch over the mmapped record array is one cache-line probe per O(log n) step. A pivot table would be wasted bookkeeping at this granularity.
 
@@ -190,7 +228,7 @@ Workers writing in parallel can collide on the same canonical filename if two of
 - A worker writes to `cell_NNNNN.zqd.part.HHHHHHHH` where `HHHHHHHH` is a hex hash unique to that worker invocation (e.g. `xxh3-64` of pid + thread_id + nanos + cell_id, truncated to 8 hex digits).
 - After fsync + close, the worker `rename(2)`s the partial file to `cell_NNNNN.zqd`. POSIX guarantees rename is atomic on the same filesystem.
 - If the rename target exists (another worker won the race), the loser deletes its `.part.HHHHHHHH` file. The committed file is content-equivalent because the build is deterministic per (cell, band, config).
-- A finalize step at the end of the build sweeps `quads/`, `stars/`, `sidecar/` for any `*.part.*` leftovers and removes them. Then it writes `manifest.json` last.
+- A finalize step at the end of the build sweeps `quads/` and `gaia/` for any `*.part.*` leftovers and removes them. Then it writes `manifest.json` last.
 - A crashed build is identified at re-run by `manifest.json`'s absence. The work directory survives crashes, partial files survive crashes, and the next run picks up where the previous left off (the cell-driven builder's existing `BuildManifest` (#70) handles the per-cell skip/redo logic and is still the durable resume primitive — the bundle layout above is purely the *output* shape).
 
 ## Reader API
@@ -219,16 +257,17 @@ impl ZdclBundle {
     /// code-tree at a time.
     pub fn load_region_band(&self, band_idx: usize, region: &SkyRegion) -> io::Result<IndexFragment>;
 
-    /// Sidecar lookup. `cell_hint` short-circuits the cell-from-source_id
-    /// derivation; if `None`, the bundle derives the cell from the
-    /// source_id's HEALPix prefix and the bundle's `cell_depth`.
-    pub fn sidecar_get(&self, source_id: u64, cell_hint: Option<u64>) -> io::Result<Option<SidecarRecord>>;
+    /// Per-source-id Gaia record lookup. `cell_hint` short-circuits the
+    /// cell-from-source_id derivation; if `None`, the bundle derives the
+    /// cell from the source_id's HEALPix prefix and the bundle's
+    /// `cell_depth`.
+    pub fn gaia_get(&self, source_id: u64, cell_hint: Option<u64>) -> io::Result<Option<GaiaRecord>>;
 
-    pub fn sidecar_get_many(&self, source_ids: &[u64]) -> io::Result<Vec<Option<SidecarRecord>>>;
+    pub fn gaia_get_many(&self, source_ids: &[u64]) -> io::Result<Vec<Option<GaiaRecord>>>;
 }
 ```
 
-`MultiBandFragment` holds the shared stars block plus a `Vec<IndexFragment>` (one per band, sharing the stars by reference). The solver receives `&[&Index]` exactly as today; constructing those is `bundle.bands().iter().map(|b| &b.index).collect()`.
+`MultiBandFragment` holds the shared per-cell `gaia/` records plus a `Vec<IndexFragment>` (one per band, all referencing the same gaia records via local index). The solver receives `&[&Index]` exactly as today; constructing those is `bundle.bands().iter().map(|b| &b.index).collect()`.
 
 For zip mode, the same API applies; internally `BundleSource::Zip` wraps a `zip::ZipArchive` and reads each requested entry into a `Bytes` buffer instead of mmapping. That's slower but lets us ship a single `.zdcl.bundle.zip` artifact for distribution.
 
@@ -239,18 +278,19 @@ For zip mode, the same API applies; internally `BundleSource::Zip` wraps a `zip:
 ### What this gets right
 
 - **Multi-band as first-class.** Solvers expecting `&[&Index]` already work; building a bundle is the only new construction path.
-- **Star block is not duplicated.** `stars/cell_NNNNN.zst` is referenced by every band's `quads/band_KK/cell_NNNNN.zqd`. Saves ~3.5 GB × (n_bands − 1) compared to `build-index-series` today.
-- **Sidecar inherits the same cell sharding.** A FOV that touches K cells reads K sidecar shards instead of binsearching one global sidecar. Per-cell shards are typically tens of MB at G≤20 and small enough that direct binsearch beats a pivot table.
+- **One canonical per-star store.** Each cell has exactly one `cell_NNNNN.zga` carrying the 104 B Gaia record, referenced by every band's quads via local index. No duplication across bands the way `build-index-series` produces today (12× star block redundancy).
+- **The 104 B record covers both hot-path and refinement.** Verifier reads `phot_g_mean_mag` for its prior; refinement reads the full 2×2 astrometric covariance via `ra_dec_corr`; quality-aware consumers filter on `ruwe`. No "load stars for solving, load sidecar for refinement" split.
+- **Cell-sharded gaia records.** A FOV that touches K cells reads K gaia shards instead of binsearching one global sidecar. Per-cell shards are small enough that direct binsearch beats a pivot table.
 - **Region-load is unchanged in shape.** "Open manifest, list cells in region, mmap their files" is exactly the existing pattern, just spread across more files.
 - **Crash safety / parallelism.** `rename(2)` per file plus hex-hashed partials plus manifest-as-commit-point is a clean three-layer atomicity story.
 - **Folder-or-zip transparency.** The same code path serves a hot-cache directory and a distributable zip with one CLI flag (`--source-kind dir|zip|auto`).
 
 ### What I'd push back on / open questions
 
-1. **File count.** With all-bands-per-cell quad files, the count is 3 × n_cells: stars + quads + sidecar, one of each per populated cell, regardless of band count. At depth 5 that's 3 × 12,288 = **36,864 files** in the worst-populated case (~3 × n_cells_at_depth). At depth 7 it's 3 × 196,608 ≈ **590k files** — manageable on ext4 / xfs but starts to hurt for `ls`, `tar`, `rsync`. Distribution wants the zip form to amortise the inode tax; serving wants the directory; both fine, but the zip → directory unpack is itself a large inode-creation pass.
+1. **File count.** Bundle file count is 2 × n_cells: one quad shard plus one gaia shard per populated cell, regardless of band count (all bands live in the single quad shard per cell). At depth 5 that's 2 × 12,288 = **24,576 files**. At depth 7 it's 2 × 196,608 ≈ **393k files** — manageable on ext4 / xfs but starts to hurt for `ls`, `tar`, `rsync`. Distribution wants the zip form to amortise the inode tax; serving wants the directory; both fine, but the zip → directory unpack is itself a large inode-creation pass.
    - **Mitigation if it bites:** introduce shard *bucketing* — one file per bucket of M consecutive cells, each file with its own internal cell-table. Re-introduces v3-style internal grouping at a coarser-than-cell granularity. Worth weighing against how often "load region" actually needs sub-cell granularity (almost never — we always load whole cells), against the tooling cost of `tar`-ing and `rsync`-ing the bundle.
 
-2. **mmap setup cost for region-load.** A 1° FOV at level 5 covers ~1 cell. 12 bands → 12 quad mmaps + 1 stars mmap + 1 sidecar mmap = 14 mmaps. Each mmap is a syscall and a page-table allocation. Cheap individually (microseconds) but for the realtime ground/space modes that load every solve, this adds up. The current single-file `ZdclFile` does it once.
+2. **mmap setup cost for region-load.** A 1° FOV at level 5 covers ~1 cell. Per cell that's 1 quad mmap + 1 gaia mmap = 2 mmaps (regardless of band count, since all bands live in the one quad shard). Across the 1–4 cells a typical FOV touches, you're at 2–8 mmaps. Each mmap is a syscall and a page-table allocation — cheap individually (microseconds) but for the realtime ground/space modes that load every solve, this adds up. The current single-file `ZdclFile` does it once.
    - **Mitigation:** the bundle reader's `open_files` cache amortises across solves in the server case. In ground/space mode we have one `LiveIndex` that holds the current cell set; opening 12 mmaps per FOV change is fine.
 
 3. **Cross-cell quads are still unsupported.** This isn't new — the cell-driven builder already drops quads whose backbones straddle cell boundaries — but the per-cell file format makes it harder to fix later. To support cross-cell quads we'd either need to (a) duplicate the quad in both cells' files, (b) introduce a "cross-cell quads" file type that lists referencing cell IDs explicitly, or (c) keep per-cell files only for "interior" quads and a global file for boundary quads. None of these is impossible but the per-cell-only assumption is now baked into more places.
@@ -260,7 +300,7 @@ For zip mode, the same API applies; internally `BundleSource::Zip` wraps a `zip:
    - Caller passes the cell hint (the index already knows what cell each matched star came from). Cleaner but requires plumbing changes through `RefinementCatalog::load_sidecar_filtered`.
    - This was foreshadowed in #66.
 
-5. **Format-version drift.** We've now got: a manifest version, a star-shard version, a quad-shard version, a sidecar-shard version. Each can evolve independently. That's actually a feature compared to the v3 monolith, but it means more code paths and more migration stories.
+5. **Format-version drift.** We've now got: a manifest version, a quad-shard version, a gaia-shard version. Each can evolve independently. That's actually a feature compared to the v3 monolith, but it means more code paths and more migration stories.
 
 6. **Free-text `experiment` is too permissive.** A free-text field is good for ops notes but tooling will want structured fields anyway (e.g., "show all bundles built from G ≤ 19 catalog with ≥ 100 quads/cell"). My instinct: keep the free-text field for human notes *and* add a structured `build_params` block in `build_metadata` that captures the salient knobs (mag_limit, max_stars_per_cell, scale-band list, max_reuse, source kind). Then tooling has a canonical place to look without parsing prose.
 
