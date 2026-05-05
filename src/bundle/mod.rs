@@ -12,3 +12,4 @@ pub mod gaia_shard;
 pub mod layout;
 pub mod manifest;
 pub mod quad_shard;
+pub mod tidy;
