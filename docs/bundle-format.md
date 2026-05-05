@@ -151,6 +151,34 @@ Loading "all bands' quads for one cell" is a single mmap. Loading "one band's qu
 
 The 24-byte-per-band table is small (288 B for 12 bands) and lets the writer emit blocks in any order — useful when the cell-driven builder runs band-N quad emission in parallel and finalizes the per-cell file by stitching in-memory band buffers. Empty bands (n_quads == 0) take only 24 B in the table; the offsets point at zero-length blocks and the reader handles that as a no-op slice.
 
+#### Quad addressing & band recovery
+
+Band membership is **not** stored on individual quad records; it lives in the band table at the head of the cell file (one entry per band, one band per block). That keeps the quad record at a clean 16 B and the codes record at 32 B. Consequently:
+
+**Backing out band from a "quad number" within a cell.** Given an intra-cell index `i ∈ [0, total_quads_in_cell)` (where `total = Σ band_table[k].n_quads`), the band a quad belongs to is the unique `k` such that `cumsum[k] ≤ i < cumsum[k+1]`, where `cumsum[k] = Σ_{j<k} band_table[j].n_quads`. O(log n_bands) with a sorted cumsum, O(1) if the reader caches it on file open.
+
+Equivalently, given `(band_idx, intra_band_idx)` you can compute the file offset directly:
+
+```
+quad_record_offset = band_table[band_idx].quads_offset + intra_band_idx × 16
+code_record_offset = band_table[band_idx].codes_offset + intra_band_idx × 32
+```
+
+**Unique keys for a quad.** Several equivalent identifiers, ordered most to least specific:
+
+| Key | Granularity | Use |
+|---|---|---|
+| `(cell_id, band_idx, intra_band_idx)` | The canonical address within the bundle. | Reader API, "give me quad X for inspection." |
+| `(cell_id, intra_cell_idx)` | Equivalent; collapses band+intra-band into one position via the cumsum above. | Compact in-memory references; survives future band-layout changes. |
+| `sorted([local_idx_a, local_idx_b, local_idx_c, local_idx_d])` | The 4 star positions in this cell's `gaia/cell_NNNNN.zga` file. | Implicit dedup key during build (`HashSet<[usize; 4]>` in `build_quads_for_cell`). |
+| `sorted([source_id_a, source_id_b, source_id_c, source_id_d])` | The 4 Gaia source_ids of the member stars. | Globally unique across rebuilds; useful for cross-build verification ("did this bundle keep the same specific quad?"). |
+
+**What's *not* unique.** The 4 indices in their *encoded order* (the sequence stored in the quad record) is not a key — `compute_canonical_code` reorders members during canonical encoding. Code-comparing quads requires sorting the index tuple first. The 4-D code itself is also not unique: many distinct quads land at similar codes (the whole reason solver matching uses a tolerance).
+
+**The natural reader-API key.** `(cell_id, intra_cell_idx)` because it (1) survives any future change to band layout (adding bands, splitting bands, flat layouts), (2) trivially recovers `band_idx` via the cumsum, and (3) gives band-agnostic consumers a flat numbering they can iterate.
+
+For the **builder**, the natural emission order is per-band (build all of band 0 for cell N, then all of band 1, …). With that order, `intra_cell_idx == sum_of_n_quads_in_lower_bands + intra_band_idx`, so the two addressing schemes coincide on disk for free.
+
 ### `gaia/cell_NNNNN.zga` — Gaia source records, sorted by source_id, binsearchable
 
 This file replaces the prior split between a verifier-facing stars block and a refinement-facing sidecar. One canonical 104-byte record per star covers both: enough fields for the verifier's brightness prior, full astrometric covariance for weighted refinement (#47), and the universal Gaia DR3 quality flag.
