@@ -33,6 +33,7 @@ glob = { version = "0.3.3", optional = true }
 image = { version = "0.25.9", optional = true }
 indicatif = { version = "0.18.3", optional = true }
 ndarray = { version = "0.17.2", optional = true }
+bytemuck = { version = "1", features = ["derive"] }
 cdshealpix = "0.9.1"
 memmap2 = "0.9"
 nalgebra = "0.32"
