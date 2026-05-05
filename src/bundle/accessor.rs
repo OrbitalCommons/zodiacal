@@ -107,7 +107,20 @@ impl<'a> std::fmt::Debug for EntryBytes<'a> {
 /// The mmaps are stored as `Box<Mmap>` to keep their addresses stable
 /// across hash-map rehashes, which lets us hand out `&[u8]` slices
 /// borrowing from those mmaps for the lifetime of the accessor.
+///
+/// # Path-traversal hardening
+///
+/// `FsAccessor` treats the bundle as untrusted input. Every relative
+/// name passed in is validated **before** any filesystem syscall:
+/// empty names, absolute paths, `..` components, and NUL bytes are
+/// rejected with [`io::ErrorKind::InvalidInput`]. After resolving a
+/// candidate path under the root, both root and candidate are
+/// canonicalized and the candidate is required to be a descendant of
+/// the root. This catches both lexical traversal (`a/../../etc`) and
+/// symlinks that point outside the root.
 pub struct FsAccessor {
+    /// Canonicalized base directory. All resolved entries must live
+    /// underneath this path post-canonicalization.
     root: PathBuf,
     cache: Mutex<HashMap<String, Box<Mmap>>>,
 }
@@ -117,7 +130,9 @@ impl FsAccessor {
     ///
     /// The path must point at an existing directory; otherwise an
     /// `io::Error` of kind [`io::ErrorKind::NotFound`] (or similar) is
-    /// returned.
+    /// returned. The directory is canonicalized once at construction
+    /// time and that canonical path is used as the traversal-check
+    /// prefix for every subsequent entry lookup.
     pub fn open(root: impl AsRef<Path>) -> io::Result<Self> {
         let root = root.as_ref().to_path_buf();
         let meta = std::fs::metadata(&root)?;
@@ -127,30 +142,92 @@ impl FsAccessor {
                 format!("{} is not a directory", root.display()),
             ));
         }
+        // Canonicalize once so we can compare candidates by prefix.
+        // This resolves any symlinks in the root path itself; from
+        // here on the stored `root` is the trusted base.
+        let root = std::fs::canonicalize(&root)?;
         Ok(Self {
             root,
             cache: Mutex::new(HashMap::new()),
         })
     }
 
-    /// Resolve a bundle-relative path to an absolute filesystem path.
-    fn resolve(&self, rel: &str) -> PathBuf {
-        // Bundle paths use forward slashes; on Windows we'd have to
-        // normalize, but on the platforms this crate targets `Path::join`
-        // handles a forward-slash subpath correctly.
-        let mut p = self.root.clone();
+    /// Validate a bundle-relative name without touching the filesystem.
+    ///
+    /// Rejects names that are empty, absolute, contain a `..`
+    /// component, or contain a NUL byte. Returns an `InvalidInput`
+    /// error so callers can distinguish "bad name" from "missing
+    /// file".
+    fn validate_name(rel: &str) -> io::Result<()> {
+        if rel.is_empty() {
+            return Err(invalid_name(rel, "empty name"));
+        }
+        if rel.contains('\0') {
+            return Err(invalid_name(rel, "name contains NUL byte"));
+        }
+        // Reject obviously-absolute names in either bundle (`/foo`)
+        // or host (`Path::is_absolute`) form.
+        if rel.starts_with('/') || Path::new(rel).is_absolute() {
+            return Err(invalid_name(rel, "absolute path is not allowed"));
+        }
         for comp in rel.split('/') {
-            if !comp.is_empty() {
-                p.push(comp);
+            if comp == ".." {
+                return Err(invalid_name(rel, "`..` component is not allowed"));
             }
         }
-        p
+        Ok(())
     }
+
+    /// Resolve a bundle-relative path to an absolute filesystem path,
+    /// rejecting any name that escapes (or could escape) the root.
+    ///
+    /// This is the single chokepoint for filesystem access: both
+    /// [`SubfileAccessor::exists`] and [`SubfileAccessor::read_entry`]
+    /// go through here. The returned path is canonicalized and
+    /// guaranteed to live under [`Self::root`].
+    fn resolve(&self, rel: &str) -> io::Result<PathBuf> {
+        Self::validate_name(rel)?;
+
+        // Bundle paths use forward slashes; `Path::join` handles a
+        // forward-slash subpath correctly on the platforms this crate
+        // targets.
+        let mut candidate = self.root.clone();
+        for comp in rel.split('/') {
+            if !comp.is_empty() {
+                candidate.push(comp);
+            }
+        }
+
+        // Canonicalize the candidate so any symlinks are resolved
+        // before we compare against the root prefix. If the candidate
+        // does not exist, propagate the io::Error (NotFound) directly
+        // — this preserves the previous "missing entry → NotFound"
+        // behaviour for callers like `exists`.
+        let canonical = std::fs::canonicalize(&candidate)?;
+        if !canonical.starts_with(&self.root) {
+            return Err(invalid_name(rel, "resolved path escapes the bundle root"));
+        }
+        Ok(canonical)
+    }
+}
+
+/// Construct an `io::Error` for a rejected bundle-relative name.
+fn invalid_name(rel: &str, reason: &str) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!("invalid bundle entry name {rel:?}: {reason}"),
+    )
 }
 
 impl SubfileAccessor for FsAccessor {
     fn exists(&self, rel: &str) -> bool {
-        self.resolve(rel).is_file()
+        // `resolve` returns Err for invalid names *and* for non-existent
+        // files; both should report "doesn't exist" to the caller. On
+        // Ok, additionally require that the path is a regular file.
+        match self.resolve(rel) {
+            Ok(p) => p.is_file(),
+            Err(_) => false,
+        }
     }
 
     fn list_prefix(&self, prefix: &str) -> io::Result<Vec<String>> {
@@ -161,6 +238,13 @@ impl SubfileAccessor for FsAccessor {
     }
 
     fn read_entry(&self, rel: &str) -> io::Result<EntryBytes<'_>> {
+        // Validate the name up-front so a malicious raw key can't slip
+        // past the cache layer. The cache key is the *raw*
+        // bundle-relative name, but we only ever insert via the
+        // `resolve` chokepoint, so a hit here always corresponds to a
+        // safe path.
+        Self::validate_name(rel)?;
+
         // Fast path: cache hit.
         {
             let cache = self.cache.lock().expect("FsAccessor cache poisoned");
@@ -176,8 +260,8 @@ impl SubfileAccessor for FsAccessor {
             }
         }
 
-        // Slow path: open the file and mmap it.
-        let abs = self.resolve(rel);
+        // Slow path: resolve (with traversal check), open, and mmap.
+        let abs = self.resolve(rel)?;
         let file = File::open(&abs)?;
         // SAFETY: we treat the mapping as immutable for the lifetime of
         // the accessor, which matches the `Mmap` (read-only) contract.
@@ -491,5 +575,112 @@ mod tests {
             .read_entry("does/not/exist")
             .expect_err("zip missing entry should error");
         let _ = err_zip.kind();
+    }
+
+    /// Lexical traversal via `..` components must be rejected before
+    /// the filesystem is touched, regardless of whether the candidate
+    /// would have resolved to a real file.
+    #[test]
+    fn fs_rejects_dotdot_component() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let entries = sample_entries();
+        write_fs_layout(tmp.path(), &entries);
+        let acc = FsAccessor::open(tmp.path()).expect("open FsAccessor");
+
+        let err = acc
+            .read_entry("subdir/../../../etc/passwd")
+            .expect_err("`..` in name should be rejected");
+        assert_eq!(
+            err.kind(),
+            io::ErrorKind::InvalidInput,
+            "expected InvalidInput, got {:?}",
+            err.kind()
+        );
+        assert!(
+            !acc.exists("subdir/../../../etc/passwd"),
+            "exists() should report false for a traversal name"
+        );
+    }
+
+    /// Absolute paths in the bundle-relative slot must be rejected.
+    /// `Path::join` would otherwise discard the root and return the
+    /// absolute path as-is.
+    #[test]
+    fn fs_rejects_absolute_name() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let entries = sample_entries();
+        write_fs_layout(tmp.path(), &entries);
+        let acc = FsAccessor::open(tmp.path()).expect("open FsAccessor");
+
+        let err = acc
+            .read_entry("/etc/passwd")
+            .expect_err("absolute name should be rejected");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    /// Names with embedded NUL bytes must be rejected before any
+    /// filesystem call, since most syscalls would either truncate or
+    /// fail with a less-helpful error.
+    #[test]
+    fn fs_rejects_nul_byte_in_name() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let entries = sample_entries();
+        write_fs_layout(tmp.path(), &entries);
+        let acc = FsAccessor::open(tmp.path()).expect("open FsAccessor");
+
+        let err = acc
+            .read_entry("manifest.json\0extra")
+            .expect_err("NUL in name should be rejected");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    /// Empty names are nonsensical and must be rejected up-front.
+    #[test]
+    fn fs_rejects_empty_name() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let entries = sample_entries();
+        write_fs_layout(tmp.path(), &entries);
+        let acc = FsAccessor::open(tmp.path()).expect("open FsAccessor");
+
+        let err = acc
+            .read_entry("")
+            .expect_err("empty name should be rejected");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    /// A symlink that lives *inside* the bundle root but points to a
+    /// file *outside* the root is the canonical case the canonicalize
+    /// step has to catch (lexical checks alone won't notice).
+    #[cfg(unix)]
+    #[test]
+    fn fs_rejects_symlink_escaping_root() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        // The "outside" file lives in a sibling directory of the
+        // bundle root, so a symlink pointing at it has to be caught
+        // by the canonicalize-and-prefix-check.
+        let outside_dir = tmp.path().join("outside");
+        std::fs::create_dir(&outside_dir).expect("create outside dir");
+        let secret = outside_dir.join("secret.txt");
+        std::fs::write(&secret, b"top secret").expect("write secret");
+
+        let bundle_root = tmp.path().join("bundle");
+        std::fs::create_dir(&bundle_root).expect("create bundle root");
+        // Symlink at bundle_root/escape -> ../outside/secret.txt
+        symlink(&secret, bundle_root.join("escape")).expect("create symlink");
+
+        let acc = FsAccessor::open(&bundle_root).expect("open FsAccessor");
+
+        let err = acc
+            .read_entry("escape")
+            .expect_err("symlink escaping root should be rejected");
+        assert_eq!(
+            err.kind(),
+            io::ErrorKind::InvalidInput,
+            "expected InvalidInput, got {:?}: {}",
+            err.kind(),
+            err
+        );
     }
 }
