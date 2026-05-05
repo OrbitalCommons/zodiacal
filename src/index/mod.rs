@@ -1,4 +1,6 @@
+pub mod build_manifest;
 pub mod builder;
+pub mod cell_builder;
 pub mod live;
 pub mod source;
 pub mod store;

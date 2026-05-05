@@ -11,9 +11,10 @@
 //! spatial clustering on disk, and compression doesn't help enough to
 //! justify parquet's decompression cost on the query path.
 
-use std::fs::File;
-use std::io::{self, BufWriter, Write};
-use std::path::Path;
+use std::collections::BinaryHeap;
+use std::fs::{File, OpenOptions};
+use std::io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
 
 use memmap2::Mmap;
 
@@ -111,6 +112,395 @@ where
 
     w.flush()?;
     Ok(())
+}
+
+/// Streaming sidecar writer with bounded peak memory.
+///
+/// Each call to [`SidecarStreamWriter::append_chunk`] sorts the chunk
+/// internally by `source_id` and dumps it to a numbered temp file under
+/// the scratch directory. [`SidecarStreamWriter::finalize`] then performs
+/// an external k-way merge across the temp files, building the pivot
+/// table on the fly, and writes the final sorted-and-pivoted sidecar.
+///
+/// Peak memory is bounded by the largest chunk (callers typically size
+/// chunks to one cell's worth of records — tens of MB at HEALPix level
+/// 5). Disk usage is bounded by the total record count: each record is
+/// written once to a temp file and once to the final output.
+///
+/// Crash semantics: temp files live under `scratch_dir`. If the writer
+/// is dropped before `finalize`, partial chunks remain on disk so a
+/// caller-managed manifest can resume from the next chunk. `finalize`
+/// removes all temp files only after the final atomic rename succeeds.
+pub struct SidecarStreamWriter {
+    scratch_dir: PathBuf,
+    /// (chunk_path, n_records) — appended in the order chunks were
+    /// committed. Order doesn't matter for the merge (records are sorted
+    /// by source_id inside each file), but stable order helps debugging.
+    chunks: Vec<(PathBuf, u64)>,
+    next_chunk_idx: u64,
+}
+
+impl SidecarStreamWriter {
+    /// Create a new streaming writer. `scratch_dir` will be created if
+    /// missing; chunk temp files are written there as
+    /// `chunk_NNNN.sidecar-tmp`.
+    ///
+    /// The writer is independent of the final output path until
+    /// [`Self::finalize`] is called, which lets the caller pick a
+    /// final destination only after all chunks have been committed
+    /// successfully (a useful split for crash-resume flows).
+    pub fn new(scratch_dir: impl Into<PathBuf>) -> io::Result<Self> {
+        let scratch_dir = scratch_dir.into();
+        std::fs::create_dir_all(&scratch_dir)?;
+        Ok(Self {
+            scratch_dir,
+            chunks: Vec::new(),
+            next_chunk_idx: 0,
+        })
+    }
+
+    /// Resume a writer from a scratch directory previously populated by
+    /// `append_chunk` calls. The discovered chunks contribute to the
+    /// final merge but are not re-sorted.
+    ///
+    /// Resume scans the directory for `chunk_NNNN.sidecar-tmp` files,
+    /// reads each one's record count from its header, and seeds the
+    /// internal chunk list. Chunks the caller already committed in a
+    /// prior run will round-trip into the final sidecar without rework.
+    pub fn resume(scratch_dir: impl Into<PathBuf>) -> io::Result<Self> {
+        let scratch_dir = scratch_dir.into();
+        std::fs::create_dir_all(&scratch_dir)?;
+
+        let mut found: Vec<(u64, PathBuf, u64)> = Vec::new();
+        for entry in std::fs::read_dir(&scratch_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let name = match path.file_name().and_then(|n| n.to_str()) {
+                Some(n) => n,
+                None => continue,
+            };
+            let idx = match name
+                .strip_prefix("chunk_")
+                .and_then(|s| s.strip_suffix(".sidecar-tmp"))
+                .and_then(|s| s.parse::<u64>().ok())
+            {
+                Some(i) => i,
+                None => continue,
+            };
+            let n_records = read_chunk_header(&path)?;
+            found.push((idx, path, n_records));
+        }
+        found.sort_by_key(|(i, _, _)| *i);
+
+        let next_chunk_idx = found.last().map(|(i, _, _)| i + 1).unwrap_or(0);
+        let chunks: Vec<(PathBuf, u64)> = found.into_iter().map(|(_, p, n)| (p, n)).collect();
+
+        Ok(Self {
+            scratch_dir,
+            chunks,
+            next_chunk_idx,
+        })
+    }
+
+    /// Write a chunk of records to a numbered temp file, sorted by
+    /// `source_id`. Returns the chunk's index and on-disk path.
+    ///
+    /// Empty chunks are accepted but produce no temp file — the caller
+    /// can use the returned index to drive a manifest without special-casing.
+    pub fn append_chunk(&mut self, mut records: Vec<SidecarRecord>) -> io::Result<u64> {
+        let idx = self.next_chunk_idx;
+        self.next_chunk_idx += 1;
+
+        if records.is_empty() {
+            return Ok(idx);
+        }
+
+        records.sort_by_key(|r| r.source_id);
+
+        let path = self.chunk_path(idx);
+        let tmp_path = {
+            let mut s = path.as_os_str().to_owned();
+            s.push(".partial");
+            PathBuf::from(s)
+        };
+
+        let n_records = records.len() as u64;
+        {
+            let file = File::create(&tmp_path)?;
+            let mut w = BufWriter::new(file);
+            w.write_all(&n_records.to_le_bytes())?;
+            // Records bytes (88 B each, repr(C)).
+            let bytes: &[u8] = unsafe {
+                std::slice::from_raw_parts(
+                    records.as_ptr() as *const u8,
+                    records.len() * RECORD_SIZE as usize,
+                )
+            };
+            w.write_all(bytes)?;
+            w.flush()?;
+            w.get_ref().sync_all()?;
+        }
+        std::fs::rename(&tmp_path, &path)?;
+
+        self.chunks.push((path, n_records));
+        Ok(idx)
+    }
+
+    /// Number of chunks committed so far.
+    pub fn chunk_count(&self) -> usize {
+        self.chunks.len()
+    }
+
+    /// Total records committed across all chunks (sum of chunk sizes).
+    pub fn total_records(&self) -> u64 {
+        self.chunks.iter().map(|(_, n)| *n).sum()
+    }
+
+    /// Merge all committed chunks into `final_path`, build the pivot
+    /// table, and remove the scratch directory's temp files. The final
+    /// file is written atomically (tmp file + rename).
+    ///
+    /// Dropping the writer without calling `finalize` deliberately
+    /// leaves the chunk temp files in place — the on-disk chunks plus
+    /// a sibling [`crate::index::build_manifest::BuildManifest`] are
+    /// the durable resume state.
+    ///
+    /// `pivot_stride` controls the in-file pivot density; pass
+    /// [`DEFAULT_PIVOT_STRIDE`] for the standard 4096.
+    pub fn finalize(self, final_path: &Path, pivot_stride: u32) -> io::Result<()> {
+        assert!(pivot_stride > 0, "pivot_stride must be positive");
+
+        let n_records: u64 = self.chunks.iter().map(|(_, n)| *n).sum();
+        let pivot_count = if n_records == 0 {
+            0u32
+        } else {
+            ((n_records - 1) / pivot_stride as u64 + 1) as u32
+        };
+
+        // Final file is written to a sibling .partial first so a crash
+        // mid-write doesn't leave a half-formed `.zdcl.gaia` in place.
+        let tmp_final = match final_path.extension() {
+            Some(ext) => {
+                let mut s = ext.to_owned();
+                s.push(".partial");
+                final_path.with_extension(s)
+            }
+            None => final_path.with_extension("partial"),
+        };
+
+        // Open chunk readers; collect first-record peeks for the heap.
+        let mut readers: Vec<ChunkReader> = Vec::with_capacity(self.chunks.len());
+        for (path, n) in &self.chunks {
+            if *n == 0 {
+                continue;
+            }
+            readers.push(ChunkReader::open(path)?);
+        }
+
+        // Min-heap keyed by current head record's source_id.
+        let mut heap: BinaryHeap<HeapEntry> = BinaryHeap::with_capacity(readers.len());
+        for (i, r) in readers.iter_mut().enumerate() {
+            if let Some(rec) = r.next()? {
+                heap.push(HeapEntry {
+                    source_id: rec.source_id,
+                    reader_idx: i,
+                    record: rec,
+                });
+            }
+        }
+
+        let file = File::create(&tmp_final)?;
+        let mut w = BufWriter::new(file);
+
+        // --- Header ---
+        w.write_all(MAGIC)?;
+        w.write_all(&VERSION.to_le_bytes())?;
+        w.write_all(&RECORD_SIZE.to_le_bytes())?;
+        w.write_all(&n_records.to_le_bytes())?;
+        w.write_all(&pivot_stride.to_le_bytes())?;
+        w.write_all(&pivot_count.to_le_bytes())?;
+        w.write_all(&[0u8; 32])?;
+
+        // --- Reserve pivot table region; we'll overwrite it after the
+        // merge pass once we know each pivot's source_id. We can't emit
+        // pivots inline because the file layout puts the pivot table
+        // BEFORE the records.
+        let pivots_offset = HEADER_SIZE as u64;
+        let pivots_size = (pivot_count as usize) * 8;
+        if pivots_size > 0 {
+            w.write_all(&vec![0u8; pivots_size])?;
+        }
+
+        let pre_padding = HEADER_SIZE + pivots_size;
+        let records_offset = (pre_padding + 7) & !7;
+        let pad = records_offset - pre_padding;
+        if pad > 0 {
+            w.write_all(&vec![0u8; pad])?;
+        }
+
+        // --- Merge pass ---
+        let mut pivots: Vec<u64> = Vec::with_capacity(pivot_count as usize);
+        let stride = pivot_stride as u64;
+        let mut written: u64 = 0;
+        let mut prev_source_id: Option<u64> = None;
+        while let Some(top) = heap.pop() {
+            // Validate sort: streaming merge requires monotonically
+            // non-decreasing source_id across the merged stream.
+            if let Some(prev) = prev_source_id
+                && top.source_id < prev
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "merge stream out of order: prev={prev} next={} (chunks must be sorted)",
+                        top.source_id,
+                    ),
+                ));
+            }
+
+            if written.is_multiple_of(stride) && pivots.len() < pivot_count as usize {
+                pivots.push(top.source_id);
+            }
+
+            let bytes: &[u8] = unsafe {
+                std::slice::from_raw_parts(
+                    &top.record as *const SidecarRecord as *const u8,
+                    RECORD_SIZE as usize,
+                )
+            };
+            w.write_all(bytes)?;
+            written += 1;
+            prev_source_id = Some(top.source_id);
+
+            // Refill from this reader.
+            let r = &mut readers[top.reader_idx];
+            if let Some(rec) = r.next()? {
+                heap.push(HeapEntry {
+                    source_id: rec.source_id,
+                    reader_idx: top.reader_idx,
+                    record: rec,
+                });
+            }
+        }
+
+        if written != n_records {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "merged {written} records but chunk headers reported {n_records}; \
+                     a chunk file may be truncated"
+                ),
+            ));
+        }
+
+        w.flush()?;
+
+        // Rewind, overwrite the pivot table region with real pivots, and
+        // sync. `BufWriter::seek` flushes its buffer first.
+        if pivot_count > 0 {
+            assert_eq!(pivots.len(), pivot_count as usize);
+            w.seek(SeekFrom::Start(pivots_offset))?;
+            for p in &pivots {
+                w.write_all(&p.to_le_bytes())?;
+            }
+            w.flush()?;
+        }
+        w.get_ref().sync_all()?;
+        drop(w);
+
+        std::fs::rename(&tmp_final, final_path)?;
+
+        // Clean up chunk temp files; only after the rename succeeds so
+        // a crashed finalize stays resumable.
+        for (path, _) in &self.chunks {
+            let _ = std::fs::remove_file(path);
+        }
+        // Best-effort: remove scratch dir if empty. Caller may share it
+        // with a sibling manifest, in which case rmdir is harmless on
+        // EEXIST/ENOTEMPTY.
+        let _ = std::fs::remove_dir(&self.scratch_dir);
+
+        Ok(())
+    }
+
+    fn chunk_path(&self, idx: u64) -> PathBuf {
+        self.scratch_dir.join(format!("chunk_{idx:04}.sidecar-tmp"))
+    }
+}
+
+/// Read the n_records header from a chunk temp file without loading
+/// records.
+fn read_chunk_header(path: &Path) -> io::Result<u64> {
+    let mut f = File::open(path)?;
+    let mut buf = [0u8; 8];
+    f.read_exact(&mut buf)?;
+    Ok(u64::from_le_bytes(buf))
+}
+
+/// Buffered reader over a single sidecar chunk temp file. Yields
+/// records in the file's stored (already-sorted) order.
+struct ChunkReader {
+    inner: BufReader<File>,
+    remaining: u64,
+}
+
+impl ChunkReader {
+    fn open(path: &Path) -> io::Result<Self> {
+        let mut f = OpenOptions::new().read(true).open(path)?;
+        let mut hdr = [0u8; 8];
+        f.read_exact(&mut hdr)?;
+        let remaining = u64::from_le_bytes(hdr);
+        Ok(Self {
+            inner: BufReader::new(f),
+            remaining,
+        })
+    }
+
+    fn next(&mut self) -> io::Result<Option<SidecarRecord>> {
+        if self.remaining == 0 {
+            return Ok(None);
+        }
+        let mut buf = [0u8; RECORD_SIZE as usize];
+        self.inner.read_exact(&mut buf)?;
+        self.remaining -= 1;
+        // Safe: SidecarRecord is repr(C), the buffer is RECORD_SIZE
+        // bytes, and we copy out (no aliasing the buffer).
+        let rec = unsafe { std::ptr::read_unaligned(buf.as_ptr() as *const SidecarRecord) };
+        Ok(Some(rec))
+    }
+}
+
+/// Heap entry for the k-way merge. `BinaryHeap` is a max-heap, so we
+/// invert `cmp` to get min-on-source_id behavior.
+struct HeapEntry {
+    source_id: u64,
+    reader_idx: usize,
+    record: SidecarRecord,
+}
+
+impl PartialEq for HeapEntry {
+    fn eq(&self, other: &Self) -> bool {
+        self.source_id == other.source_id && self.reader_idx == other.reader_idx
+    }
+}
+impl Eq for HeapEntry {}
+impl PartialOrd for HeapEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for HeapEntry {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // Min-heap on source_id, ties broken by reader_idx for
+        // deterministic output across runs.
+        other
+            .source_id
+            .cmp(&self.source_id)
+            .then(other.reader_idx.cmp(&self.reader_idx))
+    }
 }
 
 /// Mmap-backed random-access reader over a sidecar file.
@@ -506,5 +896,162 @@ mod tests {
         assert!(results.iter().all(|r| r.is_some()));
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    fn tmp_dir(name: &str) -> std::path::PathBuf {
+        let mut p = std::env::temp_dir();
+        p.push(format!(
+            "zodiacal-sidecar-stream-{}-{}-{}",
+            name,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0),
+        ));
+        p
+    }
+
+    fn collect_records(reader: &SidecarReader) -> Vec<SidecarRecord> {
+        (0..reader.len()).map(|i| *reader.record_at(i)).collect()
+    }
+
+    #[test]
+    fn stream_writer_roundtrip_matches_in_ram_writer() {
+        // Same records via both writers should produce byte-identical
+        // contents, since the on-disk format is fixed and both paths
+        // sort by source_id deterministically.
+        let scratch = tmp_dir("rt-scratch");
+        let final_stream = tmp_dir("rt-final-stream");
+        let final_inram = tmp_dir("rt-final-inram");
+
+        let mut records: Vec<SidecarRecord> = (0..1000u64)
+            .map(|i| rec(7919 * (i + 1), i as f64 * 0.001, -(i as f64) * 0.0005))
+            .collect();
+        // Shuffle to exercise the writer's sort.
+        records.swap(0, 999);
+        records.swap(123, 456);
+
+        // In-RAM baseline.
+        write_sidecar(&final_inram, records.clone(), 64).unwrap();
+
+        // Streaming writer: chunk into 7 pieces of varying sizes, with
+        // overlapping source_id ranges to mimic cell ordering.
+        let mut writer = SidecarStreamWriter::new(&scratch).unwrap();
+        let chunks: Vec<Vec<SidecarRecord>> = (0..7)
+            .map(|c| {
+                records
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| i % 7 == c)
+                    .map(|(_, r)| *r)
+                    .collect()
+            })
+            .collect();
+        for ch in chunks {
+            writer.append_chunk(ch).unwrap();
+        }
+        assert_eq!(writer.total_records(), 1000);
+        writer.finalize(&final_stream, 64).unwrap();
+
+        // Compare byte streams.
+        let a = std::fs::read(&final_inram).unwrap();
+        let b = std::fs::read(&final_stream).unwrap();
+        assert_eq!(a, b, "stream and in-RAM writers diverged");
+
+        // Reader-level equivalence as a belt-and-suspenders check.
+        let r_in = SidecarReader::open(&final_inram).unwrap();
+        let r_st = SidecarReader::open(&final_stream).unwrap();
+        assert_eq!(collect_records(&r_in), collect_records(&r_st));
+
+        let _ = std::fs::remove_file(&final_inram);
+        let _ = std::fs::remove_file(&final_stream);
+    }
+
+    #[test]
+    fn stream_writer_empty_input() {
+        let scratch = tmp_dir("empty-scratch");
+        let final_path = tmp_dir("empty-final");
+
+        let writer = SidecarStreamWriter::new(&scratch).unwrap();
+        writer.finalize(&final_path, 64).unwrap();
+
+        let reader = SidecarReader::open(&final_path).unwrap();
+        assert_eq!(reader.len(), 0);
+
+        let _ = std::fs::remove_file(&final_path);
+    }
+
+    #[test]
+    fn stream_writer_resume_replays_committed_chunks() {
+        // Simulate a crashed builder that committed some chunks but
+        // never finalized; resume should pick them up and merge them
+        // alongside new chunks.
+        let scratch = tmp_dir("resume-scratch");
+        let final_path = tmp_dir("resume-final");
+
+        let all_records: Vec<SidecarRecord> =
+            (0..500u64).map(|i| rec(i * 11 + 3, 0.1, 0.2)).collect();
+        let split = 300;
+
+        // Phase 1: writer crashes after committing the first 3 chunks.
+        {
+            let mut writer = SidecarStreamWriter::new(&scratch).unwrap();
+            for c in 0..3 {
+                let lo = c * 100;
+                let hi = lo + 100;
+                writer.append_chunk(all_records[lo..hi].to_vec()).unwrap();
+            }
+            assert_eq!(writer.chunk_count(), 3);
+            // Drop without finalize — chunks remain on disk.
+        }
+
+        // Phase 2: resume, add the remaining chunks, finalize.
+        {
+            let mut writer = SidecarStreamWriter::resume(&scratch).unwrap();
+            assert_eq!(writer.chunk_count(), 3);
+            assert_eq!(writer.total_records(), split as u64);
+            for c in 3..5 {
+                let lo = c * 100;
+                let hi = lo + 100;
+                writer.append_chunk(all_records[lo..hi].to_vec()).unwrap();
+            }
+            writer.finalize(&final_path, 32).unwrap();
+        }
+
+        // Final file should contain every record exactly once.
+        let reader = SidecarReader::open(&final_path).unwrap();
+        assert_eq!(reader.len(), all_records.len());
+        for r in &all_records {
+            let got = reader
+                .get(r.source_id)
+                .expect("missing record after resume");
+            assert_eq!(got.source_id, r.source_id);
+        }
+
+        let _ = std::fs::remove_file(&final_path);
+    }
+
+    #[test]
+    fn stream_writer_skips_empty_chunks() {
+        // A cell with zero stars (e.g. a high-galactic-latitude void at
+        // a very tight mag cap) should produce a noop append, not a
+        // zero-byte temp file that confuses the merge.
+        let scratch = tmp_dir("skip-scratch");
+        let final_path = tmp_dir("skip-final");
+
+        let mut writer = SidecarStreamWriter::new(&scratch).unwrap();
+        writer.append_chunk(Vec::new()).unwrap();
+        writer.append_chunk(vec![rec(42, 0.0, 0.0)]).unwrap();
+        writer.append_chunk(Vec::new()).unwrap();
+        writer.append_chunk(vec![rec(43, 0.0, 0.0)]).unwrap();
+        writer.finalize(&final_path, 32).unwrap();
+
+        let reader = SidecarReader::open(&final_path).unwrap();
+        assert_eq!(reader.len(), 2);
+        assert!(reader.get(42).is_some());
+        assert!(reader.get(43).is_some());
+
+        let _ = std::fs::remove_file(&final_path);
     }
 }

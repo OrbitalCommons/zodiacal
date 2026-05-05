@@ -18,7 +18,9 @@ mod tests;
 
 pub use apparent::apparent_radec;
 pub use refine::refine_solution;
-pub use sidecar::{DEFAULT_PIVOT_STRIDE, SidecarReader, SidecarRecord, write_sidecar};
+pub use sidecar::{
+    DEFAULT_PIVOT_STRIDE, SidecarReader, SidecarRecord, SidecarStreamWriter, write_sidecar,
+};
 pub use types::{
     GaiaAstrometry, ObservationContext, ObserverState, RefinedMatch, RefinedSolution,
     RefinementCatalog, RefinementConfig, RefinementError,
