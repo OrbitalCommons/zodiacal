@@ -7,6 +7,17 @@
 //! implements both the writer (used by the cell-driven multi-band builder)
 //! and a borrowing zero-copy-ish reader suitable for mmap-backed use.
 //!
+//! ## Position-independent shards
+//!
+//! All offsets stored in the band table are **relative to the start of the
+//! shard's bytes** — i.e., relative to the magic at byte 0 of the shard, not
+//! to the start of whatever stream the shard happens to be embedded in. A
+//! shard is therefore position-independent: it can be concatenated mid-stream
+//! (into a tar, zip, or any other container) and `QuadShard::parse` will
+//! still decode it correctly when handed the embedded byte slice. The writer
+//! never consults its underlying stream's position when computing offsets;
+//! readers always interpret offsets relative to the slice they're given.
+//!
 //! Byte layout (all little-endian):
 //!
 //! ```text
@@ -21,15 +32,15 @@
 //! BAND TABLE   n_bands × 24 B
 //!   band_idx     4 B  u32 LE
 //!   n_quads      4 B  u32 LE
-//!   quads_offset 8 B  u64 LE   absolute byte offset, from file start
-//!   codes_offset 8 B  u64 LE   absolute byte offset, from file start
+//!   quads_offset 8 B  u64 LE   byte offset relative to shard start
+//!   codes_offset 8 B  u64 LE   byte offset relative to shard start
 //!
 //! Per band, in band_idx order, no padding between blocks:
 //!   quads_block   n_quads × 16 B   (4 × u32 LE local star indices)
 //!   codes_block   n_quads × 32 B   (4 × f64 LE)
 //! ```
 
-use std::io::{self, Seek, SeekFrom, Write};
+use std::io::{self, Write};
 
 use crate::quads::{Code, DIMCODES, DIMQUADS, Quad};
 
@@ -106,7 +117,21 @@ pub struct BandView<'a> {
 /// Returns `InvalidInput` if any `Quad.star_ids` element does not fit in a
 /// `u32`, or if duplicate `band_idx` values are present, or if a band's
 /// `quads.len() != codes.len()`.
-pub fn write_quad_shard<W: Write + Seek>(
+///
+/// **Offsets are slice-relative.** All `quads_offset` / `codes_offset`
+/// values stored in the band table are byte offsets from the start of the
+/// shard's bytes (the `b"ZDCLQUAD"` magic), *not* from the start of the
+/// underlying stream. The writer therefore never consults `w`'s stream
+/// position; the resulting shard is position-independent and round-trips
+/// when concatenated mid-stream and parsed via the embedded byte slice.
+/// Do not reintroduce a `header_start` term — `QuadShard::parse` interprets
+/// every offset relative to the slice it's given.
+///
+/// The bound is `Write` only (no `Seek`): the shard is built into an
+/// in-memory buffer and emitted with one `write_all` + `flush`, so the
+/// caller is guaranteed the bytes are in the underlying writer when this
+/// function returns.
+pub fn write_quad_shard<W: Write>(
     w: &mut W,
     cell_id: u64,
     bands: &[BandEmit<'_>],
@@ -158,51 +183,61 @@ pub fn write_quad_shard<W: Write + Seek>(
     }
 
     let n_bands = order.len() as u32;
-    let header_start = w.stream_position()?;
     let band_table_size = order.len() * BAND_ENTRY_SIZE;
 
-    // --- header --- (32 B)
-    w.write_all(QUAD_SHARD_MAGIC)?;
-    w.write_all(&QUAD_SHARD_VERSION.to_le_bytes())?;
-    w.write_all(&0u32.to_le_bytes())?; // reserved
-    w.write_all(&cell_id.to_le_bytes())?;
-    w.write_all(&n_bands.to_le_bytes())?;
-    w.write_all(&0u32.to_le_bytes())?; // reserved (header pad to 8)
-
-    // --- placeholder band table --- we'll seek back and rewrite this once
-    // we know the real per-band offsets.
-    let band_table_start = w.stream_position()?;
-    debug_assert_eq!(band_table_start - header_start, HEADER_SIZE as u64);
-    let zero_entry = [0u8; BAND_ENTRY_SIZE];
-    for _ in 0..order.len() {
-        w.write_all(&zero_entry)?;
-    }
-
-    let mut data_cursor = header_start + HEADER_SIZE as u64 + band_table_size as u64;
-    let mut entries: Vec<BandEntry> = Vec::with_capacity(order.len());
-
-    // --- per-band data blocks ---
+    // Compute total shard size, then allocate one buffer. Offsets baked
+    // into the band table are slice-relative (start of `buf` == start of
+    // magic), so the shard is position-independent regardless of where it
+    // ends up in the underlying stream.
+    let mut data_size: usize = 0;
     for b in &order {
         let n_quads = b.quads.len();
-        let quads_offset = data_cursor;
+        data_size += n_quads * QUAD_RECORD_SIZE + n_quads * CODE_RECORD_SIZE;
+    }
+    let total_size = HEADER_SIZE + band_table_size + data_size;
+    let mut buf: Vec<u8> = Vec::with_capacity(total_size);
+
+    // --- header --- (32 B)
+    buf.extend_from_slice(QUAD_SHARD_MAGIC);
+    buf.extend_from_slice(&QUAD_SHARD_VERSION.to_le_bytes());
+    buf.extend_from_slice(&0u32.to_le_bytes()); // reserved
+    buf.extend_from_slice(&cell_id.to_le_bytes());
+    buf.extend_from_slice(&n_bands.to_le_bytes());
+    buf.extend_from_slice(&0u32.to_le_bytes()); // reserved (header pad to 8)
+    debug_assert_eq!(buf.len(), HEADER_SIZE);
+
+    // --- placeholder band table --- we'll fill the real entries in below
+    // once we know each band's slice-relative quads/codes offsets.
+    let band_table_start = buf.len();
+    buf.resize(band_table_start + band_table_size, 0);
+
+    // --- per-band data blocks ---
+    let mut entries: Vec<BandEntry> = Vec::with_capacity(order.len());
+    for b in &order {
+        let n_quads = b.quads.len();
+        // Slice-relative offset: simply the current length of `buf`.
+        let quads_offset = buf.len() as u64;
         for q in b.quads {
-            let mut buf = [0u8; QUAD_RECORD_SIZE];
+            let mut record = [0u8; QUAD_RECORD_SIZE];
             for (i, &sid) in q.star_ids.iter().enumerate() {
                 // Bounds-checked above; this cast is safe.
                 let v = sid as u32;
-                buf[i * 4..i * 4 + 4].copy_from_slice(&v.to_le_bytes());
+                record[i * 4..i * 4 + 4].copy_from_slice(&v.to_le_bytes());
             }
-            w.write_all(&buf)?;
+            buf.extend_from_slice(&record);
         }
-        let codes_offset = quads_offset + (n_quads * QUAD_RECORD_SIZE) as u64;
+        let codes_offset = buf.len() as u64;
+        debug_assert_eq!(
+            codes_offset,
+            quads_offset + (n_quads * QUAD_RECORD_SIZE) as u64
+        );
         for c in b.codes {
-            let mut buf = [0u8; CODE_RECORD_SIZE];
+            let mut record = [0u8; CODE_RECORD_SIZE];
             for (i, &v) in c.iter().enumerate() {
-                buf[i * 8..i * 8 + 8].copy_from_slice(&v.to_le_bytes());
+                record[i * 8..i * 8 + 8].copy_from_slice(&v.to_le_bytes());
             }
-            w.write_all(&buf)?;
+            buf.extend_from_slice(&record);
         }
-        data_cursor = codes_offset + (n_quads * CODE_RECORD_SIZE) as u64;
 
         entries.push(BandEntry {
             band_idx: b.band_idx,
@@ -211,23 +246,21 @@ pub fn write_quad_shard<W: Write + Seek>(
             codes_offset,
         });
     }
+    debug_assert_eq!(buf.len(), total_size);
 
-    let end_pos = w.stream_position()?;
-
-    // --- backfill the real band table ---
-    w.seek(SeekFrom::Start(band_table_start))?;
-    for e in &entries {
-        let mut buf = [0u8; BAND_ENTRY_SIZE];
-        buf[0..4].copy_from_slice(&e.band_idx.to_le_bytes());
-        buf[4..8].copy_from_slice(&e.n_quads.to_le_bytes());
-        buf[8..16].copy_from_slice(&e.quads_offset.to_le_bytes());
-        buf[16..24].copy_from_slice(&e.codes_offset.to_le_bytes());
-        w.write_all(&buf)?;
+    // --- fill the real band table at the head of the buffer ---
+    for (k, e) in entries.iter().enumerate() {
+        let off = band_table_start + k * BAND_ENTRY_SIZE;
+        buf[off..off + 4].copy_from_slice(&e.band_idx.to_le_bytes());
+        buf[off + 4..off + 8].copy_from_slice(&e.n_quads.to_le_bytes());
+        buf[off + 8..off + 16].copy_from_slice(&e.quads_offset.to_le_bytes());
+        buf[off + 16..off + 24].copy_from_slice(&e.codes_offset.to_le_bytes());
     }
 
-    // Restore the cursor to end-of-file so callers writing more streams in
-    // succession see consistent state.
-    w.seek(SeekFrom::Start(end_pos))?;
+    // Single emission, then flush — the shard is fully durable in the
+    // underlying writer by the time we return.
+    w.write_all(&buf)?;
+    w.flush()?;
     Ok(())
 }
 
@@ -238,6 +271,14 @@ impl<'a> QuadShard<'a> {
     /// version, and that every (offset, length) pair lands inside the
     /// slice. Per-band quad / code blocks are decoded on demand via
     /// [`Self::band`].
+    ///
+    /// **Offsets are interpreted relative to the start of `bytes`.** The
+    /// writer emits position-independent shards, so this works whether
+    /// `bytes` is a standalone shard file, an mmap of one, or a sub-slice
+    /// of a larger buffer (e.g., a shard concatenated mid-stream into a
+    /// tar / zip / custom container) — as long as the slice starts at the
+    /// shard's `b"ZDCLQUAD"` magic and ends at or past the last byte of
+    /// the last band's codes block.
     pub fn parse(bytes: &'a [u8]) -> io::Result<Self> {
         if bytes.len() < HEADER_SIZE {
             return Err(io::Error::new(
@@ -811,5 +852,133 @@ mod tests {
         )
         .expect_err("mismatch must reject");
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    /// Regression for issue #84: shard offsets must be slice-relative, so
+    /// a shard written mid-stream still round-trips when its embedded byte
+    /// slice is handed to `QuadShard::parse`. Before the fix, the writer
+    /// added the underlying stream's `header_start` to every offset in the
+    /// band table; reads against the embedded slice would then point past
+    /// the slice's end and the parser would reject the shard (or, worse,
+    /// silently load the wrong bytes if absolute offsets happened to land
+    /// inside the slice).
+    #[test]
+    fn shard_roundtrips_at_nonzero_stream_offset() {
+        // Build the same body of bands as `roundtrip_multi_band`, then
+        // stuff the shard between a prefix and a suffix in a single Vec
+        // and parse it from the embedded slice.
+        let q0: Vec<Quad> = (0..5).map(|i| make_quad(i, i + 1, i + 2, i + 3)).collect();
+        let c0: Vec<Code> = (0..5).map(|i| make_code(i as f64 * 0.1)).collect();
+        let q1: Vec<Quad> = vec![]; // empty middle band
+        let c1: Vec<Code> = vec![];
+        let q2: Vec<Quad> = (0..7)
+            .map(|i| make_quad(100 + i, 200 + i, 300 + i, 400 + i))
+            .collect();
+        let c2: Vec<Code> = (0..7).map(|i| make_code(i as f64 + 100.0)).collect();
+
+        let mut buf: Vec<u8> = Vec::new();
+        // Prefix: bytes that misalign the shard so it does not start at 0.
+        let prefix = b"PREFIX_PREFIX_";
+        buf.extend_from_slice(prefix);
+        let shard_start = buf.len();
+        assert_ne!(shard_start, 0, "test would not catch the bug at offset 0");
+
+        {
+            let mut cur = Cursor::new(&mut buf);
+            // Seek past the prefix so the cursor's stream_position is
+            // shard_start before the writer runs. This is what would have
+            // poisoned the absolute offsets in the pre-fix writer.
+            cur.set_position(shard_start as u64);
+            write_quad_shard(
+                &mut cur,
+                123,
+                &[
+                    BandEmit {
+                        band_idx: 0,
+                        quads: &q0,
+                        codes: &c0,
+                    },
+                    BandEmit {
+                        band_idx: 1,
+                        quads: &q1,
+                        codes: &c1,
+                    },
+                    BandEmit {
+                        band_idx: 2,
+                        quads: &q2,
+                        codes: &c2,
+                    },
+                ],
+            )
+            .expect("write_quad_shard at nonzero offset");
+        }
+        let shard_end = buf.len();
+        // Suffix: trailing bytes that must not be parsed as part of the
+        // shard. If the parser reads past the band-data blocks the suffix
+        // would be misinterpreted.
+        buf.extend_from_slice(b"_SUFFIX_TRAILING_BYTES");
+
+        // Parse the embedded slice — must succeed and round-trip every
+        // band's contents identically.
+        let embedded = &buf[shard_start..shard_end];
+        let shard = QuadShard::parse(embedded).expect("parse embedded shard");
+        assert_eq!(shard.cell_id(), 123);
+        assert_eq!(shard.n_bands(), 3);
+
+        let got_q0: Vec<Quad> = shard.band(0).unwrap().quads_iter().collect();
+        let got_c0: Vec<Code> = shard.band(0).unwrap().codes_iter().collect();
+        assert_eq!(got_q0.len(), 5);
+        for (g, w) in got_q0.iter().zip(q0.iter()) {
+            assert_eq!(g.star_ids, w.star_ids);
+        }
+        assert_eq!(got_c0, c0);
+
+        // Empty middle band still parses cleanly.
+        let v1 = shard.band(1).unwrap();
+        assert_eq!(v1.n_quads(), 0);
+        assert_eq!(v1.quads_iter().count(), 0);
+        assert_eq!(v1.codes_iter().count(), 0);
+
+        let got_q2: Vec<Quad> = shard.band(2).unwrap().quads_iter().collect();
+        let got_c2: Vec<Code> = shard.band(2).unwrap().codes_iter().collect();
+        assert_eq!(got_q2.len(), 7);
+        for (g, w) in got_q2.iter().zip(q2.iter()) {
+            assert_eq!(g.star_ids, w.star_ids);
+        }
+        assert_eq!(got_c2, c2);
+
+        // The prefix and suffix must be preserved in the surrounding
+        // buffer — the writer must not have stomped over them.
+        assert_eq!(&buf[..shard_start], prefix);
+        assert_eq!(&buf[shard_end..], b"_SUFFIX_TRAILING_BYTES");
+
+        // Independent sanity check: the offsets in the band table are
+        // slice-relative, so they must all be < shard_end - shard_start
+        // (the embedded slice's length), and each populated band's offset
+        // must be >= HEADER_SIZE + n_bands * BAND_ENTRY_SIZE.
+        let shard_len = (shard_end - shard_start) as u64;
+        let band_table_end = (HEADER_SIZE + 3 * BAND_ENTRY_SIZE) as u64;
+        for entry in shard.bands() {
+            if entry.n_quads > 0 {
+                assert!(
+                    entry.quads_offset >= band_table_end,
+                    "quads_offset {} overlaps band table (ends at {})",
+                    entry.quads_offset,
+                    band_table_end
+                );
+                assert!(
+                    entry.quads_offset < shard_len,
+                    "quads_offset {} not slice-relative (shard_len = {})",
+                    entry.quads_offset,
+                    shard_len
+                );
+                assert!(
+                    entry.codes_offset < shard_len,
+                    "codes_offset {} not slice-relative (shard_len = {})",
+                    entry.codes_offset,
+                    shard_len
+                );
+            }
+        }
     }
 }
