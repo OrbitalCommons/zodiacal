@@ -315,7 +315,17 @@ fn build_quads_for_cell(stars: &[CellStar], config: &CellBuildConfig) -> (Vec<Qu
         }
 
         let a_xyz = xyzs[a_idx];
-        for b_idx in (a_idx + 1)..xyzs.len() {
+        'b_loop: for b_idx in (a_idx + 1)..xyzs.len() {
+            // Re-check `a_idx` here because earlier emits in this
+            // outer-loop iteration may have saturated it. Without this
+            // re-check the inner loops happily emit `quads_per_cell`
+            // quads all anchored on the same `a_idx`, blowing past
+            // `max_reuse` and clustering quad centroids around one
+            // star (visible in fov_coverage as a 0-or-100 bimodal
+            // histogram).
+            if use_count[a_idx] >= config.max_reuse {
+                continue 'outer;
+            }
             if use_count[b_idx] >= config.max_reuse {
                 continue;
             }
@@ -352,6 +362,12 @@ fn build_quads_for_cell(stars: &[CellStar], config: &CellBuildConfig) -> (Vec<Qu
                 if quads.len() >= config.quads_per_cell {
                     break 'outer;
                 }
+                if use_count[a_idx] >= config.max_reuse {
+                    continue 'outer;
+                }
+                if use_count[b_idx] >= config.max_reuse {
+                    continue 'b_loop;
+                }
                 for di in (ci + 1)..candidates.len() {
                     let c_idx = candidates[ci];
                     let d_idx = candidates[di];
@@ -362,7 +378,15 @@ fn build_quads_for_cell(stars: &[CellStar], config: &CellBuildConfig) -> (Vec<Qu
                         continue;
                     }
 
-                    if use_count[c_idx] >= config.max_reuse || use_count[d_idx] >= config.max_reuse
+                    // Every quad member must satisfy `max_reuse`. This
+                    // is the load-bearing check; the earlier
+                    // outer-loop checks are pure optimizations to
+                    // avoid wasted candidate enumeration once an
+                    // anchor saturates.
+                    if use_count[a_idx] >= config.max_reuse
+                        || use_count[b_idx] >= config.max_reuse
+                        || use_count[c_idx] >= config.max_reuse
+                        || use_count[d_idx] >= config.max_reuse
                     {
                         continue;
                     }
