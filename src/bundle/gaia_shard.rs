@@ -16,6 +16,11 @@ use std::io::{self, Write};
 
 use bytemuck::{Pod, Zeroable};
 
+#[cfg(target_endian = "big")]
+compile_error!(
+    "GaiaRecord on-disk layout assumes little-endian; big-endian targets are not supported."
+);
+
 /// Magic bytes at the start of every `.zga` file.
 pub const MAGIC: &[u8; 8] = b"ZDCLGAIA";
 
@@ -189,6 +194,21 @@ pub fn write_gaia_shard<W: Write>(
 ) -> io::Result<()> {
     records.sort_by_key(|r| r.source_id);
 
+    // After sorting, duplicate source_ids are necessarily adjacent. The
+    // reader uses binary search by source_id; duplicates would silently
+    // shadow one another, so reject them at write time.
+    for pair in records.windows(2) {
+        if pair[0].source_id == pair[1].source_id {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "duplicate source_id {} in gaia shard input",
+                    pair[0].source_id
+                ),
+            ));
+        }
+    }
+
     // Header: 32 bytes, all little-endian.
     let n_records: u32 = records
         .len()
@@ -216,7 +236,6 @@ pub fn write_gaia_shard<W: Write>(
 /// `parse` is O(1) modulo the alignment + bounds checks.
 #[derive(Debug)]
 pub struct GaiaShard<'a> {
-    raw: &'a [u8],
     cell_id: u64,
     records: &'a [GaiaRecord],
 }
@@ -304,11 +323,7 @@ impl<'a> GaiaShard<'a> {
             ))
         })?;
 
-        Ok(Self {
-            raw: bytes,
-            cell_id,
-            records,
-        })
+        Ok(Self { cell_id, records })
     }
 
     /// HEALPix cell id this shard covers (defensive duplication of the
@@ -352,12 +367,6 @@ impl<'a> GaiaShard<'a> {
     #[inline]
     pub fn records(&self) -> &[GaiaRecord] {
         self.records
-    }
-
-    /// Raw underlying bytes (header + records).
-    #[inline]
-    pub fn raw(&self) -> &[u8] {
-        self.raw
     }
 }
 
@@ -687,6 +696,122 @@ mod tests {
         // And non-NaN fields survived too.
         assert_eq!(got.source_id, 42);
         assert_eq!(got.phot_g_mean_mag, 12.5);
+    }
+
+    #[test]
+    fn duplicate_source_id_rejected() {
+        // Two records with the same source_id must be rejected at write
+        // time — readers binary-search by source_id and a duplicate would
+        // silently shadow one of them.
+        let mut records = vec![make_record(42, 12.0), make_record(42, 13.0)];
+        let mut buf = Vec::new();
+        let err = write_gaia_shard(&mut buf, 0, &mut records).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert!(err.to_string().contains("duplicate"), "got: {err}");
+    }
+
+    #[test]
+    fn parse_rejects_misaligned_slice() {
+        // GaiaRecord requires 8-byte alignment. Build a valid shard, then
+        // hand the parser a sub-slice starting one byte in: the records
+        // region is no longer 8-aligned and parse must error rather than
+        // panic from inside bytemuck.
+        let mut records = vec![make_record(1, 12.0), make_record(2, 12.0)];
+        let mut prefixed = vec![0u8]; // one stray byte to misalign the rest
+        write_gaia_shard(&mut prefixed, 0, &mut records).unwrap();
+        let mis = &prefixed[1..];
+        // Header parses fine; the bytemuck cast must fail when records
+        // start at an offset that puts them on a 1-mod-8 byte boundary.
+        // We can't predict alignment of `prefixed`'s allocation, so retry
+        // on an explicitly-aligned buffer if the first attempt happens
+        // to land aligned.
+        let err = match GaiaShard::parse(mis) {
+            Ok(_) => {
+                // Allocator gave an unlucky address; rebuild with a wider
+                // prefix to force misalignment relative to the
+                // allocation base.
+                let mut records2 = vec![make_record(1, 12.0), make_record(2, 12.0)];
+                let mut prefixed2 = vec![0u8; 3];
+                write_gaia_shard(&mut prefixed2, 0, &mut records2).unwrap();
+                let off = (prefixed2.as_ptr() as usize) & 7;
+                // Pick a slice start such that records (at HEADER_SIZE
+                // bytes in) land on an odd byte from the underlying
+                // allocation.
+                let skew = if off == 0 { 1 } else { 8 - off + 1 };
+                assert!(
+                    skew < prefixed2.len(),
+                    "could not construct a misaligned slice"
+                );
+                let mis2 = &prefixed2[skew..];
+                GaiaShard::parse(mis2).expect_err("misaligned slice must error")
+            }
+            Err(e) => e,
+        };
+        // Bytemuck reports an alignment error via io::Error::other,
+        // which has kind `Other`.
+        assert_eq!(err.kind(), io::ErrorKind::Other);
+        assert!(err.to_string().contains("misaligned"), "got: {err}");
+    }
+
+    #[test]
+    fn header_byte_layout() {
+        // Pin the exact 32-byte header layout. Empty shard for simplicity
+        // (the header is identical regardless of n_records).
+        let mut records: Vec<GaiaRecord> = Vec::new();
+        let mut buf = Vec::new();
+        write_gaia_shard(&mut buf, 0x0123_4567_89AB_CDEF, &mut records).unwrap();
+        assert_eq!(buf.len(), HEADER_SIZE);
+
+        let expected: [u8; 32] = [
+            // magic "ZDCLGAIA"
+            b'Z', b'D', b'C', b'L', b'G', b'A', b'I', b'A', // version = 1 (u32 LE)
+            0x01, 0x00, 0x00, 0x00, // record_size = 104 (u32 LE)
+            0x68, 0x00, 0x00, 0x00, // cell_id = 0x0123_4567_89AB_CDEF (u64 LE)
+            0xEF, 0xCD, 0xAB, 0x89, 0x67, 0x45, 0x23, 0x01, // n_records = 0 (u32 LE)
+            0x00, 0x00, 0x00, 0x00, // reserved padding
+            0x00, 0x00, 0x00, 0x00,
+        ];
+        assert_eq!(&buf[..], &expected[..]);
+    }
+
+    #[test]
+    fn edge_source_ids_roundtrip() {
+        // 0 and u64::MAX coexist as source_ids.
+        let mut records = vec![make_record(0, 12.0), make_record(u64::MAX, 13.0)];
+        let mut buf = Vec::new();
+        write_gaia_shard(&mut buf, 1, &mut records).unwrap();
+        let shard = GaiaShard::parse(&buf).unwrap();
+        assert_eq!(shard.len(), 2);
+        assert_eq!(shard.find(0).unwrap().source_id, 0);
+        assert_eq!(shard.find(u64::MAX).unwrap().source_id, u64::MAX);
+
+        // A supplement-bit-set id (bit 63 set) coexists with a normal id.
+        let supplement_id = 1u64 << 63;
+        let mut records2 = vec![make_record(100, 12.0), make_record(supplement_id, 5.0)];
+        let mut buf2 = Vec::new();
+        write_gaia_shard(&mut buf2, 2, &mut records2).unwrap();
+        let shard2 = GaiaShard::parse(&buf2).unwrap();
+        assert_eq!(shard2.len(), 2);
+        let normal = shard2.find(100).expect("normal id");
+        assert_eq!(normal.hip_number(), None);
+        let supp = shard2.find(supplement_id).expect("supplement id");
+        // hip_number recovers the low 31 bits (zero in this case).
+        assert_eq!(supp.hip_number(), Some(0));
+    }
+
+    #[test]
+    fn parse_rejects_inflated_n_records() {
+        // Write a valid 2-record shard, then patch n_records up to a value
+        // larger than the slice can hold. Parse must reject rather than
+        // walk off the end of the buffer.
+        let mut records = vec![make_record(1, 12.0), make_record(2, 13.0)];
+        let mut buf = Vec::new();
+        write_gaia_shard(&mut buf, 0, &mut records).unwrap();
+        let bogus: u32 = 1_000_000;
+        buf[24..28].copy_from_slice(&bogus.to_le_bytes());
+        let err = GaiaShard::parse(&buf).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("truncated"), "got: {err}");
     }
 
     #[test]

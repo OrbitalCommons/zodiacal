@@ -648,6 +648,112 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
     }
 
+    /// Empty bundle directory: list_prefix("") returns [], exists()
+    /// returns false for any name.
+    #[test]
+    fn fs_empty_bundle_dir() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let acc = FsAccessor::open(tmp.path()).expect("open FsAccessor");
+        let listed = acc.list_prefix("").expect("list_prefix");
+        assert!(listed.is_empty(), "expected empty listing, got {listed:?}");
+        assert!(!acc.exists("anything"));
+        assert!(!acc.exists("manifest.json"));
+    }
+
+    /// A zero-byte file in the bundle: read_entry returns an empty
+    /// EntryBytes without panicking from the mmap path.
+    #[test]
+    fn fs_zero_byte_file() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("empty.bin");
+        File::create(&path).expect("create empty file");
+        let acc = FsAccessor::open(tmp.path()).expect("open FsAccessor");
+        let bytes = acc.read_entry("empty.bin").expect("read empty");
+        assert_eq!(&bytes[..], b"");
+    }
+
+    /// Many entries (≥ 100) round-trip via FsAccessor.
+    #[test]
+    fn fs_many_entries_roundtrip() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let n: u32 = 128;
+        for i in 0..n {
+            let path = tmp.path().join(format!("entry_{i:04}.bin"));
+            std::fs::write(&path, i.to_le_bytes()).expect("write entry");
+        }
+        let acc = FsAccessor::open(tmp.path()).expect("open FsAccessor");
+        let listed = acc.list_prefix("").expect("list_prefix");
+        assert_eq!(listed.len(), n as usize);
+        for i in 0..n {
+            let rel = format!("entry_{i:04}.bin");
+            let got = acc.read_entry(&rel).expect("read entry");
+            assert_eq!(&got[..], &i.to_le_bytes()[..]);
+        }
+    }
+
+    /// FsAccessor must be able to read a hidden file (`.foo`).
+    #[test]
+    fn fs_hidden_file_reachable() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(tmp.path().join(".foo"), b"hidden").expect("write hidden");
+        let acc = FsAccessor::open(tmp.path()).expect("open FsAccessor");
+        assert!(acc.exists(".foo"));
+        let got = acc.read_entry(".foo").expect("read hidden");
+        assert_eq!(&got[..], b"hidden");
+    }
+
+    /// ZipAccessor on a zip with a single zero-byte stored entry must
+    /// round-trip cleanly.
+    #[test]
+    fn zip_zero_byte_stored_entry() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let zip_path = tmp.path().join("empty.zip");
+        let f = File::create(&zip_path).expect("create zip");
+        let mut zw = zip::write::ZipWriter::new(f);
+        let opts =
+            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        zw.start_file("empty.bin", opts).expect("start zip entry");
+        // No bytes written.
+        zw.finish().expect("finish zip");
+
+        let acc = ZipAccessor::open(&zip_path).expect("open ZipAccessor");
+        assert!(acc.exists("empty.bin"));
+        let got = acc.read_entry("empty.bin").expect("read empty zip entry");
+        assert_eq!(&got[..], b"");
+    }
+
+    /// ZipAccessor must handle a single archive that mixes Stored and
+    /// Deflated compression methods.
+    #[test]
+    fn zip_mixed_stored_and_deflated() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let zip_path = tmp.path().join("mixed.zip");
+        let f = File::create(&zip_path).expect("create zip");
+        let mut zw = zip::write::ZipWriter::new(f);
+
+        let stored =
+            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        zw.start_file("stored.bin", stored).expect("start stored");
+        zw.write_all(b"raw bytes").expect("write stored");
+
+        let deflated =
+            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        zw.start_file("deflated.bin", deflated)
+            .expect("start deflated");
+        // Use a payload that compresses well so the stored and deflated
+        // sizes diverge — confirms the reader actually decompresses.
+        let payload: Vec<u8> = std::iter::repeat_n(b'a', 2048).collect();
+        zw.write_all(&payload).expect("write deflated");
+
+        zw.finish().expect("finish zip");
+
+        let acc = ZipAccessor::open(&zip_path).expect("open ZipAccessor");
+        let stored_got = acc.read_entry("stored.bin").expect("read stored");
+        assert_eq!(&stored_got[..], b"raw bytes");
+        let deflated_got = acc.read_entry("deflated.bin").expect("read deflated");
+        assert_eq!(&deflated_got[..], &payload[..]);
+    }
+
     /// A symlink that lives *inside* the bundle root but points to a
     /// file *outside* the root is the canonical case the canonicalize
     /// step has to catch (lexical checks alone won't notice).
