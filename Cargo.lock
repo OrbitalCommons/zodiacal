@@ -3761,6 +3761,7 @@ dependencies = [
 name = "zodiacal-tools"
 version = "0.1.0"
 dependencies = [
+ "cdshealpix",
  "chrono",
  "clap",
  "rayon",

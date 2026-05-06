@@ -44,11 +44,12 @@ use zodiacal::index::multiband_cell_builder::{
 };
 use zodiacal::refinement::SidecarRecord;
 
-/// Hard cap on the magnitude limit; deeper than this is rejected up
-/// front to mirror `build-from-shards`'s ceiling. Bundles store records
-/// per-cell so memory pressure scales differently, but a G ≤ 17 cap
-/// keeps individual cells bounded at typical depths.
-pub const MAX_MAG_LIMIT: f64 = 17.0;
+/// Hard cap on the magnitude limit. Bundles write per-cell `.zga`
+/// shards rather than one global sidecar, so the original `build-from-shards`
+/// 17.0 cap doesn't apply — individual cells are bounded by
+/// `--max-stars-per-cell`. We keep a sanity ceiling at 22 (one mag past
+/// what Gaia DR3 publishes for `phot_g_mean_mag`) just to catch typos.
+pub const MAX_MAG_LIMIT: f64 = 22.0;
 
 /// Output format selector.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -167,8 +168,10 @@ pub fn run(cfg: &BuildFromExcerptSeriesConfig) -> Result<(), String> {
 
     let source = BycellExcerptSource::open(&excerpt_dir, cfg.cell_depth, cfg.mag_limit)?;
     eprintln!(
-        "Indexed {} populated shard(s); cell_count={} (one past largest populated)",
+        "Indexed {} populated shard(s) at source_depth={}; bundle_depth={} (cell_count={})",
         source.populated_count(),
+        source.source_depth(),
+        cfg.cell_depth,
         source.cell_count(),
     );
 
@@ -352,38 +355,97 @@ fn derive_scale_bands(
 
 /// `CellStarSource` impl for a starfield-gaia bycell excerpt — a
 /// directory of `shard_NNNN.csv.gz` files whose shard index equals the
-/// HEALPix nested-scheme cell id at the excerpt's `cell_depth`.
+/// HEALPix nested-scheme cell id at the excerpt's `source_depth`.
 ///
-/// PR6 v1 only supports the identity passthrough: bundle's `cell_depth`
-/// must equal the excerpt's depth. Cross-depth resharding is a
-/// follow-up.
-#[derive(Debug)]
+/// Supports two modes:
+/// 1. **Identity passthrough** (`bundle_depth == source_depth`): each
+///    bundle cell's stars come from the matching shard.
+/// 2. **Finer bundle** (`bundle_depth > source_depth`): each bundle
+///    cell's stars come from the parent source cell, partitioned by
+///    HEALPix at `bundle_depth`. The parent's CSV is loaded and
+///    re-hashed once, and all 4^(delta) child cells share the result
+///    via a small LRU cache.
+///
+/// Coarser bundles (`bundle_depth < source_depth`) are rejected.
 pub struct BycellExcerptSource {
-    /// `cell_id (= shard index) -> path on disk`, populated by scanning
-    /// the excerpt directory at construction time.
+    // (Debug impl below — Mutex doesn't auto-derive a useful Debug.)
+    /// `source_cell_id (= shard index at source_depth) -> CSV path`.
     cell_files: HashMap<u32, PathBuf>,
-    /// One past the largest populated cell. The orchestrator iterates
-    /// `0..cell_count()`; this keeps the iteration bounded by what's on
-    /// disk rather than by the depth's full-sky count, which would
-    /// fsync 12,288 empty manifest entries at depth 5 even for sparse
-    /// test fixtures.
+    /// One past the largest populated bundle cell id. The orchestrator
+    /// iterates `0..cell_count()`; we keep it tight so empty cells in
+    /// the deeper bundle layout don't cost a manifest fsync each.
     cell_count: u32,
+    /// HEALPix depth of the source excerpt (typically 5 for the bycell
+    /// directory).
+    source_depth: u8,
+    /// HEALPix depth of the bundle being built.
+    bundle_depth: u8,
     /// Magnitude cap applied to the loaded CSV rows.
     mag_limit: f64,
+    /// Cached partitions of source-cell CSV → child-cell stars. Only
+    /// populated when `bundle_depth > source_depth`. Bounded LRU; size
+    /// is small (handful of recently-loaded source cells per worker).
+    partition_cache: std::sync::Mutex<PartitionCache>,
+}
+
+impl std::fmt::Debug for BycellExcerptSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BycellExcerptSource")
+            .field("source_depth", &self.source_depth)
+            .field("bundle_depth", &self.bundle_depth)
+            .field("populated", &self.cell_files.len())
+            .field("mag_limit", &self.mag_limit)
+            .finish()
+    }
+}
+
+const PARTITION_CACHE_CAPACITY: usize = 32;
+
+struct PartitionCache {
+    /// Map: source_cell_id → Arc<HashMap<bundle_cell_id, stars>>.
+    entries: HashMap<u32, std::sync::Arc<HashMap<u32, Vec<CellStar>>>>,
+    /// Insertion order, oldest first.
+    order: Vec<u32>,
+}
+
+impl PartitionCache {
+    fn new() -> Self {
+        Self {
+            entries: HashMap::new(),
+            order: Vec::with_capacity(PARTITION_CACHE_CAPACITY + 1),
+        }
+    }
+    fn get(&self, parent: u32) -> Option<std::sync::Arc<HashMap<u32, Vec<CellStar>>>> {
+        self.entries.get(&parent).cloned()
+    }
+    fn insert(&mut self, parent: u32, value: std::sync::Arc<HashMap<u32, Vec<CellStar>>>) {
+        if self.entries.contains_key(&parent) {
+            return;
+        }
+        if self.entries.len() >= PARTITION_CACHE_CAPACITY {
+            // Drop the oldest entry. O(N) Vec::remove is fine at small N.
+            if !self.order.is_empty() {
+                let evict = self.order.remove(0);
+                self.entries.remove(&evict);
+            }
+        }
+        self.entries.insert(parent, value);
+        self.order.push(parent);
+    }
 }
 
 impl BycellExcerptSource {
-    /// Scan `excerpt_dir` for `shard_NNNN.csv.gz` files and validate
-    /// that no shard index exceeds the cell count for `cell_depth`
-    /// (`12 * 4^depth`).
-    pub fn open(excerpt_dir: &Path, cell_depth: u8, mag_limit: f64) -> Result<Self, String> {
+    /// Scan `excerpt_dir` for `shard_NNNN.csv.gz` files. The shard
+    /// index range determines `source_depth` (chosen as the smallest
+    /// depth whose `12 * 4^depth` count exceeds the largest shard id).
+    /// `bundle_depth` may equal or exceed `source_depth`.
+    pub fn open(excerpt_dir: &Path, bundle_depth: u8, mag_limit: f64) -> Result<Self, String> {
         if !excerpt_dir.is_dir() {
             return Err(format!(
                 "--excerpt-dir {} is not a directory",
                 excerpt_dir.display(),
             ));
         }
-        let max_cells = 12u64 << (2 * cell_depth as u64);
         let mut cell_files = HashMap::new();
         for entry in std::fs::read_dir(excerpt_dir)
             .map_err(|e| format!("failed to read {}: {e}", excerpt_dir.display()))?
@@ -411,15 +473,6 @@ impl BycellExcerptSource {
                 Ok(v) => v,
                 Err(_) => continue,
             };
-            if (idx as u64) >= max_cells {
-                return Err(format!(
-                    "shard index {idx} from {} exceeds cell count {max_cells} for depth {cell_depth}; \
-                     the excerpt was likely produced at a different depth — cross-depth resharding \
-                     is not supported in PR6 v1, rebuild the excerpt at depth {cell_depth} or pass \
-                     --cell-depth to match the excerpt's depth",
-                    path.display(),
-                ));
-            }
             cell_files.insert(idx, path);
         }
         if cell_files.is_empty() {
@@ -428,19 +481,120 @@ impl BycellExcerptSource {
                 excerpt_dir.display(),
             ));
         }
-        let cell_count = cell_files.keys().copied().max().map(|m| m + 1).unwrap_or(0);
+        // Infer source_depth from the largest shard index. The
+        // excerpt's depth is the smallest D with `12 * 4^D > max_idx`.
+        let max_idx = cell_files.keys().copied().max().unwrap_or(0) as u64;
+        let mut source_depth: u8 = 0;
+        while (12u64 << (2 * source_depth as u64)) <= max_idx {
+            source_depth += 1;
+            if source_depth > 29 {
+                return Err(format!(
+                    "shard index {max_idx} too large to derive a HEALPix depth (≤ 29 supported)",
+                ));
+            }
+        }
+        if bundle_depth < source_depth {
+            return Err(format!(
+                "--cell-depth {bundle_depth} is shallower than excerpt depth {source_depth}; \
+                 coarser-bundle resharding is not supported. Pass --cell-depth >= {source_depth}.",
+            ));
+        }
+
+        let bundle_cells = 12u64 << (2 * bundle_depth as u64);
+        // For bundle_depth > source_depth, every parent's children
+        // contribute to bundle cells. We only iterate up to one past
+        // the largest *possible* child of the largest populated source.
+        let cell_count: u32 = if bundle_depth == source_depth {
+            cell_files.keys().copied().max().map(|m| m + 1).unwrap_or(0)
+        } else {
+            let delta = bundle_depth - source_depth;
+            let max_source = cell_files.keys().copied().max().unwrap_or(0) as u64;
+            // Children of parent P at delta deeper: P << (2*delta) .. (P+1) << (2*delta)
+            let max_child = ((max_source + 1) << (2 * delta as u64)) - 1;
+            (max_child + 1).min(bundle_cells) as u32
+        };
+
         Ok(Self {
             cell_files,
             cell_count,
+            source_depth,
+            bundle_depth,
             mag_limit,
+            partition_cache: std::sync::Mutex::new(PartitionCache::new()),
         })
     }
 
-    /// Number of populated cells (cells with a corresponding shard
-    /// file). Distinct from [`Self::cell_count`], which is one past the
-    /// largest populated cell.
+    /// Source-excerpt depth (inferred from the shard index range).
+    pub fn source_depth(&self) -> u8 {
+        self.source_depth
+    }
+
+    /// Number of source shards on disk.
     pub fn populated_count(&self) -> usize {
         self.cell_files.len()
+    }
+
+    /// Load + partition one source cell's CSV. Idempotent; the result
+    /// is cached so subsequent `stars_in_cell` calls for any of this
+    /// source cell's bundle-depth children get O(1) access.
+    fn load_and_partition(
+        &self,
+        source_cell: u32,
+    ) -> std::io::Result<std::sync::Arc<HashMap<u32, Vec<CellStar>>>> {
+        if let Some(hit) = self
+            .partition_cache
+            .lock()
+            .expect("partition cache poisoned")
+            .get(source_cell)
+        {
+            return Ok(hit);
+        }
+
+        let path = match self.cell_files.get(&source_cell) {
+            Some(p) => p,
+            None => {
+                let empty = std::sync::Arc::new(HashMap::new());
+                self.partition_cache
+                    .lock()
+                    .expect("partition cache poisoned")
+                    .insert(source_cell, empty.clone());
+                return Ok(empty);
+            }
+        };
+        let catalog = Dr3Catalog::from_csv_file(path, self.mag_limit)
+            .map_err(|e| std::io::Error::other(format!("{}: load failed: {e}", path.display())))?;
+        let entries = catalog.0.brighter_than_ref(f64::INFINITY);
+
+        let mut partitions: HashMap<u32, Vec<CellStar>> = HashMap::new();
+        if self.bundle_depth == self.source_depth {
+            // Identity case: everything in one bucket keyed by source_cell.
+            let mut bucket = Vec::with_capacity(entries.len());
+            for entry in entries {
+                if !entry.core.phot_g_mean_mag.is_finite() {
+                    continue;
+                }
+                bucket.push(entry_to_cell_star(entry));
+            }
+            partitions.insert(source_cell, bucket);
+        } else {
+            // Re-hash each entry at bundle_depth and bin.
+            for entry in entries {
+                if !entry.core.phot_g_mean_mag.is_finite() {
+                    continue;
+                }
+                let star = entry_to_cell_star(entry);
+                let bundle_cell =
+                    cdshealpix::nested::hash(self.bundle_depth, star.ra_rad, star.dec_rad) as u32;
+                partitions.entry(bundle_cell).or_default().push(star);
+            }
+        }
+
+        let arc = std::sync::Arc::new(partitions);
+        self.partition_cache
+            .lock()
+            .expect("partition cache poisoned")
+            .insert(source_cell, arc.clone());
+        Ok(arc)
     }
 }
 
@@ -450,21 +604,15 @@ impl CellStarSource for BycellExcerptSource {
     }
 
     fn stars_in_cell(&self, cell_id: u32) -> std::io::Result<Vec<CellStar>> {
-        let path = match self.cell_files.get(&cell_id) {
-            Some(p) => p,
-            None => return Ok(Vec::new()),
+        // Find the parent source cell for this bundle cell.
+        let source_cell = if self.bundle_depth == self.source_depth {
+            cell_id
+        } else {
+            let delta = self.bundle_depth - self.source_depth;
+            cell_id >> (2 * delta as u32)
         };
-        let catalog = Dr3Catalog::from_csv_file(path, self.mag_limit)
-            .map_err(|e| std::io::Error::other(format!("{}: load failed: {e}", path.display())))?;
-        let entries = catalog.0.brighter_than_ref(f64::INFINITY);
-        let mut out = Vec::with_capacity(entries.len());
-        for entry in entries {
-            if !entry.core.phot_g_mean_mag.is_finite() {
-                continue;
-            }
-            out.push(entry_to_cell_star(entry));
-        }
-        Ok(out)
+        let partition = self.load_and_partition(source_cell)?;
+        Ok(partition.get(&cell_id).cloned().unwrap_or_default())
     }
 }
 
@@ -604,15 +752,16 @@ mod tests {
     }
 
     #[test]
-    fn excerpt_source_open_rejects_oversized_shard_id() {
+    fn excerpt_source_open_rejects_coarser_bundle_than_source() {
         let tmp = tempfile::tempdir().unwrap();
-        // depth 0 → 12 cells → max id 11. We write shard_0099 to force
-        // the rejection path.
+        // shard 99 → smallest source_depth with 12*4^D > 99 is D=2
+        // (12*16=192). Asking for a bundle at depth 0 (coarser than 2)
+        // is rejected — coarser-bundle resharding is unsupported.
         touch_synthetic_shard(tmp.path(), 99);
         let err = BycellExcerptSource::open(tmp.path(), 0, 16.0).unwrap_err();
         assert!(
-            err.contains("exceeds cell count"),
-            "expected cross-depth rejection, got: {err}"
+            err.contains("shallower than excerpt depth"),
+            "expected coarser-bundle rejection, got: {err}"
         );
     }
 
@@ -627,16 +776,32 @@ mod tests {
     }
 
     #[test]
-    fn excerpt_source_indexes_shards_at_correct_depth() {
+    fn excerpt_source_identity_passthrough_at_inferred_depth() {
         let tmp = tempfile::tempdir().unwrap();
-        // Depth 5 → max id 12,287. Four small shards in the low ids.
+        // Shard ids ≤ 42 → smallest source_depth with 12*4^D > 42 is
+        // D=1 (12*4=48 > 42). With bundle_depth == source_depth, the
+        // identity passthrough applies; cell_count is one past the
+        // largest populated.
+        for &cid in &[0u32, 1, 7, 42] {
+            touch_synthetic_shard(tmp.path(), cid);
+        }
+        let src = BycellExcerptSource::open(tmp.path(), 1, 16.0).unwrap();
+        assert_eq!(src.populated_count(), 4);
+        assert_eq!(src.source_depth(), 1);
+        assert_eq!(src.cell_count(), 43);
+    }
+
+    #[test]
+    fn excerpt_source_finer_bundle_expands_cell_count() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Inferred source_depth=1; ask for bundle_depth=5 → each parent
+        // has 4^4 = 256 children; cell_count = (max_parent+1) << 8.
         for &cid in &[0u32, 1, 7, 42] {
             touch_synthetic_shard(tmp.path(), cid);
         }
         let src = BycellExcerptSource::open(tmp.path(), 5, 16.0).unwrap();
-        assert_eq!(src.populated_count(), 4);
-        // cell_count == one past the largest populated cell.
-        assert_eq!(src.cell_count(), 43);
+        assert_eq!(src.source_depth(), 1);
+        assert_eq!(src.cell_count(), 43 << 8);
     }
 
     /// End-to-end smoke: build a tiny bundle programmatically using a
