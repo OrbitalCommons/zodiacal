@@ -13,9 +13,11 @@ use clap::{Parser, Subcommand, ValueEnum};
 
 use zodiacal::index::source::DEFAULT_CELL_DEPTH;
 
+mod bench_bundle;
 mod build_from_excerpt_series;
 mod build_from_shards;
 
+use bench_bundle::{BenchBundleConfig, run as run_bench_bundle};
 use build_from_excerpt_series::{
     BuildFromExcerptSeriesConfig, OutputFormat, run as run_build_from_excerpt_series,
 };
@@ -103,6 +105,37 @@ enum Commands {
         /// (default: rayon's default = all logical cores).
         #[arg(long)]
         threads: Option<usize>,
+    },
+
+    /// Sweep the 1000-case test corpus against a built bundle. For
+    /// each `NNNN.json` test case, opens a region of the bundle around
+    /// the truth center, builds one Index per band, runs `solve()`,
+    /// and emits a CSV row per case to stdout plus a summary on
+    /// stderr.
+    BenchBundle {
+        /// Bundle to query (folder or `.zip`).
+        #[arg(long)]
+        bundle_path: PathBuf,
+
+        /// Directory of `NNNN.json` test cases.
+        #[arg(long, default_value = "test_cases")]
+        test_cases_dir: PathBuf,
+
+        /// Region radius in degrees. For a 2°×2° square use 1.4142.
+        #[arg(long, default_value = "1.4142")]
+        radius_deg: f64,
+
+        /// Stop after this many cases (default: all).
+        #[arg(long)]
+        limit: Option<usize>,
+
+        /// Hint the solver with truth pixel scale ±5%.
+        #[arg(long)]
+        scale_hint: bool,
+
+        /// Per-case solve timeout in seconds. 0 disables.
+        #[arg(long, default_value_t = 0)]
+        timeout_secs: u64,
     },
 
     /// Build a multi-band `.zdcl.bundle` from a starfield-gaia
@@ -217,6 +250,27 @@ fn main() {
             };
             if let Err(e) = run_build_from_shards(&cfg) {
                 eprintln!("build-from-shards failed: {e}");
+                process::exit(1);
+            }
+        }
+        Commands::BenchBundle {
+            bundle_path,
+            test_cases_dir,
+            radius_deg,
+            limit,
+            scale_hint,
+            timeout_secs,
+        } => {
+            let cfg = BenchBundleConfig {
+                bundle_path: bundle_path.clone(),
+                test_cases_dir: test_cases_dir.clone(),
+                radius_deg: *radius_deg,
+                limit: *limit,
+                scale_hint: *scale_hint,
+                timeout_secs: *timeout_secs,
+            };
+            if let Err(e) = run_bench_bundle(&cfg) {
+                eprintln!("bench-bundle failed: {e}");
                 process::exit(1);
             }
         }
