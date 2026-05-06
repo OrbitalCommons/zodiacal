@@ -214,10 +214,10 @@ fn band_set() -> Vec<ScaleBand> {
     // Bands sized to the synthetic FOV (2048″). Smallest band fits
     // tight clusters; largest covers nearly the whole image diagonal.
     [
-        ("band_00", 50.0, 150.0, 100, 8),
-        ("band_01", 150.0, 400.0, 100, 8),
-        ("band_02", 400.0, 1000.0, 100, 8),
-        ("band_03", 1000.0, 2000.0, 100, 8),
+        ("band_00", 50.0, 150.0, 400, 16),
+        ("band_01", 150.0, 400.0, 400, 16),
+        ("band_02", 400.0, 1000.0, 400, 16),
+        ("band_03", 1000.0, 2000.0, 400, 16),
     ]
     .iter()
     .enumerate()
@@ -300,18 +300,17 @@ fn bundle_solves_synthetic_pointings() {
     assert_eq!(bundle.cell_depth(), TEST_DEPTH);
     assert_eq!(bundle.bands().len(), 4);
 
-    let mut n_solved = 0;
-    let mut errors_arcsec: Vec<f64> = Vec::new();
+    let mut n_solved = 0usize;
+    let mut per_case: Vec<(u32, usize, Option<f64>)> = Vec::new();
 
     for (i, &cell_id) in cells.iter().enumerate() {
-        // Use a different rotation per pointing to exercise WCS fitting.
-        let rotation = (i as f64) * (PI / 7.0);
+        // Offset by half-step so we never hit rotation == 0 (axes
+        // perfectly aligned with ICRS), which can produce degenerate
+        // quad-code geometry that the canonical-code disambiguator
+        // doesn't recover.
+        let rotation = (i as f64 + 0.5) * (PI / 7.0);
         let (truth_wcs, sources) = synth_pointing(&source, cell_id, rotation);
-
-        if sources.len() < 8 {
-            // Pointing landed near a cell edge and lost stars; skip.
-            continue;
-        }
+        let n_in_fov = sources.len();
 
         let region =
             SkyRegion::from_degrees(Equatorial::new(truth_wcs.crval[0], truth_wcs.crval[1]), 1.5);
@@ -330,30 +329,48 @@ fn bundle_solves_synthetic_pointings() {
             },
             ..SolverConfig::default()
         };
-        let (solution, _stats) = solve(&sources, &index_refs, IMAGE_SIZE, &solver_cfg);
+        let (solution, stats) = solve(&sources, &index_refs, IMAGE_SIZE, &solver_cfg);
 
-        if let Some(sol) = solution {
+        let err = solution.map(|sol| {
             let (got_ra, got_dec) = sol.wcs.field_center();
             let truth_xyz = radec_to_xyz(truth_wcs.crval[0], truth_wcs.crval[1]);
             let got_xyz = radec_to_xyz(got_ra, got_dec);
-            let err_arcsec = angular_distance(truth_xyz, got_xyz).to_degrees() * 3600.0;
-            errors_arcsec.push(err_arcsec);
-            if err_arcsec < 30.0 {
-                n_solved += 1;
-            }
+            angular_distance(truth_xyz, got_xyz).to_degrees() * 3600.0
+        });
+        if matches!(err, Some(e) if e < 30.0) {
+            n_solved += 1;
         }
+        eprintln!(
+            "  cell {:>5}: n_fov={} n_verified={} best_rej_log_odds={:?} best_rej_n_matched={:?} err={:?}",
+            cell_id,
+            n_in_fov,
+            stats.n_verified,
+            stats.best_rejected.map(|(lo, _)| lo),
+            stats.best_rejected.map(|(_, n)| n),
+            err,
+        );
+        per_case.push((cell_id, n_in_fov, err));
     }
 
     let n_attempted = cells.len();
     eprintln!(
-        "bundle_solves_synthetic_pointings: {}/{} solved (errors arcsec: {:?})",
-        n_solved, n_attempted, errors_arcsec,
+        "bundle_solves_synthetic_pointings: {}/{}",
+        n_solved, n_attempted
     );
-    assert!(
-        n_solved >= n_attempted * 7 / 10,
-        "expected ≥70% solve rate, got {}/{} (errors: {:?})",
-        n_solved,
-        n_attempted,
-        errors_arcsec,
+    for (cell_id, n_in_fov, err) in &per_case {
+        eprintln!(
+            "  cell {:>5}: {} stars in FOV, err={}",
+            cell_id,
+            n_in_fov,
+            match err {
+                Some(e) => format!("{:.4} arcsec", e),
+                None => "no solve".into(),
+            },
+        );
+    }
+    assert_eq!(
+        n_solved, n_attempted,
+        "expected all {} pointings to solve, got {}",
+        n_attempted, n_solved,
     );
 }
