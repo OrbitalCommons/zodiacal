@@ -14,10 +14,12 @@ use clap::{Parser, Subcommand, ValueEnum};
 use zodiacal::index::source::DEFAULT_CELL_DEPTH;
 
 mod bench_bundle;
+mod bench_indexes;
 mod build_from_excerpt_series;
 mod build_from_shards;
 
 use bench_bundle::{BenchBundleConfig, run as run_bench_bundle};
+use bench_indexes::{BenchIndexesConfig, run as run_bench_indexes};
 use build_from_excerpt_series::{
     BuildFromExcerptSeriesConfig, OutputFormat, run as run_build_from_excerpt_series,
 };
@@ -105,6 +107,28 @@ enum Commands {
         /// (default: rayon's default = all logical cores).
         #[arg(long)]
         threads: Option<usize>,
+    },
+
+    /// Sweep the 1000-case test corpus against a list of pre-built
+    /// single-band `.zdcl` indexes (the old multi-file layout, e.g.
+    /// `gaia_jbt_NN.zdcl`). Mirrors `bench-bundle`'s output schema.
+    BenchIndexes {
+        /// One or more `.zdcl` files to load and pass to the solver
+        /// as `&[&Index]`.
+        #[arg(long, num_args = 1.., required = true)]
+        index_file: Vec<PathBuf>,
+
+        #[arg(long, default_value = "test_cases")]
+        test_cases_dir: PathBuf,
+
+        #[arg(long)]
+        limit: Option<usize>,
+
+        #[arg(long)]
+        scale_hint: bool,
+
+        #[arg(long, default_value_t = 0)]
+        timeout_secs: u64,
     },
 
     /// Sweep the 1000-case test corpus against a built bundle. For
@@ -250,6 +274,25 @@ fn main() {
             };
             if let Err(e) = run_build_from_shards(&cfg) {
                 eprintln!("build-from-shards failed: {e}");
+                process::exit(1);
+            }
+        }
+        Commands::BenchIndexes {
+            index_file,
+            test_cases_dir,
+            limit,
+            scale_hint,
+            timeout_secs,
+        } => {
+            let cfg = BenchIndexesConfig {
+                index_files: index_file.clone(),
+                test_cases_dir: test_cases_dir.clone(),
+                limit: *limit,
+                scale_hint: *scale_hint,
+                timeout_secs: *timeout_secs,
+            };
+            if let Err(e) = run_bench_indexes(&cfg) {
+                eprintln!("bench-indexes failed: {e}");
                 process::exit(1);
             }
         }
