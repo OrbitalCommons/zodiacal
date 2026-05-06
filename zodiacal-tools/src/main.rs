@@ -9,12 +9,16 @@
 use std::path::PathBuf;
 use std::process;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 use zodiacal::index::source::DEFAULT_CELL_DEPTH;
 
+mod build_from_excerpt_series;
 mod build_from_shards;
 
+use build_from_excerpt_series::{
+    BuildFromExcerptSeriesConfig, OutputFormat, run as run_build_from_excerpt_series,
+};
 use build_from_shards::{BuildFromShardsConfig, run as run_build_from_shards};
 
 #[derive(Parser)]
@@ -25,6 +29,27 @@ use build_from_shards::{BuildFromShardsConfig, run as run_build_from_shards};
 struct Cli {
     #[command(subcommand)]
     command: Commands,
+}
+
+/// Output-form selector for `build-from-excerpt-series`.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+enum OutputFormatArg {
+    /// Folder bundle (`<prefix>.zdcl.bundle/`).
+    Dir,
+    /// Zip-archive bundle (`<prefix>.zdcl.bundle.zip`).
+    Zip,
+    /// Both forms.
+    Both,
+}
+
+impl From<OutputFormatArg> for OutputFormat {
+    fn from(v: OutputFormatArg) -> Self {
+        match v {
+            OutputFormatArg::Dir => OutputFormat::Dir,
+            OutputFormatArg::Zip => OutputFormat::Zip,
+            OutputFormatArg::Both => OutputFormat::Both,
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -79,6 +104,92 @@ enum Commands {
         #[arg(long)]
         threads: Option<usize>,
     },
+
+    /// Build a multi-band `.zdcl.bundle` from a starfield-gaia
+    /// "bycell" excerpt directory (a tree of `shard_NNNN.csv.gz`
+    /// files, one per HEALPix cell at the excerpt's depth).
+    ///
+    /// Drives PR3's parallel cell-driven build phase plus PR4's
+    /// single-threaded tidy phase to produce a folder or zip bundle
+    /// (or both). The work directory survives across runs to support
+    /// resume from crashes; pass `--prune-work-dir` to opt into
+    /// destructive cleanup once the bundle is committed.
+    ///
+    /// PR6 v1 only supports the **fast path** where the bundle's
+    /// `--cell-depth` equals the excerpt's depth. Cross-depth
+    /// resharding is rejected with a clear error.
+    BuildFromExcerptSeries {
+        /// Directory containing `shard_NNNN.csv.gz` files. Omit to use
+        /// the starfield-gaia cache directory.
+        #[arg(long)]
+        excerpt_dir: Option<PathBuf>,
+
+        /// Build scratch directory. Required; survives across runs to
+        /// support resume.
+        #[arg(long)]
+        work_dir: PathBuf,
+
+        /// Output prefix; final artifact is `<prefix>.zdcl.bundle/`
+        /// or `<prefix>.zdcl.bundle.zip` (or both).
+        #[arg(long)]
+        output_prefix: PathBuf,
+
+        /// Output form to emit.
+        #[arg(long, value_enum, default_value_t = OutputFormatArg::Dir)]
+        output_format: OutputFormatArg,
+
+        /// G-band magnitude cutoff applied to source rows. Capped at
+        /// 17.0; deeper requires the streaming sidecar work.
+        #[arg(long, default_value = "16.0")]
+        mag_limit: f64,
+
+        /// Per-cell brightness-truncation cap (applied after
+        /// per-cell load, before quad emission).
+        #[arg(long, default_value_t = 10_000)]
+        max_stars_per_cell: usize,
+
+        /// HEALPix nested-scheme depth for cell sharding. Must equal
+        /// the excerpt's depth (PR6 v1 limitation).
+        #[arg(long, default_value_t = DEFAULT_CELL_DEPTH)]
+        cell_depth: u8,
+
+        /// Number of scale bands. Band `i`'s scale range is
+        /// `[scale_lower * f^i, scale_lower * f^(i+1)]`, where
+        /// `f = (scale_upper / scale_lower)^(1 / bands)`.
+        #[arg(long, default_value_t = 12)]
+        bands: usize,
+
+        /// Lower edge of band 0, in arcseconds.
+        #[arg(long, default_value = "10.0")]
+        scale_lower: f64,
+
+        /// Upper edge of band `bands - 1`, in arcseconds.
+        #[arg(long, default_value = "600.0")]
+        scale_upper: f64,
+
+        /// Per-band quad-count cap.
+        #[arg(long, default_value_t = 100)]
+        quads_per_cell: usize,
+
+        /// Per-cell, per-band cap on how many times a single star
+        /// may be referenced across emitted quads.
+        #[arg(long, default_value_t = 8)]
+        max_reuse: u32,
+
+        /// Free-text experiment label embedded in the manifest.
+        #[arg(long, default_value = "")]
+        experiment: String,
+
+        /// Rayon worker thread count.
+        #[arg(long)]
+        threads: Option<usize>,
+
+        /// Remove the work directory after a successful tidy.
+        /// Default: keep, so a follow-up tidy can produce the
+        /// alternate output form without rebuilding.
+        #[arg(long, default_value_t = false)]
+        prune_work_dir: bool,
+    },
 }
 
 fn main() {
@@ -106,6 +217,45 @@ fn main() {
             };
             if let Err(e) = run_build_from_shards(&cfg) {
                 eprintln!("build-from-shards failed: {e}");
+                process::exit(1);
+            }
+        }
+        Commands::BuildFromExcerptSeries {
+            excerpt_dir,
+            work_dir,
+            output_prefix,
+            output_format,
+            mag_limit,
+            max_stars_per_cell,
+            cell_depth,
+            bands,
+            scale_lower,
+            scale_upper,
+            quads_per_cell,
+            max_reuse,
+            experiment,
+            threads,
+            prune_work_dir,
+        } => {
+            let cfg = BuildFromExcerptSeriesConfig {
+                excerpt_dir: excerpt_dir.clone(),
+                work_dir: work_dir.clone(),
+                output_prefix: output_prefix.clone(),
+                output_format: (*output_format).into(),
+                mag_limit: *mag_limit,
+                max_stars_per_cell: *max_stars_per_cell,
+                cell_depth: *cell_depth,
+                bands: *bands,
+                scale_lower_arcsec: *scale_lower,
+                scale_upper_arcsec: *scale_upper,
+                quads_per_cell: *quads_per_cell,
+                max_reuse: *max_reuse,
+                experiment: experiment.clone(),
+                threads: *threads,
+                prune_work_dir: *prune_work_dir,
+            };
+            if let Err(e) = run_build_from_excerpt_series(&cfg) {
+                eprintln!("build-from-excerpt-series failed: {e}");
                 process::exit(1);
             }
         }

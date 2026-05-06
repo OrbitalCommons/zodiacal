@@ -2,6 +2,9 @@ use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::Path;
 
+use starfield::Equatorial;
+
+use crate::bundle::ZdclBundle;
 use crate::geom::sphere::radec_to_xyz;
 use crate::kdtree::KdTree;
 use crate::quads::{Code, DIMCODES, DIMQUADS, Quad};
@@ -317,6 +320,44 @@ fn load_filtered(path: &Path, region_filter: Option<(&SkyRegion, f64)>) -> io::R
         scale_upper,
         metadata,
     })
+}
+
+/// Open a `.zdcl.bundle` (folder or zip) and return one runnable [`Index`]
+/// per scale band, each holding the full-sky concatenation of that band's
+/// quads/codes plus the union of every populated cell's Gaia records as
+/// [`IndexStar`]s.
+///
+/// This is the convenience entry point for callers that want a multi-band
+/// view of a bundle that fits the existing `solve(&[&Index])` signature.
+/// It deliberately does **not** dispatch through [`Index::load`] — bundles
+/// have their own path (folder or zip) and lifecycle, and silently
+/// upgrading a v1/v2 single-file load into a bundle load would be a
+/// footgun for callers that pass arbitrary user-supplied paths.
+///
+/// # Caveat — full-sky materialization
+///
+/// `load_bundle_bands` materializes every populated cell of the bundle.
+/// For region-scoped queries (FOV-sized cones, ground / space tracker
+/// loads) call [`crate::bundle::ZdclBundle::load_region_band`] directly.
+/// At depth 5 with a G ≤ 16 build the full-sky load is ~150 MB of stars
+/// per band; deeper indexes scale roughly linearly.
+pub fn load_bundle_bands(path: &Path) -> io::Result<Vec<Index>> {
+    let bundle = ZdclBundle::open(path)?;
+    let n_bands = bundle.bands().len();
+    // Center at (0, 0) with radius slightly larger than π — guarantees
+    // every populated cell falls inside the cone, regardless of where
+    // its center lies. (`cone_coverage_approx` accepts radii > π and
+    // returns the full-sky moc.)
+    let full_sky = SkyRegion {
+        center: Equatorial::new(0.0, 0.0),
+        radius_rad: 4.0,
+    };
+    let mut out = Vec::with_capacity(n_bands);
+    for band_idx in 0..n_bands {
+        let frag = bundle.load_region_band(band_idx, &full_sky)?;
+        out.push(Index::from(frag));
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -848,5 +889,184 @@ mod tests {
 
         assert_eq!(regional.stars.len(), 0);
         assert_eq!(regional.quads.len(), 0);
+    }
+
+    /// Smoke test for `load_bundle_bands` — builds a tiny 2-band synthetic
+    /// bundle in a tmpdir and asserts the loader returns one Index per
+    /// band with the expected scale ranges.
+    #[test]
+    fn load_bundle_bands_returns_one_index_per_band() {
+        use crate::bundle::manifest::{BuildMetadata, BuildSource};
+        use crate::bundle::tidy::{BandMetadata, GaiaMetadata, TidyMetadata, tidy_to_folder};
+        use crate::index::cell_builder::{CellStar, CellStarSource};
+        use crate::index::multiband_cell_builder::{
+            BundleWorkDirPaths, MultiBandCellBuildConfig, ScaleBand, build_bundle_work_dir,
+        };
+        use crate::refinement::SidecarRecord;
+        use chrono::{DateTime, Utc};
+
+        const TEST_DEPTH: u8 = 5;
+
+        struct ClusteredSource {
+            cells: Vec<u32>,
+            stars_per_cell: usize,
+        }
+
+        fn cell_center(depth: u8, cell_id: u32) -> (f64, f64) {
+            cdshealpix::nested::center(depth, cell_id as u64)
+        }
+
+        impl CellStarSource for ClusteredSource {
+            fn cell_count(&self) -> u32 {
+                // Only iterate up to one past the largest populated cell —
+                // see PR3's testing notes about full-sky cell counts.
+                self.cells.iter().copied().max().unwrap_or(0) + 1
+            }
+            fn stars_in_cell(&self, cell_id: u32) -> io::Result<Vec<CellStar>> {
+                if !self.cells.contains(&cell_id) {
+                    return Ok(Vec::new());
+                }
+                let (ra_c, dec_c) = cell_center(TEST_DEPTH, cell_id);
+                let mut out = Vec::with_capacity(self.stars_per_cell);
+                for i in 0..self.stars_per_cell {
+                    let dra = (i as f64 - 4.0) * 1e-5;
+                    let ddec = (i as f64 - 4.0) * 7e-6;
+                    let ra = ra_c + dra;
+                    let dec = dec_c + ddec;
+                    let cell_id_12: u64 = (cell_id as u64) << (2 * (12 - TEST_DEPTH as u64));
+                    let source_id: u64 = (cell_id_12 << 35) | (i as u64 + 1);
+                    let mag = 12.0 + i as f64 * 0.01;
+                    out.push(CellStar {
+                        catalog_id: source_id,
+                        ra_rad: ra,
+                        dec_rad: dec,
+                        mag,
+                        sidecar: SidecarRecord {
+                            source_id,
+                            ref_epoch: 2016.0,
+                            ra: ra.to_degrees(),
+                            dec: dec.to_degrees(),
+                            pmra: 0.0,
+                            pmdec: 0.0,
+                            parallax: 0.0,
+                            radial_velocity: f64::NAN,
+                            sigma_ra: 0.1,
+                            sigma_dec: 0.1,
+                            sigma_pmra: 0.0,
+                            sigma_pmdec: 0.0,
+                            sigma_parallax: 0.0,
+                            flags: 0,
+                        },
+                        gaia: crate::bundle::gaia_shard::GaiaRecord {
+                            source_id,
+                            ref_epoch: 2016.0,
+                            ra: ra.to_degrees(),
+                            dec: dec.to_degrees(),
+                            pmra: 0.0,
+                            pmdec: 0.0,
+                            parallax: 0.0,
+                            radial_velocity: f64::NAN,
+                            phot_g_mean_mag: mag,
+                            sigma_ra: 0.1,
+                            sigma_dec: 0.1,
+                            sigma_pmra: 0.0,
+                            sigma_pmdec: 0.0,
+                            sigma_parallax: 0.0,
+                            ra_dec_corr: f32::NAN,
+                            ruwe: f32::NAN,
+                            flags: 0,
+                        },
+                    });
+                }
+                Ok(out)
+            }
+        }
+
+        let work_tmp = tempfile::tempdir().unwrap();
+        let out_tmp = tempfile::tempdir().unwrap();
+        let cells = vec![0u32, 1, 7];
+        let source = ClusteredSource {
+            cells: cells.clone(),
+            stars_per_cell: 8,
+        };
+        let cfg = MultiBandCellBuildConfig {
+            bands: vec![
+                ScaleBand {
+                    label: "band_00".into(),
+                    band_idx: 0,
+                    scale_lower_arcsec: 1.0,
+                    scale_upper_arcsec: 50.0,
+                    quads_per_cell: 50,
+                    max_reuse: 8,
+                },
+                ScaleBand {
+                    label: "band_01".into(),
+                    band_idx: 1,
+                    scale_lower_arcsec: 50.0,
+                    scale_upper_arcsec: 500.0,
+                    quads_per_cell: 50,
+                    max_reuse: 8,
+                },
+            ],
+            max_stars_per_cell: 1_000,
+            mag_limit: 20.0,
+            cell_depth: TEST_DEPTH,
+        };
+        let paths = BundleWorkDirPaths {
+            work_dir: work_tmp.path().to_path_buf(),
+        };
+        build_bundle_work_dir(&source, &cfg, &paths).expect("build work dir");
+
+        let bundle_path = out_tmp.path().join("index.zdcl.bundle");
+        let metadata = TidyMetadata {
+            cell_depth: TEST_DEPTH,
+            experiment: "load_bundle_bands smoke".into(),
+            build_metadata: BuildMetadata {
+                tool: "zodiacal test".into(),
+                build_started_utc: "2026-05-05T00:00:00Z".parse::<DateTime<Utc>>().unwrap(),
+                build_finished_utc: "2026-05-05T01:00:00Z".parse::<DateTime<Utc>>().unwrap(),
+                source: BuildSource {
+                    kind: "test-fixture".into(),
+                    release: "test".into(),
+                    path: "/tmp".into(),
+                },
+            },
+            gaia: GaiaMetadata {
+                max_stars_per_cell: 1_000,
+                mag_limit: 20.0,
+                schema_version: 1,
+            },
+            bands: vec![
+                BandMetadata {
+                    label: "band_00".into(),
+                    scale_lower_arcsec: 1.0,
+                    scale_upper_arcsec: 50.0,
+                    quads_per_cell: 50,
+                    max_reuse: 8,
+                },
+                BandMetadata {
+                    label: "band_01".into(),
+                    scale_lower_arcsec: 50.0,
+                    scale_upper_arcsec: 500.0,
+                    quads_per_cell: 50,
+                    max_reuse: 8,
+                },
+            ],
+        };
+        tidy_to_folder(work_tmp.path(), &bundle_path, &metadata).expect("tidy_to_folder");
+
+        let bands = super::load_bundle_bands(&bundle_path).expect("load bundle bands");
+        assert_eq!(bands.len(), 2, "expected 2 bands");
+        // Each band carries the union of populated-cell stars (3 cells * 8).
+        for (i, idx) in bands.iter().enumerate() {
+            assert_eq!(
+                idx.stars.len(),
+                cells.len() * 8,
+                "band {i} star count mismatch"
+            );
+        }
+        // Scale ranges round-trip through arcsec → radians conversion.
+        let one_arcsec_rad = 1.0_f64.to_radians() / 3600.0;
+        assert!((bands[0].scale_lower - one_arcsec_rad).abs() < 1e-12);
     }
 }

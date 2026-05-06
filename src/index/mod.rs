@@ -12,6 +12,7 @@ use crate::quads::{DIMCODES, Quad};
 
 pub use live::{DropReport, EnsureReport, LiveIndex};
 pub use source::{HealpixCell, IndexFragment, IndexSource, ZdclFile};
+pub use store::load_bundle_bands;
 
 /// Metadata for a star in the index.
 #[derive(Debug, Clone)]
