@@ -80,9 +80,6 @@ pub struct MultiBandCellBuildConfig {
     /// Brightness-truncation cap per cell. Sources may already filter
     /// upstream, but the orchestrator enforces this defensively.
     pub max_stars_per_cell: usize,
-    /// Magnitude limit recorded as informational metadata. Not
-    /// enforced by the orchestrator — the source filters upstream.
-    pub mag_limit: f64,
     /// HEALPix depth at which cells are sharded.
     pub cell_depth: u8,
 }
@@ -631,7 +628,6 @@ mod tests {
         MultiBandCellBuildConfig {
             bands: three_bands(),
             max_stars_per_cell: 10_000,
-            mag_limit: 20.0,
             cell_depth: 5,
         }
     }
@@ -926,7 +922,6 @@ mod tests {
                 },
             ],
             max_stars_per_cell: 10_000,
-            mag_limit: 20.0,
             cell_depth: 5,
         };
 
@@ -1009,7 +1004,6 @@ mod tests {
         let cfg = MultiBandCellBuildConfig {
             bands: three_bands(),
             max_stars_per_cell: 10,
-            mag_limit: 20.0,
             cell_depth: 5,
         };
         build_bundle_work_dir(&LotsOfStars, &cfg, &paths).unwrap();
@@ -1090,7 +1084,6 @@ mod tests {
             let cfg = MultiBandCellBuildConfig {
                 bands,
                 max_stars_per_cell: 100,
-                mag_limit: 20.0,
                 cell_depth: 5,
             };
             let source = SyntheticSource {

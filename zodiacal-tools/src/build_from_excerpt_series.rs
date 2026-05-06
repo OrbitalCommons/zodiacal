@@ -191,7 +191,6 @@ pub fn run(cfg: &BuildFromExcerptSeriesConfig) -> Result<(), String> {
     let multi_cfg = MultiBandCellBuildConfig {
         bands: bands.clone(),
         max_stars_per_cell: cfg.max_stars_per_cell,
-        mag_limit: cfg.mag_limit,
         cell_depth: cfg.cell_depth,
     };
     let paths = BundleWorkDirPaths {
@@ -746,7 +745,6 @@ mod tests {
         let cfg = MultiBandCellBuildConfig {
             bands: bands.clone(),
             max_stars_per_cell: 1_000,
-            mag_limit: 20.0,
             cell_depth: TEST_DEPTH,
         };
         let paths = BundleWorkDirPaths {

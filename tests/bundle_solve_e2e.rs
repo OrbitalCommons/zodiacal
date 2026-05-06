@@ -237,7 +237,6 @@ fn build_test_bundle(work_dir: &Path, output_dir: &Path, source: &ClusteredSourc
     let cfg = MultiBandCellBuildConfig {
         bands: bands.clone(),
         max_stars_per_cell: 10_000,
-        mag_limit: 16.0,
         cell_depth: TEST_DEPTH,
     };
     let paths = BundleWorkDirPaths {

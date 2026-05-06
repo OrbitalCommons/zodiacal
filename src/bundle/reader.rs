@@ -933,7 +933,6 @@ mod tests {
         let cfg = MultiBandCellBuildConfig {
             bands: two_bands(),
             max_stars_per_cell: 1_000,
-            mag_limit: 20.0,
             cell_depth: TEST_DEPTH,
         };
         let paths = BundleWorkDirPaths {
@@ -954,7 +953,6 @@ mod tests {
         let cfg = MultiBandCellBuildConfig {
             bands: two_bands(),
             max_stars_per_cell: 1_000,
-            mag_limit: 20.0,
             cell_depth: TEST_DEPTH,
         };
         let paths = BundleWorkDirPaths {
