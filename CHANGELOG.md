@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- Move `test_cases/` (1000 JSON solver fixtures) out of the repo into the new
+  data repo [OrbitalCommons/zodiacal-test-cases](https://github.com/OrbitalCommons/zodiacal-test-cases)
+  under `set1-legacy/` (#102). Keeps ~13 MB of JSON out of the source checkout
+  and lets the corpus version independently of the solver. The
+  `zodiacal-tools bench-bundle` and `scripts/{plot,analyze}_failures.py`
+  defaults now point at a sibling `../zodiacal-test-cases/set1-legacy/`
+  checkout. New helper `scripts/fetch_test_cases.sh` clones/updates the
+  data repo. The retired `scripts/generate_test_cases.{py,sh}` (meter-sim
+  toolchain, no longer functional) are removed; the data repo's
+  `set2-dr3-mag19/` README documents the modern reproduction path via
+  focalplane.
+- Drop `test_cases/` from the published-crate `exclude` list (no longer
+  applicable now that the directory lives elsewhere).
+
 ## 0.4.1
 
 ### Changed

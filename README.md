@@ -38,6 +38,31 @@ The 15 remaining failures are quad-matching timeouts where the solver exhausts t
 
 For comparison, the reference astrometry.net system reports 99.9% on SDSS fields (2048x2048 px, 0.396"/px, wider FOV ~13.5').
 
+## Benchmarking Test Cases
+
+The 1000-field JSON corpus used for the table above lives in a separate data repo: [OrbitalCommons/zodiacal-test-cases](https://github.com/OrbitalCommons/zodiacal-test-cases). Each `NNNN.json` file is a `zodiacal::extraction::SourcesJson` with truth RA/Dec, plate scale, and an extracted source list — drop-in input to `zodiacal batch-solve` and the `zodiacal-tools bench-bundle` harness.
+
+Two sets are available:
+
+- `set1-legacy/` — the original meter-sim `sensor_shootout` corpus (the historical 96.7% baseline). Imported from this repo's old in-tree `test_cases/`.
+- `set2-dr3-mag19/` — regenerated against Gaia DR3 mag-19 via [focalplane](https://github.com/CosmicFrontierLabs/focalplane)'s `motion_simulator`.
+
+Fetch a sibling checkout with the helper script:
+
+```bash
+scripts/fetch_test_cases.sh           # clones/updates ../zodiacal-test-cases
+scripts/fetch_test_cases.sh --ssh     # use git@github.com remote
+scripts/fetch_test_cases.sh --dest /some/path
+```
+
+The bench harness (and the `analyze_failures.py` / `plot_failures.py` scripts) default to `../zodiacal-test-cases/set1-legacy`, so once the sibling checkout exists no further config is needed:
+
+```bash
+cargo run -p zodiacal-tools --release -- bench-bundle \
+    --bundle-path <bundle.zdcl> \
+    --test-cases-dir ../zodiacal-test-cases/set1-legacy
+```
+
 ## Building Indexes
 
 Zodiacal requires prebuilt index files (`.zdcl`) containing star positions and quad hash codes. These are built from a [starfield](https://github.com/OrbitalCommons/starfield) binary catalog.

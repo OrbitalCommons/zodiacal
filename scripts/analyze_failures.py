@@ -28,7 +28,7 @@ def equatorial_to_galactic(ra_deg, dec_deg):
 
 def main():
     failures_dir = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("/tmp/failures")
-    test_cases_dir = Path(sys.argv[2]) if len(sys.argv) > 2 else Path("test_cases")
+    test_cases_dir = Path(sys.argv[2]) if len(sys.argv) > 2 else Path("../zodiacal-test-cases/set1-legacy")
 
     diag_files = sorted(failures_dir.glob("*.diag.json"))
     if not diag_files:
