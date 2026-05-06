@@ -361,20 +361,11 @@ pub fn build_bundle_work_dir<S: CellStarSource + ?Sized>(
         // Build all bands' quads over this cell's stars (sorted-by-mag
         // already; build_quads_for_cell re-sorts internally, that's
         // fine — same result).
-        let band_blocks = build_quads_for_cell_multiband(&stars, &sorted_bands);
+        let mut band_blocks = build_quads_for_cell_multiband(&stars, &sorted_bands);
 
-        // Materialize band emit slices for the writer.
-        let bands_emit: Vec<BandEmit<'_>> = band_blocks
-            .iter()
-            .map(|(idx, qs, cs)| BandEmit {
-                band_idx: *idx,
-                quads: qs,
-                codes: cs,
-            })
-            .collect();
-
-        // Build the gaia record vector for this cell.
-        let gaia_records: Vec<GaiaRecord> = stars
+        // Build the gaia record vector for this cell, preserving
+        // `stars` order so quad star_ids are still valid.
+        let mut gaia_records: Vec<GaiaRecord> = stars
             .iter()
             .map(|s| {
                 let mut g = s.gaia;
@@ -384,6 +375,45 @@ pub fn build_bundle_work_dir<S: CellStarSource + ?Sized>(
                     g.flags |= GaiaRecord::FLAG_SOURCE_KIND_SUPPLEMENT;
                 }
                 g
+            })
+            .collect();
+
+        // The on-disk `.zga` is sorted by source_id (write_gaia_shard
+        // sorts internally). Quad star_ids reference cell-local
+        // indices, so we must remap them through the same permutation
+        // used to sort the gaia records — otherwise the reader walks
+        // a quad's star_ids into the SORTED vec but the original
+        // computation referenced UNSORTED positions, producing
+        // garbage WCS hypotheses on lookup.
+        //
+        // Build the source_id-sort permutation, apply it to
+        // `gaia_records`, then rewrite every quad's star_ids through
+        // the inverse permutation `old_idx -> new_idx`.
+        let n_records = gaia_records.len();
+        let mut order: Vec<usize> = (0..n_records).collect();
+        order.sort_by_key(|&i| gaia_records[i].source_id);
+        let mut old_to_new = vec![0usize; n_records];
+        for (new_idx, &old_idx) in order.iter().enumerate() {
+            old_to_new[old_idx] = new_idx;
+        }
+        let sorted_gaia: Vec<GaiaRecord> = order.iter().map(|&i| gaia_records[i]).collect();
+        gaia_records = sorted_gaia;
+        for (_band_idx, quads, _codes) in band_blocks.iter_mut() {
+            for q in quads.iter_mut() {
+                for slot in q.star_ids.iter_mut() {
+                    *slot = old_to_new[*slot];
+                }
+            }
+        }
+
+        // Materialize band emit slices for the writer (must be after
+        // the remap above).
+        let bands_emit: Vec<BandEmit<'_>> = band_blocks
+            .iter()
+            .map(|(idx, qs, cs)| BandEmit {
+                band_idx: *idx,
+                quads: qs,
+                codes: cs,
             })
             .collect();
 

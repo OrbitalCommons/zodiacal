@@ -78,7 +78,7 @@ pub fn run(cfg: &BenchBundleConfig) -> io::Result<()> {
     );
 
     println!(
-        "case,solved,solve_ms,load_ms,error_arcsec,n_total_quads,n_total_stars,n_verified,timed_out"
+        "case,solved,solve_ms,load_ms,error_arcsec,n_total_quads,n_total_stars,n_verified,best_rejected_log_odds,best_rejected_n_matched,best_rejected_error_arcsec,timed_out"
     );
 
     let mut n_solved = 0usize;
@@ -144,17 +144,23 @@ pub fn run(cfg: &BenchBundleConfig) -> io::Result<()> {
         );
         let solve_ms = solve_start.elapsed().as_secs_f64() * 1000.0;
 
+        let truth_xyz = radec_to_xyz(tc.ra_deg.to_radians(), tc.dec_deg.to_radians());
+        let wcs_error_arcsec = |wcs: &zodiacal::geom::tan::TanWcs| -> f64 {
+            let (got_ra, got_dec) = wcs.field_center();
+            let got_xyz = radec_to_xyz(got_ra, got_dec);
+            angular_distance(truth_xyz, got_xyz).to_degrees() * 3600.0
+        };
+
         let (solved, error_arcsec) = match solution {
-            Some(sol) => {
-                let (got_ra, got_dec) = sol.wcs.field_center();
-                let truth_xyz = radec_to_xyz(tc.ra_deg.to_radians(), tc.dec_deg.to_radians());
-                let got_xyz = radec_to_xyz(got_ra, got_dec);
-                let dist_rad = angular_distance(truth_xyz, got_xyz);
-                let dist_arcsec = dist_rad.to_degrees() * 3600.0;
-                (true, dist_arcsec)
-            }
+            Some(sol) => (true, wcs_error_arcsec(&sol.wcs)),
             None => (false, f64::NAN),
         };
+
+        let (best_rej_log_odds, best_rej_n_matched, best_rej_error) =
+            match (stats.best_rejected, stats.best_rejected_wcs.as_ref()) {
+                (Some((lo, nm)), Some(wcs)) => (lo, nm as i64, wcs_error_arcsec(wcs)),
+                _ => (f64::NAN, -1i64, f64::NAN),
+            };
 
         let total_quads: usize = indexes.iter().map(|i| i.quads.len()).sum();
         let total_stars: usize = indexes.iter().map(|i| i.stars.len()).sum();
@@ -166,32 +172,29 @@ pub fn run(cfg: &BenchBundleConfig) -> io::Result<()> {
         total_solve_ms += solve_ms;
 
         let case_name = p.file_stem().unwrap().to_string_lossy();
-        if error_arcsec.is_nan() {
-            println!(
-                "{},{},{:.1},{:.1},,{},{},{},{}",
-                case_name,
-                solved as u8,
-                solve_ms,
-                load_ms,
-                total_quads,
-                total_stars,
-                stats.n_verified,
-                stats.timed_out as u8,
-            );
-        } else {
-            println!(
-                "{},{},{:.1},{:.1},{:.3},{},{},{},{}",
-                case_name,
-                solved as u8,
-                solve_ms,
-                load_ms,
-                error_arcsec,
-                total_quads,
-                total_stars,
-                stats.n_verified,
-                stats.timed_out as u8,
-            );
-        }
+        let fmt_f = |v: f64| -> String {
+            if v.is_nan() {
+                String::new()
+            } else {
+                format!("{:.3}", v)
+            }
+        };
+        let fmt_i = |v: i64| -> String { if v < 0 { String::new() } else { v.to_string() } };
+        println!(
+            "{},{},{:.1},{:.1},{},{},{},{},{},{},{},{}",
+            case_name,
+            solved as u8,
+            solve_ms,
+            load_ms,
+            fmt_f(error_arcsec),
+            total_quads,
+            total_stars,
+            stats.n_verified,
+            fmt_f(best_rej_log_odds),
+            fmt_i(best_rej_n_matched),
+            fmt_f(best_rej_error),
+            stats.timed_out as u8,
+        );
 
         if (i + 1) % 50 == 0 {
             eprintln!(
