@@ -565,13 +565,12 @@ pub fn build_bundle_work_dir<S: CellStarSource + ?Sized>(
         // of a source partition). Each rayon worker handles a whole
         // group in sequence so the partition cache only needs to absorb
         // cross-worker overlap, not random per-cell access.
-        let result: io::Result<()> =
-            partition_groups.par_iter().try_for_each(|group| {
-                for &cell_id in group {
-                    process_cell(cell_id)?;
-                }
-                Ok(())
-            });
+        let result: io::Result<()> = partition_groups.par_iter().try_for_each(|group| {
+            for &cell_id in group {
+                process_cell(cell_id)?;
+            }
+            Ok(())
+        });
         // Closing the channel signals the actor to drain remaining
         // messages, do a final flush, and exit. Always wait for the
         // actor before returning a result — both the rayon and actor
