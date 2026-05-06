@@ -18,16 +18,38 @@
 //! never consults its underlying stream's position when computing offsets;
 //! readers always interpret offsets relative to the slice they're given.
 //!
+//! ## Cross-cell patch quads (v2)
+//!
+//! v2 shards may carry quads whose member stars live in this cell *or* in
+//! one of its HEALPix edge-neighbors. The header carries a `n_neighbors`
+//! count and, immediately after it, a `n_neighbors × 8 B` table of the
+//! referenced neighbor cell ids. Each `u32` star_id in the quads block
+//! packs `(neighbor_idx << 28) | local_idx`:
+//!
+//! - `bits[31..28]` neighbor_idx: `0` = this cell; `1..=N` = entry
+//!   `neighbor_idx - 1` in the neighbor table. Max 15 neighbors fit in
+//!   four bits, which is plenty for HEALPix nested cells (≤ 8
+//!   edge-neighbors).
+//! - `bits[27..0]` local_idx: position in the indicated cell's `.zga`
+//!   record vector. Max 268 M.
+//!
+//! Pre-PR8 (v1) shards have an empty neighbor table; every star_id has
+//! `neighbor_idx == 0` and the bits-27..0 region is the legacy local
+//! index.
+//!
 //! Byte layout (all little-endian):
 //!
 //! ```text
 //! HEADER (32 B)
 //!   magic         8 B   b"ZDCLQUAD"
-//!   version       4 B   u32 LE = 1
+//!   version       4 B   u32 LE = 2
 //!   reserved      4 B   zero
 //!   cell_id       8 B   u64 LE
 //!   n_bands       4 B   u32 LE
-//!   reserved      4 B   pad to 8
+//!   n_neighbors   4 B   u32 LE   (was reserved padding in v1)
+//!
+//! NEIGHBOR TABLE   n_neighbors × 8 B
+//!   cell_id      8 B  u64 LE   referenced cell id
 //!
 //! BAND TABLE   n_bands × 24 B
 //!   band_idx     4 B  u32 LE
@@ -36,7 +58,7 @@
 //!   codes_offset 8 B  u64 LE   byte offset relative to shard start
 //!
 //! Per band, in band_idx order, no padding between blocks:
-//!   quads_block   n_quads × 16 B   (4 × u32 LE local star indices)
+//!   quads_block   n_quads × 16 B   (4 × u32 LE packed star refs)
 //!   codes_block   n_quads × 32 B   (4 × f64 LE)
 //! ```
 
@@ -53,20 +75,68 @@ compile_error!(
 pub const QUAD_SHARD_MAGIC: &[u8; 8] = b"ZDCLQUAD";
 
 /// On-disk format version this module reads and writes.
-pub const QUAD_SHARD_VERSION: u32 = 1;
+pub const QUAD_SHARD_VERSION: u32 = 2;
 
 /// Size of the fixed file header (magic + version + reserved + cell_id +
-/// n_bands + reserved).
+/// n_bands + n_neighbors).
 pub const HEADER_SIZE: usize = 32;
 
 /// Size of one band-table entry on disk.
 pub const BAND_ENTRY_SIZE: usize = 24;
+
+/// Size of one neighbor-table entry on disk (just a u64 cell id).
+pub const NEIGHBOR_ENTRY_SIZE: usize = 8;
 
 /// Encoded size of a single quad record on disk: `DIMQUADS × u32`.
 pub const QUAD_RECORD_SIZE: usize = DIMQUADS * 4;
 
 /// Encoded size of a single code record on disk: `DIMCODES × f64`.
 pub const CODE_RECORD_SIZE: usize = DIMCODES * 8;
+
+/// Maximum number of neighbor cells a v2 shard can reference. Limited by
+/// the 4-bit `neighbor_idx` field in each packed star_id (`0` is the self
+/// cell, leaving `1..=15` for neighbor-table entries).
+pub const MAX_NEIGHBORS: usize = 15;
+
+/// Maximum local-index value representable inside a packed star_id (28
+/// bits → 268,435,455).
+pub const MAX_LOCAL_IDX: u32 = (1u32 << 28) - 1;
+
+/// Pack a `(neighbor_idx, local_idx)` pair into the 32-bit on-disk
+/// representation: `(neighbor_idx << 28) | local_idx`.
+///
+/// `neighbor_idx == 0` means "this cell" (the .zqd's own cell). Values
+/// in `1..=MAX_NEIGHBORS` are interpreted by the reader as positions in
+/// the neighbor table (`neighbor_idx - 1`).
+///
+/// Returns `InvalidInput` if either field overflows its bit range.
+pub fn pack_star_id(neighbor_idx: u32, local_idx: u32) -> io::Result<u32> {
+    if neighbor_idx > MAX_NEIGHBORS as u32 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "neighbor_idx {neighbor_idx} exceeds 4-bit cap {MAX_NEIGHBORS}; \
+                 cannot pack into v2 quad star_id"
+            ),
+        ));
+    }
+    if local_idx > MAX_LOCAL_IDX {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "local_idx {local_idx} exceeds 28-bit cap {MAX_LOCAL_IDX}; \
+                 cannot pack into v2 quad star_id"
+            ),
+        ));
+    }
+    Ok((neighbor_idx << 28) | local_idx)
+}
+
+/// Reverse of [`pack_star_id`]: returns `(neighbor_idx, local_idx)`.
+#[inline]
+pub fn unpack_star_id(packed: u32) -> (u32, u32) {
+    (packed >> 28, packed & MAX_LOCAL_IDX)
+}
 
 // Compile-time sanity: the spec pins the on-disk layout at 16 B per quad and
 // 32 B per code, which assumes DIMQUADS = 4 and DIMCODES = 4. If those ever
@@ -75,6 +145,11 @@ const _: () = assert!(QUAD_RECORD_SIZE == 16);
 const _: () = assert!(CODE_RECORD_SIZE == 32);
 
 /// One band's quads + codes to be emitted into a `.zqd` file.
+///
+/// In v2 each `Quad.star_ids` entry is interpreted as a packed `(neighbor_idx,
+/// local_idx)` value (see [`pack_star_id`]). Single-cell quads pass
+/// `neighbor_idx = 0` and the local index unchanged, which is bit-identical
+/// to the v1 encoding.
 pub struct BandEmit<'a> {
     pub band_idx: u32,
     pub quads: &'a [Quad],
@@ -92,13 +167,15 @@ pub struct BandEntry {
 
 /// Borrowing reader over a mmapped (or otherwise loaded) `.zqd` byte slice.
 ///
-/// The header + band-table is parsed eagerly on construction (it's tiny —
-/// typically under 320 B for a dozen bands). Per-band quad / code blocks are
-/// decoded on demand via [`BandView`].
+/// The header + neighbor + band-table is parsed eagerly on construction
+/// (it's tiny — typically well under a kilobyte even for a dozen bands +
+/// eight neighbors). Per-band quad / code blocks are decoded on demand
+/// via [`BandView`].
 #[derive(Debug)]
 pub struct QuadShard<'a> {
     raw: &'a [u8],
     cell_id: u64,
+    neighbor_cells: Vec<u64>,
     band_table: Vec<BandEntry>,
 }
 
@@ -113,14 +190,24 @@ pub struct BandView<'a> {
 
 // --- writer ----------------------------------------------------------------
 
-/// Write a `.zqd` shard for one cell containing every band's quads/codes.
+/// Write a `.zqd` v2 shard for one cell containing every band's
+/// quads/codes plus an optional neighbor table referenced by patch
+/// quads.
+///
+/// `neighbor_cells` lists the cell ids that quads in `bands` may
+/// reference via the `neighbor_idx` portion of each packed `Quad.star_ids`
+/// element. Pass an empty slice for cells whose quads are all
+/// self-contained — the resulting shard then has an empty neighbor
+/// table and is byte-identical in spirit to a v1 shard apart from the
+/// version field.
 ///
 /// The writer accepts the bands in any order; entries are sorted ascending
 /// by `band_idx` before being written, so the on-disk band table is always
 /// monotonic. `band_idx` values must be unique across the input slice.
 ///
 /// Returns `InvalidInput` if any `Quad.star_ids` element does not fit in a
-/// `u32`, or if duplicate `band_idx` values are present, or if a band's
+/// `u32`, or if `neighbor_cells.len()` exceeds [`MAX_NEIGHBORS`], or if
+/// duplicate `band_idx` values are present, or if a band's
 /// `quads.len() != codes.len()`.
 ///
 /// **Offsets are slice-relative.** All `quads_offset` / `codes_offset`
@@ -139,8 +226,18 @@ pub struct BandView<'a> {
 pub fn write_quad_shard<W: Write>(
     w: &mut W,
     cell_id: u64,
+    neighbor_cells: &[u64],
     bands: &[BandEmit<'_>],
 ) -> io::Result<()> {
+    if neighbor_cells.len() > MAX_NEIGHBORS {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "neighbor_cells.len() = {} exceeds MAX_NEIGHBORS = {MAX_NEIGHBORS}",
+                neighbor_cells.len()
+            ),
+        ));
+    }
     // Build a sorted view of the input without mutating the caller's slice.
     // We sort indirectly via a Vec of references so we don't have to clone
     // BandEmit (which would also force its lifetime to be 'static).
@@ -188,6 +285,8 @@ pub fn write_quad_shard<W: Write>(
     }
 
     let n_bands = order.len() as u32;
+    let n_neighbors = neighbor_cells.len();
+    let neighbor_table_size = n_neighbors * NEIGHBOR_ENTRY_SIZE;
     let band_table_size = order.len() * BAND_ENTRY_SIZE;
 
     // Compute total shard size, then allocate one buffer. Offsets baked
@@ -199,7 +298,7 @@ pub fn write_quad_shard<W: Write>(
         let n_quads = b.quads.len();
         data_size += n_quads * QUAD_RECORD_SIZE + n_quads * CODE_RECORD_SIZE;
     }
-    let total_size = HEADER_SIZE + band_table_size + data_size;
+    let total_size = HEADER_SIZE + neighbor_table_size + band_table_size + data_size;
     let mut buf: Vec<u8> = Vec::with_capacity(total_size);
 
     // --- header --- (32 B)
@@ -208,8 +307,14 @@ pub fn write_quad_shard<W: Write>(
     buf.extend_from_slice(&0u32.to_le_bytes()); // reserved
     buf.extend_from_slice(&cell_id.to_le_bytes());
     buf.extend_from_slice(&n_bands.to_le_bytes());
-    buf.extend_from_slice(&0u32.to_le_bytes()); // reserved (header pad to 8)
+    buf.extend_from_slice(&(n_neighbors as u32).to_le_bytes());
     debug_assert_eq!(buf.len(), HEADER_SIZE);
+
+    // --- neighbor table --- (n_neighbors × 8 B)
+    for nc in neighbor_cells {
+        buf.extend_from_slice(&nc.to_le_bytes());
+    }
+    debug_assert_eq!(buf.len(), HEADER_SIZE + neighbor_table_size);
 
     // --- placeholder band table --- we'll fill the real entries in below
     // once we know each band's slice-relative quads/codes offsets.
@@ -316,9 +421,41 @@ impl<'a> QuadShard<'a> {
         // bytes[12..16] reserved
         let cell_id = u64::from_le_bytes(bytes[16..24].try_into().unwrap());
         let n_bands = u32::from_le_bytes(bytes[24..28].try_into().unwrap()) as usize;
-        // bytes[28..32] reserved (pad)
+        let n_neighbors = u32::from_le_bytes(bytes[28..32].try_into().unwrap()) as usize;
 
-        let band_table_start = HEADER_SIZE;
+        if n_neighbors > MAX_NEIGHBORS {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "quad shard n_neighbors = {n_neighbors} exceeds MAX_NEIGHBORS = {MAX_NEIGHBORS}"
+                ),
+            ));
+        }
+
+        let neighbor_table_start = HEADER_SIZE;
+        let neighbor_table_end = neighbor_table_start
+            .checked_add(n_neighbors * NEIGHBOR_ENTRY_SIZE)
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "neighbor-table size overflow")
+            })?;
+        if neighbor_table_end > bytes.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "quad shard truncated: neighbor-table ends at {neighbor_table_end}, \
+                     file is {} bytes",
+                    bytes.len()
+                ),
+            ));
+        }
+        let mut neighbor_cells: Vec<u64> = Vec::with_capacity(n_neighbors);
+        for k in 0..n_neighbors {
+            let off = neighbor_table_start + k * NEIGHBOR_ENTRY_SIZE;
+            let nc = u64::from_le_bytes(bytes[off..off + 8].try_into().unwrap());
+            neighbor_cells.push(nc);
+        }
+
+        let band_table_start = neighbor_table_end;
         let band_table_end = band_table_start
             .checked_add(n_bands.checked_mul(BAND_ENTRY_SIZE).ok_or_else(|| {
                 io::Error::new(io::ErrorKind::InvalidData, "band-table size overflow")
@@ -480,6 +617,7 @@ impl<'a> QuadShard<'a> {
         Ok(QuadShard {
             raw: bytes,
             cell_id,
+            neighbor_cells,
             band_table,
         })
     }
@@ -494,6 +632,21 @@ impl<'a> QuadShard<'a> {
 
     pub fn bands(&self) -> &[BandEntry] {
         &self.band_table
+    }
+
+    /// Cell ids referenced by patch quads in this shard. The vector is
+    /// empty for shards whose quads are all self-contained (every
+    /// `Quad.star_ids` element packs `neighbor_idx == 0`).
+    ///
+    /// A packed star_id with `neighbor_idx == k > 0` resolves to
+    /// `neighbor_cells()[k - 1]`.
+    pub fn neighbor_cells(&self) -> &[u64] {
+        &self.neighbor_cells
+    }
+
+    /// Number of neighbor cells referenced (`neighbor_cells().len()`).
+    pub fn n_neighbors(&self) -> usize {
+        self.neighbor_cells.len()
     }
 
     /// Look up the entry for `band_idx` via binary search (O(log n_bands)).
@@ -567,10 +720,18 @@ mod tests {
     }
 
     fn write_to_vec(cell_id: u64, bands: &[BandEmit<'_>]) -> Vec<u8> {
+        write_to_vec_with_neighbors(cell_id, &[], bands)
+    }
+
+    fn write_to_vec_with_neighbors(
+        cell_id: u64,
+        neighbors: &[u64],
+        bands: &[BandEmit<'_>],
+    ) -> Vec<u8> {
         let mut buf = Vec::new();
         {
             let mut cur = Cursor::new(&mut buf);
-            write_quad_shard(&mut cur, cell_id, bands).expect("write_quad_shard");
+            write_quad_shard(&mut cur, cell_id, neighbors, bands).expect("write_quad_shard");
         }
         buf
     }
@@ -854,6 +1015,7 @@ mod tests {
         let err = write_quad_shard(
             &mut cur,
             7,
+            &[],
             &[
                 BandEmit {
                     band_idx: 2,
@@ -891,6 +1053,7 @@ mod tests {
         let err = write_quad_shard(
             &mut cur,
             0,
+            &[],
             &[BandEmit {
                 band_idx: 0,
                 quads: &q,
@@ -910,6 +1073,7 @@ mod tests {
         let err = write_quad_shard(
             &mut cur,
             0,
+            &[],
             &[BandEmit {
                 band_idx: 0,
                 quads: &q,
@@ -938,11 +1102,11 @@ mod tests {
         // Expected header (32 B):
         let expected_head: [u8; 32] = [
             // magic "ZDCLQUAD"
-            b'Z', b'D', b'C', b'L', b'Q', b'U', b'A', b'D', // version = 1 (u32 LE)
-            0x01, 0x00, 0x00, 0x00, // reserved
+            b'Z', b'D', b'C', b'L', b'Q', b'U', b'A', b'D', // version = 2 (u32 LE)
+            0x02, 0x00, 0x00, 0x00, // reserved
             0x00, 0x00, 0x00, 0x00, // cell_id (u64 LE)
             0xEF, 0xCD, 0xAB, 0x89, 0x67, 0x45, 0x23, 0x01, // n_bands = 1
-            0x01, 0x00, 0x00, 0x00, // reserved (pad)
+            0x01, 0x00, 0x00, 0x00, // n_neighbors = 0
             0x00, 0x00, 0x00, 0x00,
         ];
         assert_eq!(&bytes[..HEADER_SIZE], &expected_head[..]);
@@ -1129,6 +1293,116 @@ mod tests {
         assert!(err.to_string().contains("ascending"), "got: {err}");
     }
 
+    #[test]
+    fn pack_unpack_star_id_roundtrip() {
+        // Self-cell encoding: neighbor_idx = 0, local_idx unchanged.
+        let s = pack_star_id(0, 1234).unwrap();
+        assert_eq!(unpack_star_id(s), (0, 1234));
+
+        // Patch encoding: neighbor_idx = 5, large local_idx.
+        let p = pack_star_id(5, 0x0fff_abcd).unwrap();
+        assert_eq!(unpack_star_id(p), (5, 0x0fff_abcd));
+
+        // Boundary values.
+        assert_eq!(unpack_star_id(pack_star_id(0, 0).unwrap()), (0, 0));
+        assert_eq!(
+            unpack_star_id(pack_star_id(MAX_NEIGHBORS as u32, MAX_LOCAL_IDX).unwrap()),
+            (MAX_NEIGHBORS as u32, MAX_LOCAL_IDX)
+        );
+
+        // Out-of-range fields are rejected.
+        assert!(pack_star_id(MAX_NEIGHBORS as u32 + 1, 0).is_err());
+        assert!(pack_star_id(0, MAX_LOCAL_IDX + 1).is_err());
+    }
+
+    #[test]
+    fn neighbor_table_roundtrip() {
+        let neighbors: Vec<u64> = vec![10, 11, 12, 13, 14, 15, 16, 17];
+        // Every other quad references a neighbor cell.
+        let q: Vec<Quad> = vec![
+            Quad {
+                star_ids: [
+                    pack_star_id(0, 0).unwrap() as usize,
+                    pack_star_id(1, 5).unwrap() as usize,
+                    pack_star_id(0, 7).unwrap() as usize,
+                    pack_star_id(3, 9).unwrap() as usize,
+                ],
+            },
+            Quad {
+                star_ids: [
+                    pack_star_id(0, 1).unwrap() as usize,
+                    pack_star_id(0, 2).unwrap() as usize,
+                    pack_star_id(0, 3).unwrap() as usize,
+                    pack_star_id(0, 4).unwrap() as usize,
+                ],
+            },
+        ];
+        let c: Vec<Code> = vec![make_code(0.0), make_code(1.0)];
+        let bytes = write_to_vec_with_neighbors(
+            999,
+            &neighbors,
+            &[BandEmit {
+                band_idx: 0,
+                quads: &q,
+                codes: &c,
+            }],
+        );
+        let shard = QuadShard::parse(&bytes).expect("parse");
+        assert_eq!(shard.neighbor_cells(), neighbors.as_slice());
+        assert_eq!(shard.n_neighbors(), 8);
+
+        let view = shard.band(0).unwrap();
+        let got: Vec<Quad> = view.quads_iter().collect();
+        assert_eq!(got.len(), 2);
+        for (g, w) in got.iter().zip(q.iter()) {
+            assert_eq!(g.star_ids, w.star_ids);
+        }
+        let (n0, l0) = unpack_star_id(got[0].star_ids[1] as u32);
+        assert_eq!((n0, l0), (1, 5));
+    }
+
+    #[test]
+    fn empty_neighbor_table_roundtrip() {
+        let q: Vec<Quad> = vec![make_quad(1, 2, 3, 4)];
+        let c: Vec<Code> = vec![make_code(0.0)];
+        let bytes = write_to_vec_with_neighbors(
+            7,
+            &[],
+            &[BandEmit {
+                band_idx: 0,
+                quads: &q,
+                codes: &c,
+            }],
+        );
+        let shard = QuadShard::parse(&bytes).expect("parse");
+        assert!(shard.neighbor_cells().is_empty());
+        assert_eq!(shard.n_neighbors(), 0);
+        let got: Vec<Quad> = shard.band(0).unwrap().quads_iter().collect();
+        assert_eq!(got[0].star_ids, [1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn too_many_neighbors_rejected() {
+        let q: Vec<Quad> = vec![make_quad(1, 2, 3, 4)];
+        let c: Vec<Code> = vec![make_code(0.0)];
+        // 16 neighbors > MAX_NEIGHBORS (15).
+        let many: Vec<u64> = (0u64..16).collect();
+        let mut buf = Vec::new();
+        let mut cur = Cursor::new(&mut buf);
+        let err = write_quad_shard(
+            &mut cur,
+            0,
+            &many,
+            &[BandEmit {
+                band_idx: 0,
+                quads: &q,
+                codes: &c,
+            }],
+        )
+        .expect_err("oversized neighbor table must reject");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    }
+
     /// Regression for issue #84: shard offsets must be slice-relative, so
     /// a shard written mid-stream still round-trips when its embedded byte
     /// slice is handed to `QuadShard::parse`. Before the fix, the writer
@@ -1167,6 +1441,7 @@ mod tests {
             write_quad_shard(
                 &mut cur,
                 123,
+                &[],
                 &[
                     BandEmit {
                         band_idx: 0,

@@ -45,7 +45,7 @@ use super::accessor::{FsAccessor, SubfileAccessor, ZipAccessor};
 use super::gaia_shard::{GaiaRecord, GaiaShard};
 use super::layout::cell_filename_width;
 use super::manifest::{BandInfo, BundleManifest, FORMAT_MAGIC, FORMAT_VERSION, GAIA_RECORD_SIZE};
-use super::quad_shard::QuadShard;
+use super::quad_shard::{QuadShard, unpack_star_id};
 
 /// Subdirectory holding `.zqd` quad shards inside a bundle.
 const QUADS_SUBDIR: &str = "quads";
@@ -101,7 +101,7 @@ pub struct VerifyError {
 pub enum VerifyErrorKind {
     /// Magic bytes did not match `b"ZDCLQUAD"` or `b"ZDCLGAIA"`.
     BadMagic,
-    /// On-disk format version was not the expected `1`.
+    /// On-disk format version was not the expected current value.
     BadVersion,
     /// Embedded `cell_id` field disagreed with the filename's cell id.
     BadCellId,
@@ -219,21 +219,65 @@ impl ZdclBundle {
     }
 
     /// Slice every band over `region`.
+    ///
+    /// Cross-cell patch quads (v2 shards) may reference stars in
+    /// HEALPix-edge-neighbor cells. The reader walks each region cell's
+    /// `.zqd` neighbor table, expands the loaded cell set to include every
+    /// referenced neighbor, and resolves each quad's packed `(neighbor_idx,
+    /// local_idx)` into a global index into the concatenated gaia vector.
     pub fn load_region(&self, region: &SkyRegion) -> io::Result<MultiBandFragment> {
-        let cells = self.cells_in_region(region);
+        let region_cells = self.cells_in_region(region);
 
-        // Per-cell parsed shards plus the running base index of each
-        // cell's gaia records inside the concatenated `gaia_records`.
-        struct CellLoaded {
+        // Per-region-cell quad-shard bytes (parsed once for the neighbor
+        // table). We hold both the entries and the parse output so the
+        // band loop below can reuse them.
+        struct RegionCell {
+            cell_id: u32,
             entries: Arc<CellEntries>,
-            base: usize,
-            n_records: usize,
+            neighbor_cells: Vec<u64>,
         }
-        let mut loaded: Vec<CellLoaded> = Vec::with_capacity(cells.len());
-        let mut gaia_records: Vec<GaiaRecord> = Vec::new();
+        let mut region_loaded: Vec<RegionCell> = Vec::with_capacity(region_cells.len());
 
-        for cell_id in &cells {
+        // Build the expanded cell set: the union of region cells and
+        // every neighbor any of their `.zqd` shards references. The
+        // expanded set is what we actually load `.zga` for.
+        let mut expanded_set: BTreeSet<u32> = BTreeSet::new();
+        for cell_id in &region_cells {
             let entries = self.cell_bytes(*cell_id)?;
+            let qs = QuadShard::parse(&entries.quads).map_err(|e| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("cell {cell_id} quad shard: {e}"),
+                )
+            })?;
+            let neighbors = qs.neighbor_cells().to_vec();
+            // Add this cell + all referenced neighbors that fit in u32
+            // (every cell at a sane HEALPix depth does). Skip neighbors
+            // that aren't populated in this bundle — patch quads
+            // referencing absent neighbors are dropped on resolve below.
+            expanded_set.insert(*cell_id);
+            for &nc in &neighbors {
+                if nc <= u32::MAX as u64 {
+                    let nc32 = nc as u32;
+                    if self.populated_cells.contains(&nc32) {
+                        expanded_set.insert(nc32);
+                    }
+                }
+            }
+            region_loaded.push(RegionCell {
+                cell_id: *cell_id,
+                entries,
+                neighbor_cells: neighbors,
+            });
+        }
+
+        // Load every expanded cell's gaia records in cell-id order so
+        // `expanded_base[cell_id]` is the start of that cell's records
+        // in the concatenated gaia vector.
+        let mut gaia_records: Vec<GaiaRecord> = Vec::new();
+        let mut expanded_base: HashMap<u32, (usize, usize)> = HashMap::new(); // cell_id → (base, n_records)
+        for &cell_id in &expanded_set {
+            let entries = self.cell_bytes(cell_id)?;
             let gaia = GaiaShard::parse(&entries.gaia).map_err(|e| {
                 io::Error::new(
                     io::ErrorKind::InvalidData,
@@ -243,14 +287,9 @@ impl ZdclBundle {
             let base = gaia_records.len();
             let n = gaia.len();
             gaia_records.extend_from_slice(gaia.records());
-            loaded.push(CellLoaded {
-                entries,
-                base,
-                n_records: n,
-            });
+            expanded_base.insert(cell_id, (base, n));
         }
 
-        // Pre-build a per-band scale range pulled from the manifest.
         let n_bands = self.manifest.bands.len();
         let scale_ranges: Vec<(f64, f64)> = self
             .manifest
@@ -264,26 +303,24 @@ impl ZdclBundle {
             })
             .collect();
 
-        // Build the canonical IndexStar vector once from the unioned
-        // gaia records. Each band's fragment shares this list (cloned).
         let stars: Vec<IndexStar> = gaia_records.iter().map(gaia_record_to_index_star).collect();
 
-        // Concatenate per-band quads + codes across cells, remapping
-        // local cell-relative star indices to global indices into
-        // `gaia_records` via each cell's `base`.
+        // Concatenate per-band quads + codes across region cells,
+        // resolving each packed (neighbor_idx, local_idx) to a global
+        // index into `gaia_records`. Quads referencing a cell that
+        // isn't in the expanded set (e.g., a neighbor that wasn't
+        // populated by the build, or that the bundle is missing) are
+        // dropped — their codes are dropped alongside them.
         let mut per_band_quads: Vec<Vec<Quad>> = (0..n_bands).map(|_| Vec::new()).collect();
         let mut per_band_codes: Vec<Vec<Code>> = (0..n_bands).map(|_| Vec::new()).collect();
 
-        for cell in &loaded {
-            let qs = QuadShard::parse(&cell.entries.quads).map_err(|e| {
+        for region in &region_loaded {
+            let qs = QuadShard::parse(&region.entries.quads).map_err(|e| {
                 io::Error::new(io::ErrorKind::InvalidData, format!("cell quad shard: {e}"))
             })?;
             for entry in qs.bands() {
                 let band_idx = entry.band_idx as usize;
                 if band_idx >= n_bands {
-                    // Manifest says n_bands; on-disk band_idx out of
-                    // range is malformed but we surface a clear error
-                    // rather than panic.
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
                         format!(
@@ -300,26 +337,59 @@ impl ZdclBundle {
                 let c_dst = &mut per_band_codes[band_idx];
                 q_dst.reserve(entry.n_quads as usize);
                 c_dst.reserve(entry.n_quads as usize);
-                let base = cell.base;
-                let n_records = cell.n_records;
-                for q in view.quads_iter() {
-                    let mut remapped = q;
-                    for slot in remapped.star_ids.iter_mut() {
-                        if *slot >= n_records {
-                            return Err(io::Error::new(
-                                io::ErrorKind::InvalidData,
-                                format!(
-                                    "cell {} band {} quad references star idx {slot} but cell has only {n_records} records",
-                                    qs.cell_id(),
-                                    entry.band_idx
-                                ),
-                            ));
+
+                for (q, code) in view.quads_iter().zip(view.codes_iter()) {
+                    let mut resolved = [0usize; crate::quads::DIMQUADS];
+                    let mut ok = true;
+                    for (i, &packed) in q.star_ids.iter().enumerate() {
+                        let (nbr_idx, local_idx) = unpack_star_id(packed as u32);
+                        let source_cell: u32 = if nbr_idx == 0 {
+                            region.cell_id
+                        } else {
+                            let slot = (nbr_idx as usize) - 1;
+                            match region.neighbor_cells.get(slot) {
+                                Some(&nc) if nc <= u32::MAX as u64 => nc as u32,
+                                _ => {
+                                    return Err(io::Error::new(
+                                        io::ErrorKind::InvalidData,
+                                        format!(
+                                            "cell {} band {} quad references neighbor_idx {nbr_idx} but neighbor table has {} entries",
+                                            qs.cell_id(),
+                                            entry.band_idx,
+                                            region.neighbor_cells.len(),
+                                        ),
+                                    ));
+                                }
+                            }
+                        };
+                        match expanded_base.get(&source_cell) {
+                            Some(&(base, n_records)) => {
+                                if (local_idx as usize) >= n_records {
+                                    return Err(io::Error::new(
+                                        io::ErrorKind::InvalidData,
+                                        format!(
+                                            "cell {} band {} quad references star idx {local_idx} in cell {source_cell} but that cell has only {n_records} records",
+                                            qs.cell_id(),
+                                            entry.band_idx,
+                                        ),
+                                    ));
+                                }
+                                resolved[i] = base + (local_idx as usize);
+                            }
+                            None => {
+                                // Neighbor cell isn't loaded (not in
+                                // expanded set because not populated in
+                                // this bundle). Drop the quad.
+                                ok = false;
+                                break;
+                            }
                         }
-                        *slot += base;
                     }
-                    q_dst.push(remapped);
+                    if ok {
+                        q_dst.push(Quad { star_ids: resolved });
+                        c_dst.push(code);
+                    }
                 }
-                c_dst.extend(view.codes_iter());
             }
         }
 

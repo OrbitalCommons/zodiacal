@@ -121,7 +121,7 @@ When all cells are committed, a single-threaded finalize step:
 ```json
 {
   "format": "zdcl-bundle",
-  "format_version": 1,
+  "format_version": 2,
   "cell_depth": 5,
   "n_cells": 12288,
   "experiment": "G≤20 DR3 bycell, 12 bands √2 at 10-600 arcsec, 100 quads/cell/band, max_stars_per_cell=10000, max_reuse=8 — built 2026-05-05 from build-from-excerpt-series",
@@ -173,15 +173,18 @@ The free-text `experiment` field is for human ops notes — a one-liner summariz
 
 ### `quads/cell_NNNNN.zqd` — quads + codes for one cell, all bands
 
-One file per HEALPix cell holds **every band's quads** for that cell, with a band table at the head pointing at each band's quad/code blocks. Indices are **into this cell's `cell_NNNNN.zga` file** — local indices, not global. (Cross-cell quads are not supported by the current cell-driven builder; once they are, a straddle quad lives in the file of whichever cell contains its centroid.)
+One file per HEALPix cell holds **every band's quads** for that cell, with a band table at the head pointing at each band's quad/code blocks. Each quad's 4 star_ids are **packed `(neighbor_idx, local_idx)` u32s** that resolve to a position in either *this* cell's `.zga` (when `neighbor_idx == 0`) or one of the cells listed in the per-shard neighbor table (when `1 <= neighbor_idx <= n_neighbors`). A quad is emitted in the file of the cell containing its **centroid** (the unit-vector mean of its four members), so each physical asterism appears in exactly one `.zqd`.
 
 ```
 magic         8 B  "ZDCLQUAD"
-version       4 B  u32 LE = 1
+version       4 B  u32 LE = 2
 reserved      4 B
 cell_id       8 B  u64 LE                 — defensive duplication; filename is the source of truth
 n_bands       4 B  u32 LE                 — must equal manifest.bands.len()
-reserved      4 B  → align band table to 8
+n_neighbors   4 B  u32 LE                 — count of neighbor-cell entries below; max 15
+
+neighbor_table  n_neighbors × 8 B
+                cell_id      8 B  u64 LE  — referenced HEALPix cell id (entry K → neighbor_idx K+1)
 
 band_table    n_bands × 24 B
               for each band:
@@ -190,12 +193,14 @@ band_table    n_bands × 24 B
                 quads_offset 8 B  u64 LE  — byte offset of this band's quads block, relative to shard start
                 codes_offset 8 B  u64 LE  — byte offset of this band's codes block, relative to shard start
 
-padding to 8-byte boundary
-
 per band, in band_idx order, no padding between blocks:
-  quads_block  n_quads × 16 B  (4 × u32 local star indices)
+  quads_block  n_quads × 16 B  (4 × u32 LE packed star refs:
+                                  bits[31..28] = neighbor_idx,
+                                  bits[27..0]  = local_idx in source cell's .zga)
   codes_block  n_quads × 32 B  (4 × f64)
 ```
+
+Pre-PR8 (v1) shards have `n_neighbors == 0` and every star_id has `neighbor_idx == 0` — the bottom 28 bits are the legacy local index. v2 readers reject v1 magic on parse; rebuild affected bundles to roll forward. The 4-bit `neighbor_idx` cap of 15 is well above the 8-edge-neighbor maximum of HEALPix nested cells.
 
 The reader pattern is:
 

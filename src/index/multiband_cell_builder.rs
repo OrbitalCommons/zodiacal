@@ -1,15 +1,33 @@
-//! Multi-band, cell-driven bundle work-dir builder (PR3 of the
-//! `.zdcl.bundle` roadmap).
+//! Multi-band, cell-driven bundle work-dir builder.
 //!
 //! Phase 1 of the bundle build pipeline: workers iterate cells in
 //! parallel, build every scale band's quads over each cell's star
 //! buffer, and emit per-cell `.zqd` (multi-band) and `.zga` shards
-//! into a work directory. The tidy phase (PR4), reader (PR5), and
-//! CLI (PR6) live in follow-up PRs; this module ships only the
-//! work-dir-producing primitive.
+//! into a work directory. The tidy phase finalizes the work_dir into
+//! a folder/zip bundle.
 //!
 //! See `docs/bundle-format.md` § "Phase 1 — parallel shard build" for
 //! the design.
+//!
+//! ## Two-phase build (PR8)
+//!
+//! - **Phase A** (gaia-only): walk cells in parallel, brightness-truncate,
+//!   sort by `source_id`, and write `.zga` shards atomically. Each
+//!   cell's gaia shard is the durable input for Phase B; once all cells
+//!   are committed, every cross-cell quad emitter has the data it needs
+//!   to build patch quads.
+//! - **Phase B** (patch quads): walk cells in parallel again. For each
+//!   cell C, parse its and its eight HEALPix edge-neighbors' `.zga`
+//!   files into one combined patch buffer, build every band's quads over
+//!   the patch, and write the resulting `.zqd` shard with a neighbor
+//!   table referencing whichever neighbor cells the quads actually used.
+//!
+//! Phase B's per-cell builds are independent (they only read sibling
+//! `.zga` files, never write to them), so the second pass parallelises
+//! cleanly. Cells whose quads turn out to be entirely self-contained
+//! emit a `.zqd` with an empty neighbor table — bit-identical (apart
+//! from the `version = 2` field and the `n_neighbors = 0` slot) to the
+//! pre-PR8 layout.
 //!
 //! ## Shape
 //!
@@ -23,13 +41,13 @@
 //!
 //! ## Resume granularity
 //!
-//! A cell is "done" iff `completed_cells.contains(cell_id)` AND every
-//! band is marked complete for it. The orchestrator marks all bands
-//! complete in one critical section after the `.zqd` rename succeeds,
-//! so `(cell, band)` granularity is effectively per-cell at this
-//! revision — the per-band manifest field is recorded for forward
-//! compatibility with PR4+ if a future builder ever races a single
-//! cell's bands across workers.
+//! A cell is "done" iff its `.zga` exists AND `is_complete(cell_id)`
+//! AND every band is `is_band_complete(cell_id, band_idx)`. Phase A
+//! commits a cell as `is_complete` (and as empty in `completed_per_band`
+//! for empty cells) once its `.zga` is durable on disk. Phase B
+//! flips each band complete after the `.zqd` rename succeeds. Resume
+//! semantics: a cell whose `.zga` was committed but whose `.zqd` was
+//! not skips Phase A (already done) and runs only Phase B.
 
 use std::collections::hash_map::DefaultHasher;
 use std::fs::File;
@@ -41,12 +59,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rayon::prelude::*;
 
-use crate::bundle::gaia_shard::{GaiaRecord, write_gaia_shard};
+use crate::bundle::gaia_shard::{GaiaRecord, GaiaShard, write_gaia_shard};
 use crate::bundle::layout::cell_shard_path;
-use crate::bundle::quad_shard::{BandEmit, QuadShard, write_quad_shard};
+use crate::bundle::quad_shard::{
+    BandEmit, MAX_NEIGHBORS, QuadShard, pack_star_id, write_quad_shard,
+};
+use crate::quads::{Code, DIMQUADS, Quad};
 
 use super::build_manifest::{BuildManifest, CellStats};
-use super::cell_builder::CellStarSource;
+use super::cell_builder::{CellStar, CellStarSource};
 use super::quads::build_quads_for_cell_multiband;
 
 /// One scale band in a multi-band bundle build.
@@ -217,48 +238,22 @@ fn nonce_hex(cell_id: u32, seed: u64) -> String {
     format!("{:08x}", v as u32)
 }
 
-/// Per-cell write entry-point: emit the `.zqd` and `.zga` shards
-/// atomically into `work_dir/{quads,gaia}/`.
+/// Phase A per-cell write: emit just the `.zga` shard atomically.
 ///
-/// Skips writing entirely if both `bands_emit` is all-empty AND
-/// `gaia_records` is empty. Otherwise writes both files: `.part.HHHHHHHH`
-/// → fsync → atomic rename onto the canonical name.
-///
-/// Returns one quad count per band in `bands_emit`, in input order.
-pub fn write_cell_shards(
+/// Returns the on-disk gaia records (sorted by source_id, mutated in
+/// place by the writer). The caller may discard them — Phase B re-reads
+/// every cell's `.zga` from disk so it always sees the durable bytes.
+fn write_gaia_shard_only(
     work_dir: &Path,
     cell_depth: u8,
     cell_id: u32,
-    bands_emit: &[BandEmit<'_>],
     mut gaia_records: Vec<GaiaRecord>,
     nonce_seed: u64,
-) -> io::Result<Vec<u64>> {
-    let counts: Vec<u64> = bands_emit.iter().map(|b| b.quads.len() as u64).collect();
-    let all_quads_empty = bands_emit.iter().all(|b| b.quads.is_empty());
-    if all_quads_empty && gaia_records.is_empty() {
-        return Ok(counts);
+) -> io::Result<()> {
+    if gaia_records.is_empty() {
+        return Ok(());
     }
-
     let nonce = nonce_hex(cell_id, nonce_seed);
-
-    // ---------- quad shard -------------------------------------------------
-    let zqd_final = cell_shard_path(work_dir, QUADS_SUBDIR, QUAD_EXT, cell_depth, cell_id);
-    let zqd_partial: PathBuf = {
-        let mut s = zqd_final.as_os_str().to_owned();
-        s.push(".part.");
-        s.push(&nonce);
-        PathBuf::from(s)
-    };
-    {
-        let f = File::create(&zqd_partial)?;
-        let mut w = BufWriter::new(f);
-        write_quad_shard(&mut w, cell_id as u64, bands_emit)?;
-        w.flush()?;
-        w.get_ref().sync_all()?;
-    }
-    std::fs::rename(&zqd_partial, &zqd_final)?;
-
-    // ---------- gaia shard -------------------------------------------------
     let zga_final = cell_shard_path(work_dir, GAIA_SUBDIR, GAIA_EXT, cell_depth, cell_id);
     let zga_partial: PathBuf = {
         let mut s = zga_final.as_os_str().to_owned();
@@ -274,17 +269,58 @@ pub fn write_cell_shards(
         w.get_ref().sync_all()?;
     }
     std::fs::rename(&zga_partial, &zga_final)?;
+    Ok(())
+}
 
-    Ok(counts)
+/// Phase B per-cell write: emit the `.zqd` shard atomically, including
+/// any neighbor-table entries referenced by patch quads.
+fn write_quad_shard_only(
+    work_dir: &Path,
+    cell_depth: u8,
+    cell_id: u32,
+    neighbor_cells: &[u64],
+    bands_emit: &[BandEmit<'_>],
+    nonce_seed: u64,
+) -> io::Result<()> {
+    let all_quads_empty = bands_emit.iter().all(|b| b.quads.is_empty());
+    // Even cells with no quads in any band still need a .zqd on disk so
+    // that the reader's populated-cell enumeration (which lists `.zqd`
+    // files) finds them. Skip only when there are no bands at all.
+    if bands_emit.is_empty() && all_quads_empty {
+        return Ok(());
+    }
+
+    let nonce = nonce_hex(cell_id, nonce_seed);
+    let zqd_final = cell_shard_path(work_dir, QUADS_SUBDIR, QUAD_EXT, cell_depth, cell_id);
+    let zqd_partial: PathBuf = {
+        let mut s = zqd_final.as_os_str().to_owned();
+        s.push(".part.");
+        s.push(&nonce);
+        PathBuf::from(s)
+    };
+    {
+        let f = File::create(&zqd_partial)?;
+        let mut w = BufWriter::new(f);
+        write_quad_shard(&mut w, cell_id as u64, neighbor_cells, bands_emit)?;
+        w.flush()?;
+        w.get_ref().sync_all()?;
+    }
+    std::fs::rename(&zqd_partial, &zqd_final)?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
 //  Orchestrator
 // ---------------------------------------------------------------------------
 
-/// Phase-1 orchestrator: build every cell's per-cell shards in
-/// parallel, atomic-renaming each into place and updating the build
-/// manifest after every successful commit.
+/// Two-phase orchestrator: write every cell's `.zga` (Phase A), then
+/// build cross-cell patch quads against each cell + its HEALPix
+/// neighbors and write `.zqd` (Phase B).
+///
+/// Both phases iterate cells in parallel and update the build manifest
+/// after every successful per-cell commit. Resume semantics are
+/// per-phase: a cell whose `.zga` was committed but whose `.zqd` was
+/// not skips Phase A and runs only Phase B on the next invocation.
 pub fn build_bundle_work_dir<S: CellStarSource + ?Sized>(
     source: &S,
     config: &MultiBandCellBuildConfig,
@@ -304,37 +340,57 @@ pub fn build_bundle_work_dir<S: CellStarSource + ?Sized>(
     manifest.ensure_per_band(n_bands);
     manifest.save(work_dir)?;
 
-    // Collect cells to process. Skip cells that are completed in
-    // `completed_cells` *and* in every per-band set.
-    let cell_count = source.cell_count();
-    let mut to_process: Vec<u32> = Vec::with_capacity(cell_count as usize);
-    let mut n_cells_resumed = 0u32;
-    for cell_id in 0..cell_count {
-        let cell_complete = manifest.is_complete(cell_id);
-        let bands_complete = (0..n_bands as u32).all(|b| manifest.is_band_complete(cell_id, b));
-        if cell_complete && bands_complete {
-            n_cells_resumed += 1;
-        } else {
-            to_process.push(cell_id);
-        }
-    }
-
-    // Sort the bands once up front; pass them to the per-cell loop in
-    // a stable band-idx order so the band table on disk matches the
+    // Sort the bands once up front; pass them to both phases in a
+    // stable band-idx order so the band table on disk matches the
     // configured layout.
     let mut sorted_bands: Vec<ScaleBand> = config.bands.clone();
     sorted_bands.sort_by_key(|b| b.band_idx);
 
-    let manifest = Mutex::new(manifest);
-    let n_cells_empty = std::sync::atomic::AtomicU32::new(0);
-    let n_cells_processed = std::sync::atomic::AtomicU32::new(0);
-    let max_stars_per_cell = config.max_stars_per_cell;
+    let cell_count = source.cell_count();
     let cell_depth = config.cell_depth;
 
-    let result: io::Result<()> = to_process.par_iter().try_for_each(|&cell_id| {
+    // Capture which cells were already fully done (both phases
+    // committed) before this invocation so the summary's
+    // `n_cells_resumed` only counts those.
+    let initially_resumed: std::collections::HashSet<u32> = (0..cell_count)
+        .filter(|&cell_id| {
+            manifest.is_complete(cell_id)
+                && (0..n_bands as u32).all(|b| manifest.is_band_complete(cell_id, b))
+        })
+        .collect();
+
+    // -------- Phase A: walk cells, write .zga shards. ----------------
+    //
+    // A cell is in scope for Phase A iff its `.zga` is not yet on disk.
+    // Resume picks up cleanly: previously committed `.zga`s skip the
+    // (potentially expensive) per-cell pull, but their cell ids stay in
+    // `manifest.completed_cells` so Phase B can iterate them.
+    let mut phase_a_cells: Vec<u32> = Vec::new();
+    for cell_id in 0..cell_count {
+        let zga = cell_shard_path(work_dir, GAIA_SUBDIR, GAIA_EXT, cell_depth, cell_id);
+        // Cell already had Phase A done iff:
+        //   - it's marked complete in the manifest, AND
+        //   - either its zga exists (had stars) OR commit_cell stats are zero (empty cell).
+        // The simplest way to encode that is: skip iff manifest.is_complete(cell_id)
+        // AND (zga exists OR the cell is recorded with zero n_stars).
+        if manifest.is_complete(cell_id) {
+            // Empty cells stay empty on resume; cells with stars must
+            // have an existing zga (or we'd have crashed before the
+            // commit_cell line).
+            if zga.exists() || cell_recorded_empty(&manifest, cell_id) {
+                continue;
+            }
+        }
+        phase_a_cells.push(cell_id);
+    }
+
+    let manifest = Mutex::new(manifest);
+    let n_cells_empty = std::sync::atomic::AtomicU32::new(0);
+    let max_stars_per_cell = config.max_stars_per_cell;
+
+    let phase_a: io::Result<()> = phase_a_cells.par_iter().try_for_each(|&cell_id| {
         let mut stars = source.stars_in_cell(cell_id)?;
 
-        // Brightness-truncate: sort by mag ascending, take the first N.
         if stars.len() > max_stars_per_cell {
             stars.sort_by(|a, b| {
                 a.mag
@@ -345,10 +401,10 @@ pub fn build_bundle_work_dir<S: CellStarSource + ?Sized>(
         }
 
         if stars.is_empty() {
-            // Empty cell: still mark complete so a resume run doesn't
-            // re-pull it.
             let mut m = manifest.lock().unwrap();
             m.commit_cell(work_dir, cell_id, CellStats::default())?;
+            // Empty cells are also "done" for every band — there are
+            // no patch quads to build.
             for b in &sorted_bands {
                 m.mark_band_complete(cell_id, b.band_idx);
             }
@@ -358,19 +414,10 @@ pub fn build_bundle_work_dir<S: CellStarSource + ?Sized>(
             return Ok::<(), io::Error>(());
         }
 
-        // Build all bands' quads over this cell's stars (sorted-by-mag
-        // already; build_quads_for_cell re-sorts internally, that's
-        // fine — same result).
-        let mut band_blocks = build_quads_for_cell_multiband(&stars, &sorted_bands);
-
-        // Build the gaia record vector for this cell, preserving
-        // `stars` order so quad star_ids are still valid.
-        let mut gaia_records: Vec<GaiaRecord> = stars
+        let gaia_records: Vec<GaiaRecord> = stars
             .iter()
             .map(|s| {
                 let mut g = s.gaia;
-                // Set the supplement bit if the source_id's high bit
-                // is set; mirrors starfield-gaia's encoding.
                 if (s.gaia.source_id >> 63) & 1 == 1 {
                     g.flags |= GaiaRecord::FLAG_SOURCE_KIND_SUPPLEMENT;
                 }
@@ -378,37 +425,217 @@ pub fn build_bundle_work_dir<S: CellStarSource + ?Sized>(
             })
             .collect();
 
-        // The on-disk `.zga` is sorted by source_id (write_gaia_shard
-        // sorts internally). Quad star_ids reference cell-local
-        // indices, so we must remap them through the same permutation
-        // used to sort the gaia records — otherwise the reader walks
-        // a quad's star_ids into the SORTED vec but the original
-        // computation referenced UNSORTED positions, producing
-        // garbage WCS hypotheses on lookup.
-        //
-        // Build the source_id-sort permutation, apply it to
-        // `gaia_records`, then rewrite every quad's star_ids through
-        // the inverse permutation `old_idx -> new_idx`.
-        let n_records = gaia_records.len();
-        let mut order: Vec<usize> = (0..n_records).collect();
-        order.sort_by_key(|&i| gaia_records[i].source_id);
-        let mut old_to_new = vec![0usize; n_records];
-        for (new_idx, &old_idx) in order.iter().enumerate() {
-            old_to_new[old_idx] = new_idx;
+        let n_stars = stars.len() as u64;
+        write_gaia_shard_only(work_dir, cell_depth, cell_id, gaia_records, cell_id as u64)?;
+
+        let mut m = manifest.lock().unwrap();
+        m.commit_cell(
+            work_dir,
+            cell_id,
+            CellStats {
+                n_stars,
+                n_quads: 0, // Filled in by Phase B.
+            },
+        )?;
+        m.save(work_dir)?;
+        drop(m);
+
+        Ok(())
+    });
+    phase_a?;
+
+    // Best-effort fsync the gaia subdirectory so every committed `.zga`
+    // is durably named before Phase B starts reading them.
+    if let Ok(dir) = File::open(work_dir.join(GAIA_SUBDIR)) {
+        let _ = dir.sync_all();
+    }
+
+    // -------- Phase B: walk cells, build patch quads, write .zqd. -----
+    //
+    // A cell is in scope for Phase B iff:
+    //   - it has a `.zga` on disk (i.e. Phase A produced records), AND
+    //   - at least one of its bands is not yet marked complete.
+    let mut phase_b_cells: Vec<u32> = Vec::new();
+    {
+        let m = manifest.lock().unwrap();
+        for cell_id in 0..cell_count {
+            let zga = cell_shard_path(work_dir, GAIA_SUBDIR, GAIA_EXT, cell_depth, cell_id);
+            if !zga.exists() {
+                continue;
+            }
+            let all_bands_done = (0..n_bands as u32).all(|b| m.is_band_complete(cell_id, b));
+            if !all_bands_done {
+                phase_b_cells.push(cell_id);
+            }
         }
-        let sorted_gaia: Vec<GaiaRecord> = order.iter().map(|&i| gaia_records[i]).collect();
-        gaia_records = sorted_gaia;
-        for (_band_idx, quads, _codes) in band_blocks.iter_mut() {
-            for q in quads.iter_mut() {
-                for slot in q.star_ids.iter_mut() {
-                    *slot = old_to_new[*slot];
-                }
+    }
+    let phase_b: io::Result<()> = phase_b_cells.par_iter().try_for_each(|&cell_id| {
+        // Compute neighbor cell ids at this depth via cdshealpix. The
+        // returned list is up to 8 ids; some of them may not have been
+        // populated by Phase A (empty cells), so the patch loader filters
+        // those out.
+        let mut neighbors: Vec<u64> = Vec::with_capacity(8);
+        cdshealpix::nested::append_bulk_neighbours(
+            cell_depth,
+            cell_id as u64,
+            &mut neighbors,
+        );
+        // Self goes first so its records dominate the patch when ties
+        // matter; neighbors follow in deterministic ascending order.
+        // (cdshealpix returns them in a direction-enum order we don't
+        // care about; sort for reproducibility regardless of caller.)
+        neighbors.sort_unstable();
+        let mut patch_cells: Vec<u64> = Vec::with_capacity(neighbors.len() + 1);
+        patch_cells.push(cell_id as u64);
+        for &nc in &neighbors {
+            if nc == cell_id as u64 {
+                continue; // defensive — shouldn't happen, but skip self repeats
+            }
+            patch_cells.push(nc);
+        }
+
+        // Read every patch cell's `.zga` once; assemble:
+        //   combined_stars    Vec<CellStar>     for build_quads_for_cell_multiband
+        //   per_star_origin   Vec<(cell_id, local_idx)>  parallel, one per star
+        let mut combined_stars: Vec<CellStar> = Vec::new();
+        let mut per_star_origin: Vec<(u64, u32)> = Vec::new();
+        for &pc in &patch_cells {
+            // Only depth-fitted u32 cells exist on disk in this build.
+            if pc > u32::MAX as u64 {
+                continue;
+            }
+            let zga_path =
+                cell_shard_path(work_dir, GAIA_SUBDIR, GAIA_EXT, cell_depth, pc as u32);
+            if !zga_path.exists() {
+                continue;
+            }
+            let bytes = std::fs::read(&zga_path)?;
+            let shard = GaiaShard::parse(&bytes).map_err(|e| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "phase B: cell {cell_id} failed to parse neighbor {pc} .zga: {e}"
+                    ),
+                )
+            })?;
+            for (local_idx, rec) in shard.records().iter().enumerate() {
+                combined_stars.push(gaia_record_to_cell_star(rec));
+                per_star_origin.push((pc, local_idx as u32));
             }
         }
 
-        // Materialize band emit slices for the writer (must be after
-        // the remap above).
-        let bands_emit: Vec<BandEmit<'_>> = band_blocks
+        if combined_stars.is_empty() {
+            // Defensive: zga existed but was empty. Mark all bands
+            // complete so we don't loop forever on resume.
+            let mut m = manifest.lock().unwrap();
+            for b in &sorted_bands {
+                m.mark_band_complete(cell_id, b.band_idx);
+            }
+            m.save(work_dir)?;
+            return Ok::<(), io::Error>(());
+        }
+
+        // Build all bands' quads over the combined patch buffer. Quad
+        // star_ids are positions in `combined_stars`, which we then map
+        // back to `(source_cell_id, local_idx)` via per_star_origin.
+        //
+        // Patch quads can span cell boundaries; the same physical
+        // asterism would be discovered redundantly in every cell whose
+        // patch encloses all 4 stars. To emit each quad exactly once
+        // (and to keep per-cell `quads_per_cell` budgets honest), filter
+        // each quad to the file of its centroid cell — the HEALPix cell
+        // containing the unit-vector mean of the 4 member stars. The
+        // builder runs with an inflated budget so the post-filter still
+        // hits each cell's nominal quad count for the band.
+        let inflated_bands: Vec<ScaleBand> = sorted_bands
+            .iter()
+            .map(|b| ScaleBand {
+                quads_per_cell: b.quads_per_cell.saturating_mul(9),
+                ..b.clone()
+            })
+            .collect();
+        let raw_band_blocks =
+            build_quads_for_cell_multiband(&combined_stars, &inflated_bands);
+
+        let band_blocks: Vec<(u32, Vec<Quad>, Vec<Code>)> =
+            raw_band_blocks
+                .into_iter()
+                .zip(sorted_bands.iter())
+                .map(|((band_idx, raw_quads, raw_codes), band_cfg)| {
+                    let mut keep_quads: Vec<Quad> =
+                        Vec::with_capacity(band_cfg.quads_per_cell);
+                    let mut keep_codes: Vec<Code> =
+                        Vec::with_capacity(band_cfg.quads_per_cell);
+                    for (q, c) in raw_quads.into_iter().zip(raw_codes.into_iter()) {
+                        if keep_quads.len() >= band_cfg.quads_per_cell {
+                            break;
+                        }
+                        let centroid = quad_centroid(&q, &combined_stars);
+                        let centroid_cell = cdshealpix::nested::hash(
+                            cell_depth,
+                            centroid.0,
+                            centroid.1,
+                        );
+                        if centroid_cell == cell_id as u64 {
+                            keep_quads.push(q);
+                            keep_codes.push(c);
+                        }
+                    }
+                    (band_idx, keep_quads, keep_codes)
+                })
+                .collect();
+
+        // Encode each quad's star_ids into the v2 packed format and
+        // build the per-cell neighbor table from the unique non-self
+        // source cell ids actually referenced.
+        let self_cell = cell_id as u64;
+        let mut neighbor_table: Vec<u64> = Vec::new();
+        // Maps a referenced neighbor cell id → 1-based slot in neighbor_table.
+        let mut neighbor_slot: std::collections::HashMap<u64, u32> =
+            std::collections::HashMap::new();
+
+        let mut packed_blocks: Vec<(u32, Vec<Quad>, Vec<Code>)> =
+            Vec::with_capacity(band_blocks.len());
+        for (band_idx, quads, codes) in band_blocks {
+            let mut packed_quads: Vec<Quad> = Vec::with_capacity(quads.len());
+            for q in quads {
+                let mut new_ids = [0usize; DIMQUADS];
+                for (i, &combined_idx) in q.star_ids.iter().enumerate() {
+                    let (origin_cell, origin_local) = per_star_origin[combined_idx];
+                    let nbr_idx = if origin_cell == self_cell {
+                        0u32
+                    } else {
+                        match neighbor_slot.get(&origin_cell) {
+                            Some(&slot) => slot,
+                            None => {
+                                let next_slot = neighbor_table.len() as u32 + 1;
+                                if next_slot
+                                    > MAX_NEIGHBORS as u32
+                                {
+                                    return Err(io::Error::new(
+                                        io::ErrorKind::InvalidInput,
+                                        format!(
+                                            "phase B: cell {cell_id} would reference {} neighbor cells, exceeding the {}-cell on-disk cap",
+                                            next_slot,
+                                            MAX_NEIGHBORS,
+                                        ),
+                                    ));
+                                }
+                                neighbor_table.push(origin_cell);
+                                neighbor_slot.insert(origin_cell, next_slot);
+                                next_slot
+                            }
+                        }
+                    };
+                    let packed = pack_star_id(nbr_idx, origin_local)?;
+                    new_ids[i] = packed as usize;
+                }
+                packed_quads.push(Quad { star_ids: new_ids });
+            }
+            packed_blocks.push((band_idx, packed_quads, codes));
+        }
+
+        let bands_emit: Vec<BandEmit<'_>> = packed_blocks
             .iter()
             .map(|(idx, qs, cs)| BandEmit {
                 band_idx: *idx,
@@ -417,24 +644,32 @@ pub fn build_bundle_work_dir<S: CellStarSource + ?Sized>(
             })
             .collect();
 
-        let _ = write_cell_shards(
+        write_quad_shard_only(
             work_dir,
             cell_depth,
             cell_id,
+            &neighbor_table,
             &bands_emit,
-            gaia_records,
             cell_id as u64,
         )?;
 
-        let n_stars = stars.len() as u64;
-        let n_quads_total: u64 = band_blocks.iter().map(|(_, qs, _)| qs.len() as u64).sum();
+        let n_quads_total: u64 = packed_blocks.iter().map(|(_, qs, _)| qs.len() as u64).sum();
 
+        // Update the manifest: the cell is already in completed_cells
+        // (Phase A added it); commit_cell with the same n_stars and the
+        // new n_quads is idempotent in cell_stats but updates n_quads.
         let mut m = manifest.lock().unwrap();
+        let existing_n_stars = m
+            .cell_stats
+            .iter()
+            .find(|(c, _)| *c == cell_id)
+            .map(|(_, s)| s.n_stars)
+            .unwrap_or(0);
         m.commit_cell(
             work_dir,
             cell_id,
             CellStats {
-                n_stars,
+                n_stars: existing_n_stars,
                 n_quads: n_quads_total,
             },
         )?;
@@ -444,12 +679,29 @@ pub fn build_bundle_work_dir<S: CellStarSource + ?Sized>(
         m.save(work_dir)?;
         drop(m);
 
-        n_cells_processed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     });
-    result?;
+    phase_b?;
 
     let final_manifest = manifest.into_inner().unwrap();
+
+    // n_cells_processed = unique cells that needed any work this run
+    // (Phase A, Phase B, or both). Cells already done before the run
+    // are tracked via `n_cells_resumed`. Empty cells are tracked
+    // separately.
+    let mut touched: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    for &c in &phase_a_cells {
+        touched.insert(c);
+    }
+    for &c in &phase_b_cells {
+        touched.insert(c);
+    }
+    // Empty cells are part of phase_a_cells but tracked separately on
+    // the summary. Subtract them from n_cells_processed so the field
+    // reflects "cells that produced shards on disk" not "cells visited".
+    let n_empty = n_cells_empty.into_inner();
+    let n_cells_processed = (touched.len() as u32).saturating_sub(n_empty);
+    let n_cells_resumed = initially_resumed.len() as u32;
 
     // ---------- per-band totals via mmapped re-scan ----------------------
     let mut per_band_quad_counts = vec![0u64; n_bands];
@@ -474,13 +726,85 @@ pub fn build_bundle_work_dir<S: CellStarSource + ?Sized>(
     }
 
     Ok(BuildBundleSummary {
-        n_cells_processed: n_cells_processed.into_inner(),
+        n_cells_processed,
         n_cells_resumed,
-        n_cells_empty: n_cells_empty.into_inner(),
+        n_cells_empty: n_empty,
         n_stars: final_manifest.n_stars,
         per_band_quad_counts,
         per_band_populated_cells,
     })
+}
+
+/// Compute a quad's spherical centroid — the unit-vector mean of its
+/// four member stars, projected back to (RA, Dec) in radians. Used to
+/// decide which HEALPix cell's `.zqd` a patch quad belongs to: by
+/// convention each quad is emitted once, in the file of the cell
+/// containing its centroid.
+fn quad_centroid(q: &Quad, stars: &[CellStar]) -> (f64, f64) {
+    use crate::geom::sphere::radec_to_xyz;
+    let mut sum = [0.0f64; 3];
+    for &i in &q.star_ids {
+        let s = &stars[i];
+        let v = radec_to_xyz(s.ra_rad, s.dec_rad);
+        for k in 0..3 {
+            sum[k] += v[k];
+        }
+    }
+    // Normalize back to a unit vector.
+    let n = (sum[0] * sum[0] + sum[1] * sum[1] + sum[2] * sum[2]).sqrt();
+    if n == 0.0 {
+        return (0.0, 0.0);
+    }
+    let x = sum[0] / n;
+    let y = sum[1] / n;
+    let z = sum[2] / n;
+    let dec = z.clamp(-1.0, 1.0).asin();
+    let ra = y.atan2(x).rem_euclid(2.0 * std::f64::consts::PI);
+    (ra, dec)
+}
+
+/// True iff the manifest records `cell_id` with zero stars (i.e. an
+/// empty-cell commit). Used by Phase A's resume check to distinguish
+/// "this cell was empty and we already noted that" from "this cell
+/// crashed mid-write and needs a retry".
+fn cell_recorded_empty(manifest: &BuildManifest, cell_id: u32) -> bool {
+    manifest
+        .cell_stats
+        .iter()
+        .any(|(c, s)| *c == cell_id && s.n_stars == 0)
+}
+
+/// Build a `CellStar` minimally from a `GaiaRecord` — just the four
+/// fields `build_quads_for_cell_multiband` actually consumes (RA/Dec in
+/// radians, magnitude, catalog_id). The unused sidecar/gaia fields are
+/// populated from the same record for completeness, but the inner quad
+/// builder never reads them.
+fn gaia_record_to_cell_star(g: &GaiaRecord) -> CellStar {
+    CellStar {
+        catalog_id: g.source_id,
+        ra_rad: g.ra.to_radians(),
+        dec_rad: g.dec.to_radians(),
+        mag: g.phot_g_mean_mag,
+        // The patch builder never inspects these; populate them from
+        // the same record so the struct is well-formed.
+        sidecar: crate::refinement::SidecarRecord {
+            source_id: g.source_id,
+            ref_epoch: g.ref_epoch,
+            ra: g.ra,
+            dec: g.dec,
+            pmra: g.pmra,
+            pmdec: g.pmdec,
+            parallax: g.parallax,
+            radial_velocity: g.radial_velocity,
+            sigma_ra: g.sigma_ra,
+            sigma_dec: g.sigma_dec,
+            sigma_pmra: g.sigma_pmra,
+            sigma_pmdec: g.sigma_pmdec,
+            sigma_parallax: g.sigma_parallax,
+            flags: g.flags,
+        },
+        gaia: *g,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -796,9 +1120,15 @@ mod tests {
             pull_count: AtomicU32::new(0),
         };
         let summary = build_bundle_work_dir(&source2, &cfg, &paths).unwrap();
-        assert_eq!(summary.n_cells_resumed, 2);
-        assert_eq!(summary.n_cells_processed, 2);
-        // Cells 0+1 must NOT be re-pulled.
+        // After a crash mid-Phase-A, cells 0+1 had Phase A done but
+        // not Phase B; on resume they need Phase B work, so they're
+        // counted in `n_cells_processed`. No cell was fully done before
+        // the resume started (a fully-done cell needs both phases), so
+        // `n_cells_resumed` is zero. All four cells go through Phase B.
+        assert_eq!(summary.n_cells_resumed, 0);
+        assert_eq!(summary.n_cells_processed, 4);
+        // Cells 0+1 must NOT be re-pulled (their .zga is durable from
+        // the previous run, so Phase A skips them).
         assert_eq!(source2.pull_count.load(Ordering::Relaxed), 2);
 
         // Compare to a fresh clean build.

@@ -54,7 +54,13 @@ pub const FORMAT_MAGIC: &str = "zdcl-bundle";
 
 /// Current on-disk schema version. `load` rejects manifests with a different
 /// version (forward-compat is opt-in via a future match arm).
-pub const FORMAT_VERSION: u32 = 1;
+///
+/// Bumped to 2 in PR8 (cross-cell patch quads): the manifest itself
+/// keeps the same JSON shape, but `.zqd` shards inside a v2 bundle may
+/// carry a neighbor table and pack `(neighbor_idx, local_idx)` into each
+/// quad's star_ids. See `docs/bundle-format.md` and
+/// `crate::bundle::quad_shard` for the on-disk details.
+pub const FORMAT_VERSION: u32 = 2;
 
 /// Required `gaia.record_size` for a v1 bundle. Mismatches are rejected by
 /// `load` to prevent accidentally reading a 96 B-record bundle as 104 B (or

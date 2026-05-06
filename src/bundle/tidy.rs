@@ -666,7 +666,7 @@ mod tests {
         let path = cell_shard_path(work_dir, QUADS_SUBDIR, QUAD_EXT, TEST_DEPTH, cell_id);
         let f = File::create(&path).unwrap();
         let mut buf = BufWriter::new(f);
-        write_quad_shard(&mut buf, cell_id as u64, bands).unwrap();
+        write_quad_shard(&mut buf, cell_id as u64, &[], bands).unwrap();
         buf.flush().unwrap();
     }
 
