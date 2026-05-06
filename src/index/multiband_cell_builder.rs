@@ -82,6 +82,18 @@ pub struct MultiBandCellBuildConfig {
     pub max_stars_per_cell: usize,
     /// HEALPix depth at which cells are sharded.
     pub cell_depth: u8,
+    /// Save the build manifest to disk every N cell completions (and
+    /// once at end-of-build). Defaults to 20.
+    ///
+    /// Each manifest save is a `BuildManifest::save` → fsync, which at
+    /// large `cell_count` (e.g. 786K cells at depth 8) becomes the
+    /// dominant wall-time cost — workers serialize on the manifest
+    /// mutex while one of them does a synchronous disk write. Batching
+    /// trades resume granularity (after a crash, at most N committed
+    /// cells may need to be redone) for ~N× wall-time speedup.
+    ///
+    /// `1` recovers the per-cell-save behaviour. `0` is treated as 1.
+    pub manifest_save_every: usize,
 }
 
 /// Filesystem layout for the build's work directory.
@@ -323,6 +335,15 @@ pub fn build_bundle_work_dir<S: CellStarSource + ?Sized>(
     sorted_bands.sort_by_key(|b| b.band_idx);
 
     let manifest = Mutex::new(manifest);
+    // Tracks how many cells have been committed since the last
+    // `manifest.save`. The orchestrator calls `save` only when this
+    // counter reaches `manifest_save_every`, then resets — turning
+    // the formerly-per-cell fsync into a periodic one. The
+    // post-rayon code path always issues a final save, so even if
+    // `to_process.len() % save_every != 0` the on-disk manifest
+    // matches the in-memory state when the call returns.
+    let manifest_dirty = std::sync::atomic::AtomicUsize::new(0);
+    let manifest_save_every = config.manifest_save_every.max(1);
     let n_cells_empty = std::sync::atomic::AtomicU32::new(0);
     let n_cells_processed = std::sync::atomic::AtomicU32::new(0);
     let max_stars_per_cell = config.max_stars_per_cell;
@@ -349,7 +370,11 @@ pub fn build_bundle_work_dir<S: CellStarSource + ?Sized>(
             for b in &sorted_bands {
                 m.mark_band_complete(cell_id, b.band_idx);
             }
-            m.save(work_dir)?;
+            let pending = manifest_dirty.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            if pending >= manifest_save_every {
+                m.save(work_dir)?;
+                manifest_dirty.store(0, std::sync::atomic::Ordering::Relaxed);
+            }
             drop(m);
             n_cells_empty.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             return Ok::<(), io::Error>(());
@@ -438,13 +463,29 @@ pub fn build_bundle_work_dir<S: CellStarSource + ?Sized>(
         for b in &sorted_bands {
             m.mark_band_complete(cell_id, b.band_idx);
         }
-        m.save(work_dir)?;
+        let pending = manifest_dirty.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        if pending >= manifest_save_every {
+            m.save(work_dir)?;
+            manifest_dirty.store(0, std::sync::atomic::Ordering::Relaxed);
+        }
         drop(m);
 
         n_cells_processed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     });
     result?;
+
+    // Flush any cells that completed since the last batched save.
+    // Without this, an interrupted-but-clean exit (or one whose total
+    // cell count is not a multiple of `manifest_save_every`) would
+    // leave the on-disk manifest behind the in-memory state.
+    {
+        let m = manifest.lock().unwrap();
+        if manifest_dirty.load(std::sync::atomic::Ordering::Relaxed) > 0 {
+            m.save(work_dir)?;
+            manifest_dirty.store(0, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
 
     let final_manifest = manifest.into_inner().unwrap();
 
@@ -629,6 +670,7 @@ mod tests {
             bands: three_bands(),
             max_stars_per_cell: 10_000,
             cell_depth: 5,
+            manifest_save_every: 1,
         }
     }
 
@@ -923,6 +965,7 @@ mod tests {
             ],
             max_stars_per_cell: 10_000,
             cell_depth: 5,
+            manifest_save_every: 1,
         };
 
         let source = SyntheticSource {
@@ -1005,6 +1048,7 @@ mod tests {
             bands: three_bands(),
             max_stars_per_cell: 10,
             cell_depth: 5,
+            manifest_save_every: 1,
         };
         build_bundle_work_dir(&LotsOfStars, &cfg, &paths).unwrap();
 
@@ -1085,6 +1129,7 @@ mod tests {
                 bands,
                 max_stars_per_cell: 100,
                 cell_depth: 5,
+                manifest_save_every: 1,
             };
             let source = SyntheticSource {
                 n_cells: 1,
