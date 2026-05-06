@@ -285,8 +285,19 @@ fn nonce_hex(cell_id: u32, seed: u64) -> String {
 /// atomically into `work_dir/{quads,gaia}/`.
 ///
 /// Skips writing entirely if both `bands_emit` is all-empty AND
-/// `gaia_records` is empty. Otherwise writes both files: `.part.HHHHHHHH`
-/// → fsync → atomic rename onto the canonical name.
+/// `gaia_records` is empty. Otherwise each file is written to
+/// `.part.HHHHHHHH` and atomically renamed onto its canonical name.
+///
+/// **No `fsync` between write and rename.** Workers don't block on
+/// the disk; the page cache absorbs writes and the kernel flushes
+/// lazily. A power loss between rename and the kernel's writeback
+/// would leave behind a renamed-but-empty (or partial) shard. The
+/// build manifest's batched save (default every 20 cells) is the
+/// only durability anchor — on resume, any cell whose manifest entry
+/// isn't on disk gets rebuilt from scratch and overwrites whatever
+/// was left on disk. Net cost of this trade: a few wasted seconds
+/// per torn cell after a hard crash, in exchange for vastly higher
+/// IOPS on the happy path.
 ///
 /// Returns one quad count per band in `bands_emit`, in input order.
 pub fn write_cell_shards(
@@ -305,41 +316,39 @@ pub fn write_cell_shards(
 
     let nonce = nonce_hex(cell_id, nonce_seed);
 
-    // ---------- quad shard -------------------------------------------------
     let zqd_final = cell_shard_path(work_dir, QUADS_SUBDIR, QUAD_EXT, cell_depth, cell_id);
-    let zqd_partial: PathBuf = {
-        let mut s = zqd_final.as_os_str().to_owned();
-        s.push(".part.");
-        s.push(&nonce);
-        PathBuf::from(s)
-    };
-    {
-        let f = File::create(&zqd_partial)?;
-        let mut w = BufWriter::new(f);
-        write_quad_shard(&mut w, cell_id as u64, bands_emit)?;
-        w.flush()?;
-        w.get_ref().sync_all()?;
-    }
-    std::fs::rename(&zqd_partial, &zqd_final)?;
+    atomic_write_shard(&zqd_final, &nonce, |w| {
+        write_quad_shard(w, cell_id as u64, bands_emit)
+    })?;
 
-    // ---------- gaia shard -------------------------------------------------
     let zga_final = cell_shard_path(work_dir, GAIA_SUBDIR, GAIA_EXT, cell_depth, cell_id);
-    let zga_partial: PathBuf = {
-        let mut s = zga_final.as_os_str().to_owned();
-        s.push(".part.");
-        s.push(&nonce);
-        PathBuf::from(s)
-    };
-    {
-        let f = File::create(&zga_partial)?;
-        let mut w = BufWriter::new(f);
-        write_gaia_shard(&mut w, cell_id as u64, &mut gaia_records)?;
-        w.flush()?;
-        w.get_ref().sync_all()?;
-    }
-    std::fs::rename(&zga_partial, &zga_final)?;
+    atomic_write_shard(&zga_final, &nonce, |w| {
+        write_gaia_shard(w, cell_id as u64, &mut gaia_records)
+    })?;
 
     Ok(counts)
+}
+
+/// Write `final_path` via a `final_path.part.<nonce>` sibling +
+/// in-process buffer flush + atomic rename. Does NOT fsync — see the
+/// note on [`write_cell_shards`] for the durability rationale.
+fn atomic_write_shard<F>(final_path: &Path, nonce: &str, write: F) -> io::Result<()>
+where
+    F: FnOnce(&mut BufWriter<File>) -> io::Result<()>,
+{
+    let partial: PathBuf = {
+        let mut s = final_path.as_os_str().to_owned();
+        s.push(".part.");
+        s.push(nonce);
+        PathBuf::from(s)
+    };
+    {
+        let f = File::create(&partial)?;
+        let mut w = BufWriter::new(f);
+        write(&mut w)?;
+        w.flush()?;
+    }
+    std::fs::rename(&partial, final_path)
 }
 
 // ---------------------------------------------------------------------------
