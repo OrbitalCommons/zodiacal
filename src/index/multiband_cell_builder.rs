@@ -217,46 +217,6 @@ struct CellCompletion {
     stats: CellStats,
 }
 
-/// Build-manifest plus a "dirty since last save" flag. Owned
-/// exclusively by the actor thread; no locking. `apply` records one
-/// cell completion in memory; `flush` saves to disk iff dirty.
-struct ManifestState {
-    manifest: BuildManifest,
-    dirty: bool,
-}
-
-impl ManifestState {
-    fn new(manifest: BuildManifest) -> Self {
-        Self {
-            manifest,
-            dirty: false,
-        }
-    }
-
-    fn apply(
-        &mut self,
-        work_dir: &Path,
-        completion: CellCompletion,
-        bands: &[ScaleBand],
-    ) -> io::Result<()> {
-        let CellCompletion { cell_id, stats } = completion;
-        self.manifest.commit_cell(work_dir, cell_id, stats)?;
-        for b in bands {
-            self.manifest.mark_band_complete(cell_id, b.band_idx);
-        }
-        self.dirty = true;
-        Ok(())
-    }
-
-    fn flush(&mut self, work_dir: &Path) -> io::Result<()> {
-        if self.dirty {
-            self.manifest.save(work_dir)?;
-            self.dirty = false;
-        }
-        Ok(())
-    }
-}
-
 // ---------------------------------------------------------------------------
 //  Per-cell write
 // ---------------------------------------------------------------------------
@@ -410,7 +370,8 @@ pub fn build_bundle_work_dir<S: CellStarSource + ?Sized>(
         // wall-clock cadence. Returns the final manifest on shutdown.
         let actor_bands = sorted_bands.clone();
         let actor: thread::ScopedJoinHandle<'_, io::Result<BuildManifest>> = s.spawn(move || {
-            let mut state = ManifestState::new(manifest);
+            let mut manifest = manifest;
+            let mut dirty = false;
             let mut last_save = Instant::now();
             let interval = if save_interval_secs == 0 {
                 Duration::MAX
@@ -426,24 +387,35 @@ pub fn build_bundle_work_dir<S: CellStarSource + ?Sized>(
             } else {
                 interval
             };
+            let maybe_save = |m: &mut BuildManifest, d: &mut bool| -> io::Result<()> {
+                if *d {
+                    m.save(work_dir)?;
+                    *d = false;
+                }
+                Ok(())
+            };
             loop {
                 match commit_rx.recv_timeout(recv_timeout) {
                     Ok(c) => {
-                        state.apply(work_dir, c, &actor_bands)?;
+                        manifest.commit_cell(work_dir, c.cell_id, c.stats)?;
+                        for b in &actor_bands {
+                            manifest.mark_band_complete(c.cell_id, b.band_idx);
+                        }
+                        dirty = true;
                         if last_save.elapsed() >= interval {
-                            state.flush(work_dir)?;
+                            maybe_save(&mut manifest, &mut dirty)?;
                             last_save = Instant::now();
                         }
                     }
                     Err(mpsc::RecvTimeoutError::Timeout) => {
-                        state.flush(work_dir)?;
+                        maybe_save(&mut manifest, &mut dirty)?;
                         last_save = Instant::now();
                     }
                     Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 }
             }
-            state.flush(work_dir)?;
-            Ok(state.manifest)
+            maybe_save(&mut manifest, &mut dirty)?;
+            Ok(manifest)
         });
 
         // Worker chokepoint for "this cell is done"; both the empty-cell
