@@ -397,7 +397,7 @@ pub fn build_bundle_work_dir<S: CellStarSource + ?Sized>(
             loop {
                 match commit_rx.recv_timeout(recv_timeout) {
                     Ok(c) => {
-                        manifest.commit_cell(work_dir, c.cell_id, c.stats)?;
+                        manifest.commit_cell(c.cell_id, c.stats);
                         for b in &actor_bands {
                             manifest.mark_band_complete(c.cell_id, b.band_idx);
                         }

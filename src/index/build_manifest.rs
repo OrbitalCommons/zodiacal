@@ -12,15 +12,42 @@
 //! `Manifest` writer (issue #65 refers).
 //!
 //! Layout: a single JSON file in the build's scratch directory. The
-//! file is small (a few KB at level 5, a few hundred KB at level 12),
-//! so re-serializing the whole document on every cell commit is fine.
+//! file grows with the cell count (a few KB at level 5, ~17 MB at
+//! depth 8). [`BuildManifest::commit_cell`] only updates in-memory
+//! state — callers explicitly drive [`BuildManifest::save`] on a
+//! cadence that suits their throughput (single-cell save in the
+//! single-threaded builder; periodic flush in the multi-band
+//! actor).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+
+mod cell_stats_serde {
+    use super::CellStats;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use std::collections::BTreeMap;
+
+    pub fn serialize<S: Serializer>(
+        map: &BTreeMap<u32, CellStats>,
+        s: S,
+    ) -> Result<S::Ok, S::Error> {
+        // BTreeMap iterates key-sorted, so the on-disk array is
+        // already in the legacy order without any extra sort step.
+        let pairs: Vec<(u32, &CellStats)> = map.iter().map(|(k, v)| (*k, v)).collect();
+        pairs.serialize(s)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        d: D,
+    ) -> Result<BTreeMap<u32, CellStats>, D::Error> {
+        let pairs: Vec<(u32, CellStats)> = Deserialize::deserialize(d)?;
+        Ok(pairs.into_iter().collect())
+    }
+}
 
 /// Filename the manifest lives under inside the scratch dir.
 pub const MANIFEST_FILENAME: &str = "build-manifest.json";
@@ -44,10 +71,13 @@ pub struct BuildManifest {
     /// Cell IDs that have been fully committed to the work dir.
     /// `BTreeSet` for deterministic JSON output and O(log n) membership.
     pub completed_cells: BTreeSet<u32>,
-    /// Optional per-cell statistics, keyed by cell_id.
-    /// Stored as a `Vec<(cell_id, stats)>` so JSON keys stay numeric
-    /// and reading order is stable.
-    pub cell_stats: Vec<(u32, CellStats)>,
+    /// Per-cell statistics, keyed by cell_id. Wire format is a JSON
+    /// array of `[cell_id, stats]` pairs (numeric keys, stable order)
+    /// — see [`cell_stats_serde`]. In memory we keep a `BTreeMap` for
+    /// O(log n) insert/lookup, which matters at depth 8 where the map
+    /// grows to ~786k entries.
+    #[serde(with = "cell_stats_serde")]
+    pub cell_stats: BTreeMap<u32, CellStats>,
     /// Running totals; redundant with `cell_stats` but cheap to maintain
     /// and avoids a sum on resume.
     pub n_stars: u64,
@@ -74,7 +104,7 @@ impl Default for BuildManifest {
         Self {
             version: MANIFEST_VERSION,
             completed_cells: BTreeSet::new(),
-            cell_stats: Vec::new(),
+            cell_stats: BTreeMap::new(),
             n_stars: 0,
             n_quads: 0,
             completed_per_band: Vec::new(),
@@ -144,34 +174,20 @@ impl BuildManifest {
         Ok(())
     }
 
-    /// Mark `cell_id` complete with the given stats, update running
-    /// totals, and persist atomically.
+    /// Mark `cell_id` complete with the given stats and update running
+    /// totals. Pure in-memory; callers must call [`Self::save`]
+    /// to persist.
     ///
     /// Idempotent: if the cell was already marked complete, the prior
-    /// stats are replaced (running totals adjusted accordingly). This
-    /// matters for resume flows where a chunk file might be re-committed
-    /// before the manifest update lands.
-    pub fn commit_cell(
-        &mut self,
-        scratch_dir: &Path,
-        cell_id: u32,
-        stats: CellStats,
-    ) -> io::Result<()> {
-        if let Some(idx) = self.cell_stats.iter().position(|(c, _)| *c == cell_id) {
-            let prev = self.cell_stats[idx].1.clone();
+    /// stats are replaced (running totals adjusted accordingly).
+    pub fn commit_cell(&mut self, cell_id: u32, stats: CellStats) {
+        if let Some(prev) = self.cell_stats.insert(cell_id, stats.clone()) {
             self.n_stars = self.n_stars.saturating_sub(prev.n_stars);
             self.n_quads = self.n_quads.saturating_sub(prev.n_quads);
-            self.cell_stats[idx].1 = stats.clone();
-        } else {
-            self.cell_stats.push((cell_id, stats.clone()));
-            // Keep cell_stats stably sorted by cell_id for predictable
-            // JSON output. Cheap given expected n ≤ 12,288 (level 5).
-            self.cell_stats.sort_by_key(|(c, _)| *c);
         }
         self.completed_cells.insert(cell_id);
         self.n_stars += stats.n_stars;
         self.n_quads += stats.n_quads;
-        self.save(scratch_dir)
     }
 
     /// Quick membership check used by the cell-driven builder to skip
@@ -265,23 +281,20 @@ mod tests {
 
         let mut m = BuildManifest::default();
         m.commit_cell(
-            &dir,
             42,
             CellStats {
                 n_stars: 1234,
                 n_quads: 567,
             },
-        )
-        .unwrap();
+        );
         m.commit_cell(
-            &dir,
             7,
             CellStats {
                 n_stars: 100,
                 n_quads: 50,
             },
-        )
-        .unwrap();
+        );
+        m.save(&dir).unwrap();
 
         let loaded = BuildManifest::load(&dir).unwrap().expect("manifest");
         assert_eq!(loaded, m);
@@ -296,35 +309,26 @@ mod tests {
 
     #[test]
     fn commit_cell_is_idempotent_in_running_totals() {
-        let dir = tmp_dir("idem");
-        std::fs::create_dir_all(&dir).unwrap();
-
         let mut m = BuildManifest::default();
         m.commit_cell(
-            &dir,
             5,
             CellStats {
                 n_stars: 10,
                 n_quads: 4,
             },
-        )
-        .unwrap();
+        );
         // Re-commit the same cell with different stats — totals should
         // reflect the new value, not the sum.
         m.commit_cell(
-            &dir,
             5,
             CellStats {
                 n_stars: 20,
                 n_quads: 8,
             },
-        )
-        .unwrap();
+        );
         assert_eq!(m.completed_cells.len(), 1);
         assert_eq!(m.n_stars, 20);
         assert_eq!(m.n_quads, 8);
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
