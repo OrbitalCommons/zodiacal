@@ -179,13 +179,7 @@ pub fn run(cfg: &BenchIndexesConfig) -> io::Result<()> {
                 format!("{:.3}", v)
             }
         };
-        let fmt_i = |v: i64| -> String {
-            if v < 0 {
-                String::new()
-            } else {
-                v.to_string()
-            }
-        };
+        let fmt_i = |v: i64| -> String { if v < 0 { String::new() } else { v.to_string() } };
         println!(
             "{},{},{:.1},{},{},{},{},{},{},{},{}",
             case_name,
