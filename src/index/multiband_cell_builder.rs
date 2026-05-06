@@ -37,6 +37,7 @@ use std::hash::{Hash, Hasher};
 use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rayon::prelude::*;
@@ -334,38 +335,59 @@ pub fn build_bundle_work_dir<S: CellStarSource + ?Sized>(
     let mut sorted_bands: Vec<ScaleBand> = config.bands.clone();
     sorted_bands.sort_by_key(|b| b.band_idx);
 
-    let manifest = Mutex::new(manifest);
-    // Tracks how many cells have been committed since the last
-    // `manifest.save`. The orchestrator calls `save` only when this
-    // counter reaches `manifest_save_every`, then resets — turning
-    // the formerly-per-cell fsync into a periodic one. The
-    // post-rayon code path always issues a final save, so even if
-    // `to_process.len() % save_every != 0` the on-disk manifest
-    // matches the in-memory state when the call returns.
-    let manifest_dirty = std::sync::atomic::AtomicUsize::new(0);
+    // Manifest + "cells committed since last save" counter live behind
+    // one Mutex so each commit is a single lock acquire.
+    struct ManifestState {
+        manifest: BuildManifest,
+        dirty: usize,
+    }
+    impl ManifestState {
+        /// Mark a cell complete and advance the dirty counter; save to
+        /// disk when at least `save_every` cells have committed since
+        /// the last save.
+        fn commit(
+            &mut self,
+            work_dir: &Path,
+            cell_id: u32,
+            stats: CellStats,
+            bands: &[ScaleBand],
+            save_every: usize,
+        ) -> io::Result<()> {
+            self.manifest.commit_cell(work_dir, cell_id, stats)?;
+            for b in bands {
+                self.manifest.mark_band_complete(cell_id, b.band_idx);
+            }
+            self.dirty += 1;
+            if self.dirty >= save_every {
+                self.flush(work_dir)?;
+            }
+            Ok(())
+        }
+
+        /// Save the manifest if anything has been committed since the
+        /// last save. No-op otherwise.
+        fn flush(&mut self, work_dir: &Path) -> io::Result<()> {
+            if self.dirty > 0 {
+                self.manifest.save(work_dir)?;
+                self.dirty = 0;
+            }
+            Ok(())
+        }
+    }
+    let state = Mutex::new(ManifestState { manifest, dirty: 0 });
     let manifest_save_every = config.manifest_save_every.max(1);
-    let n_cells_empty = std::sync::atomic::AtomicU32::new(0);
-    let n_cells_processed = std::sync::atomic::AtomicU32::new(0);
+    let n_cells_empty = AtomicU32::new(0);
+    let n_cells_processed = AtomicU32::new(0);
     let max_stars_per_cell = config.max_stars_per_cell;
     let cell_depth = config.cell_depth;
 
-    // Single chokepoint for "this cell is done" — locks the manifest,
-    // marks the cell + each band complete, and saves the manifest only
-    // when the dirty counter hits the batch size. Both the empty-cell
-    // and populated-cell paths funnel through here so the lock-and-mark
-    // ritual lives in one place.
+    // Single chokepoint for "this cell is done"; both the empty-cell
+    // and populated-cell paths funnel through here.
     let commit_cell_progress = |cell_id: u32, stats: CellStats| -> io::Result<()> {
-        let mut m = manifest.lock().unwrap();
-        m.commit_cell(work_dir, cell_id, stats)?;
-        for b in &sorted_bands {
-            m.mark_band_complete(cell_id, b.band_idx);
-        }
-        let pending = manifest_dirty.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-        if pending >= manifest_save_every {
-            m.save(work_dir)?;
-            manifest_dirty.store(0, std::sync::atomic::Ordering::Relaxed);
-        }
-        Ok(())
+        state
+            .lock()
+            .unwrap()
+            .commit(work_dir, cell_id, stats, &sorted_bands, manifest_save_every)
     };
 
     let result: io::Result<()> = to_process.par_iter().try_for_each(|&cell_id| {
@@ -385,7 +407,7 @@ pub fn build_bundle_work_dir<S: CellStarSource + ?Sized>(
             // Empty cell: still mark complete so a resume run doesn't
             // re-pull it.
             commit_cell_progress(cell_id, CellStats::default())?;
-            n_cells_empty.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            n_cells_empty.fetch_add(1, Ordering::Relaxed);
             return Ok::<(), io::Error>(());
         }
 
@@ -467,24 +489,16 @@ pub fn build_bundle_work_dir<S: CellStarSource + ?Sized>(
                 n_quads: n_quads_total,
             },
         )?;
-        n_cells_processed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        n_cells_processed.fetch_add(1, Ordering::Relaxed);
         Ok(())
     });
     result?;
 
-    // Flush any cells that completed since the last batched save.
-    // Without this, an interrupted-but-clean exit (or one whose total
-    // cell count is not a multiple of `manifest_save_every`) would
-    // leave the on-disk manifest behind the in-memory state.
-    {
-        let m = manifest.lock().unwrap();
-        if manifest_dirty.load(std::sync::atomic::Ordering::Relaxed) > 0 {
-            m.save(work_dir)?;
-            manifest_dirty.store(0, std::sync::atomic::Ordering::Relaxed);
-        }
-    }
+    // Flush any cells that committed since the last batched save so
+    // the on-disk manifest matches the in-memory state on return.
+    state.lock().unwrap().flush(work_dir)?;
 
-    let final_manifest = manifest.into_inner().unwrap();
+    let final_manifest = state.into_inner().unwrap().manifest;
 
     // ---------- per-band totals via mmapped re-scan ----------------------
     let mut per_band_quad_counts = vec![0u64; n_bands];
