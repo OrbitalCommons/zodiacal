@@ -349,6 +349,25 @@ pub fn build_bundle_work_dir<S: CellStarSource + ?Sized>(
     let max_stars_per_cell = config.max_stars_per_cell;
     let cell_depth = config.cell_depth;
 
+    // Single chokepoint for "this cell is done" — locks the manifest,
+    // marks the cell + each band complete, and saves the manifest only
+    // when the dirty counter hits the batch size. Both the empty-cell
+    // and populated-cell paths funnel through here so the lock-and-mark
+    // ritual lives in one place.
+    let commit_cell_progress = |cell_id: u32, stats: CellStats| -> io::Result<()> {
+        let mut m = manifest.lock().unwrap();
+        m.commit_cell(work_dir, cell_id, stats)?;
+        for b in &sorted_bands {
+            m.mark_band_complete(cell_id, b.band_idx);
+        }
+        let pending = manifest_dirty.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        if pending >= manifest_save_every {
+            m.save(work_dir)?;
+            manifest_dirty.store(0, std::sync::atomic::Ordering::Relaxed);
+        }
+        Ok(())
+    };
+
     let result: io::Result<()> = to_process.par_iter().try_for_each(|&cell_id| {
         let mut stars = source.stars_in_cell(cell_id)?;
 
@@ -365,17 +384,7 @@ pub fn build_bundle_work_dir<S: CellStarSource + ?Sized>(
         if stars.is_empty() {
             // Empty cell: still mark complete so a resume run doesn't
             // re-pull it.
-            let mut m = manifest.lock().unwrap();
-            m.commit_cell(work_dir, cell_id, CellStats::default())?;
-            for b in &sorted_bands {
-                m.mark_band_complete(cell_id, b.band_idx);
-            }
-            let pending = manifest_dirty.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-            if pending >= manifest_save_every {
-                m.save(work_dir)?;
-                manifest_dirty.store(0, std::sync::atomic::Ordering::Relaxed);
-            }
-            drop(m);
+            commit_cell_progress(cell_id, CellStats::default())?;
             n_cells_empty.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             return Ok::<(), io::Error>(());
         }
@@ -451,25 +460,13 @@ pub fn build_bundle_work_dir<S: CellStarSource + ?Sized>(
         let n_stars = stars.len() as u64;
         let n_quads_total: u64 = band_blocks.iter().map(|(_, qs, _)| qs.len() as u64).sum();
 
-        let mut m = manifest.lock().unwrap();
-        m.commit_cell(
-            work_dir,
+        commit_cell_progress(
             cell_id,
             CellStats {
                 n_stars,
                 n_quads: n_quads_total,
             },
         )?;
-        for b in &sorted_bands {
-            m.mark_band_complete(cell_id, b.band_idx);
-        }
-        let pending = manifest_dirty.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-        if pending >= manifest_save_every {
-            m.save(work_dir)?;
-            manifest_dirty.store(0, std::sync::atomic::Ordering::Relaxed);
-        }
-        drop(m);
-
         n_cells_processed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     });
