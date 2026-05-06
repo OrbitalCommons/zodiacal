@@ -16,7 +16,6 @@ exclude = [
     "benches/",
     "scripts/",
     "scratch/",
-    "test_cases/",
     "zodiacal-tools/",
 ]
 

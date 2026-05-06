@@ -118,7 +118,7 @@ enum Commands {
         bundle_path: PathBuf,
 
         /// Directory of `NNNN.json` test cases.
-        #[arg(long, default_value = "test_cases")]
+        #[arg(long, default_value = "../zodiacal-test-cases/set1-legacy")]
         test_cases_dir: PathBuf,
 
         /// Region radius in degrees. For a 2°×2° square use 1.4142.
