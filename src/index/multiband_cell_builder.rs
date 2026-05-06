@@ -286,18 +286,11 @@ fn nonce_hex(cell_id: u32, seed: u64) -> String {
 ///
 /// Skips writing entirely if both `bands_emit` is all-empty AND
 /// `gaia_records` is empty. Otherwise each file is written to
-/// `.part.HHHHHHHH` and atomically renamed onto its canonical name.
-///
-/// **No `fsync` between write and rename.** Workers don't block on
-/// the disk; the page cache absorbs writes and the kernel flushes
-/// lazily. A power loss between rename and the kernel's writeback
-/// would leave behind a renamed-but-empty (or partial) shard. The
-/// build manifest's batched save (default every 20 cells) is the
-/// only durability anchor — on resume, any cell whose manifest entry
-/// isn't on disk gets rebuilt from scratch and overwrites whatever
-/// was left on disk. Net cost of this trade: a few wasted seconds
-/// per torn cell after a hard crash, in exchange for vastly higher
-/// IOPS on the happy path.
+/// `.part.HHHHHHHH`, fsynced, and atomically renamed onto the
+/// canonical name. The fsync also acts as backpressure for the
+/// kernel's writeback — without it, the page cache fills under
+/// large builds (depth 8+) and every subsequent write blocks
+/// erratically.
 ///
 /// Returns one quad count per band in `bands_emit`, in input order.
 pub fn write_cell_shards(
@@ -330,8 +323,7 @@ pub fn write_cell_shards(
 }
 
 /// Write `final_path` via a `final_path.part.<nonce>` sibling +
-/// in-process buffer flush + atomic rename. Does NOT fsync — see the
-/// note on [`write_cell_shards`] for the durability rationale.
+/// in-process buffer flush + `fsync` + atomic rename.
 fn atomic_write_shard<F>(final_path: &Path, nonce: &str, write: F) -> io::Result<()>
 where
     F: FnOnce(&mut BufWriter<File>) -> io::Result<()>,
@@ -347,6 +339,7 @@ where
         let mut w = BufWriter::new(f);
         write(&mut w)?;
         w.flush()?;
+        w.get_ref().sync_all()?;
     }
     std::fs::rename(&partial, final_path)
 }
