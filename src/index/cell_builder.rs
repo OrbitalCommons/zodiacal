@@ -209,7 +209,8 @@ pub fn build_index_cell_driven<S: CellStarSource + ?Sized>(
         if stars.is_empty() {
             // Mark complete (with zero stats) so a subsequent rerun
             // doesn't re-query an empty cell.
-            manifest.commit_cell(work_dir, cell_id, CellStats::default())?;
+            manifest.commit_cell(cell_id, CellStats::default());
+            manifest.save(work_dir)?;
             summary.n_cells_empty += 1;
             continue;
         }
@@ -231,7 +232,8 @@ pub fn build_index_cell_driven<S: CellStarSource + ?Sized>(
             n_stars: stars.len() as u64,
             n_quads: cell_quads.len() as u64,
         };
-        manifest.commit_cell(work_dir, cell_id, stats)?;
+        manifest.commit_cell(cell_id, stats);
+        manifest.save(work_dir)?;
 
         summary.n_cells_processed += 1;
     }
@@ -419,9 +421,8 @@ fn finalize_index(
     for &cell_id in &manifest.completed_cells {
         let stats = manifest
             .cell_stats
-            .iter()
-            .find(|(c, _)| *c == cell_id)
-            .map(|(_, s)| s.clone())
+            .get(&cell_id)
+            .cloned()
             .unwrap_or_default();
         if stats.n_stars == 0 {
             continue;

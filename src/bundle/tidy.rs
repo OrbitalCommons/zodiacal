@@ -780,14 +780,12 @@ mod tests {
             write_zga(work_dir, cell.cell_id, cell.gaia.clone());
 
             bm.commit_cell(
-                work_dir,
                 cell.cell_id,
                 CellStats {
                     n_stars: cell.gaia.len() as u64,
                     n_quads: (cell.band0_quads.len() + cell.band1_quads.len()) as u64,
                 },
-            )
-            .unwrap();
+            );
             bm.mark_band_complete(cell.cell_id, 0);
             bm.mark_band_complete(cell.cell_id, 1);
         }
