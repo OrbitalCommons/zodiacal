@@ -204,6 +204,60 @@ pub fn cleanup_work_dir_partials(work_dir: &Path) -> io::Result<()> {
 }
 
 // ---------------------------------------------------------------------------
+//  Build-manifest state (orchestrator-local)
+// ---------------------------------------------------------------------------
+
+/// Build-manifest plus the count of cells committed since the last
+/// `save`. The orchestrator wraps this in a `Mutex` so workers
+/// serialize on a single lock per cell-commit. `commit` advances the
+/// counter and only fsyncs the manifest when the configured batch
+/// threshold is reached; `flush` issues an unconditional save iff
+/// anything is pending. Both methods are private to this module.
+struct ManifestState {
+    manifest: BuildManifest,
+    /// Cells committed since the last `save`; reset on every save.
+    dirty: usize,
+}
+
+impl ManifestState {
+    fn new(manifest: BuildManifest) -> Self {
+        Self { manifest, dirty: 0 }
+    }
+
+    /// Mark a cell complete and advance the dirty counter; save to
+    /// disk when at least `save_every` cells have committed since
+    /// the last save.
+    fn commit(
+        &mut self,
+        work_dir: &Path,
+        cell_id: u32,
+        stats: CellStats,
+        bands: &[ScaleBand],
+        save_every: usize,
+    ) -> io::Result<()> {
+        self.manifest.commit_cell(work_dir, cell_id, stats)?;
+        for b in bands {
+            self.manifest.mark_band_complete(cell_id, b.band_idx);
+        }
+        self.dirty += 1;
+        if self.dirty >= save_every {
+            self.flush(work_dir)?;
+        }
+        Ok(())
+    }
+
+    /// Save the manifest if anything has been committed since the
+    /// last save. No-op otherwise.
+    fn flush(&mut self, work_dir: &Path) -> io::Result<()> {
+        if self.dirty > 0 {
+            self.manifest.save(work_dir)?;
+            self.dirty = 0;
+        }
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
 //  Per-cell write
 // ---------------------------------------------------------------------------
 
@@ -337,44 +391,7 @@ pub fn build_bundle_work_dir<S: CellStarSource + ?Sized>(
 
     // Manifest + "cells committed since last save" counter live behind
     // one Mutex so each commit is a single lock acquire.
-    struct ManifestState {
-        manifest: BuildManifest,
-        dirty: usize,
-    }
-    impl ManifestState {
-        /// Mark a cell complete and advance the dirty counter; save to
-        /// disk when at least `save_every` cells have committed since
-        /// the last save.
-        fn commit(
-            &mut self,
-            work_dir: &Path,
-            cell_id: u32,
-            stats: CellStats,
-            bands: &[ScaleBand],
-            save_every: usize,
-        ) -> io::Result<()> {
-            self.manifest.commit_cell(work_dir, cell_id, stats)?;
-            for b in bands {
-                self.manifest.mark_band_complete(cell_id, b.band_idx);
-            }
-            self.dirty += 1;
-            if self.dirty >= save_every {
-                self.flush(work_dir)?;
-            }
-            Ok(())
-        }
-
-        /// Save the manifest if anything has been committed since the
-        /// last save. No-op otherwise.
-        fn flush(&mut self, work_dir: &Path) -> io::Result<()> {
-            if self.dirty > 0 {
-                self.manifest.save(work_dir)?;
-                self.dirty = 0;
-            }
-            Ok(())
-        }
-    }
-    let state = Mutex::new(ManifestState { manifest, dirty: 0 });
+    let state = Mutex::new(ManifestState::new(manifest));
     let manifest_save_every = config.manifest_save_every.max(1);
     let n_cells_empty = AtomicU32::new(0);
     let n_cells_processed = AtomicU32::new(0);
