@@ -238,6 +238,7 @@ fn build_test_bundle(work_dir: &Path, output_dir: &Path, source: &ClusteredSourc
         bands: bands.clone(),
         max_stars_per_cell: 10_000,
         cell_depth: TEST_DEPTH,
+        manifest_save_every: 1,
     };
     let paths = BundleWorkDirPaths {
         work_dir: work_dir.to_path_buf(),

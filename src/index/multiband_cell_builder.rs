@@ -37,6 +37,7 @@ use std::hash::{Hash, Hasher};
 use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rayon::prelude::*;
@@ -82,6 +83,18 @@ pub struct MultiBandCellBuildConfig {
     pub max_stars_per_cell: usize,
     /// HEALPix depth at which cells are sharded.
     pub cell_depth: u8,
+    /// Save the build manifest to disk every N cell completions (and
+    /// once at end-of-build). Defaults to 20.
+    ///
+    /// Each manifest save is a `BuildManifest::save` → fsync, which at
+    /// large `cell_count` (e.g. 786K cells at depth 8) becomes the
+    /// dominant wall-time cost — workers serialize on the manifest
+    /// mutex while one of them does a synchronous disk write. Batching
+    /// trades resume granularity (after a crash, at most N committed
+    /// cells may need to be redone) for ~N× wall-time speedup.
+    ///
+    /// `1` recovers the per-cell-save behaviour. `0` is treated as 1.
+    pub manifest_save_every: usize,
 }
 
 /// Filesystem layout for the build's work directory.
@@ -188,6 +201,60 @@ pub fn cleanup_work_dir_partials(work_dir: &Path) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+//  Build-manifest state (orchestrator-local)
+// ---------------------------------------------------------------------------
+
+/// Build-manifest plus the count of cells committed since the last
+/// `save`. The orchestrator wraps this in a `Mutex` so workers
+/// serialize on a single lock per cell-commit. `commit` advances the
+/// counter and only fsyncs the manifest when the configured batch
+/// threshold is reached; `flush` issues an unconditional save iff
+/// anything is pending. Both methods are private to this module.
+struct ManifestState {
+    manifest: BuildManifest,
+    /// Cells committed since the last `save`; reset on every save.
+    dirty: usize,
+}
+
+impl ManifestState {
+    fn new(manifest: BuildManifest) -> Self {
+        Self { manifest, dirty: 0 }
+    }
+
+    /// Mark a cell complete and advance the dirty counter; save to
+    /// disk when at least `save_every` cells have committed since
+    /// the last save.
+    fn commit(
+        &mut self,
+        work_dir: &Path,
+        cell_id: u32,
+        stats: CellStats,
+        bands: &[ScaleBand],
+        save_every: usize,
+    ) -> io::Result<()> {
+        self.manifest.commit_cell(work_dir, cell_id, stats)?;
+        for b in bands {
+            self.manifest.mark_band_complete(cell_id, b.band_idx);
+        }
+        self.dirty += 1;
+        if self.dirty >= save_every {
+            self.flush(work_dir)?;
+        }
+        Ok(())
+    }
+
+    /// Save the manifest if anything has been committed since the
+    /// last save. No-op otherwise.
+    fn flush(&mut self, work_dir: &Path) -> io::Result<()> {
+        if self.dirty > 0 {
+            self.manifest.save(work_dir)?;
+            self.dirty = 0;
+        }
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -322,11 +389,23 @@ pub fn build_bundle_work_dir<S: CellStarSource + ?Sized>(
     let mut sorted_bands: Vec<ScaleBand> = config.bands.clone();
     sorted_bands.sort_by_key(|b| b.band_idx);
 
-    let manifest = Mutex::new(manifest);
-    let n_cells_empty = std::sync::atomic::AtomicU32::new(0);
-    let n_cells_processed = std::sync::atomic::AtomicU32::new(0);
+    // Manifest + "cells committed since last save" counter live behind
+    // one Mutex so each commit is a single lock acquire.
+    let state = Mutex::new(ManifestState::new(manifest));
+    let manifest_save_every = config.manifest_save_every.max(1);
+    let n_cells_empty = AtomicU32::new(0);
+    let n_cells_processed = AtomicU32::new(0);
     let max_stars_per_cell = config.max_stars_per_cell;
     let cell_depth = config.cell_depth;
+
+    // Single chokepoint for "this cell is done"; both the empty-cell
+    // and populated-cell paths funnel through here.
+    let commit_cell_progress = |cell_id: u32, stats: CellStats| -> io::Result<()> {
+        state
+            .lock()
+            .unwrap()
+            .commit(work_dir, cell_id, stats, &sorted_bands, manifest_save_every)
+    };
 
     let result: io::Result<()> = to_process.par_iter().try_for_each(|&cell_id| {
         let mut stars = source.stars_in_cell(cell_id)?;
@@ -344,14 +423,8 @@ pub fn build_bundle_work_dir<S: CellStarSource + ?Sized>(
         if stars.is_empty() {
             // Empty cell: still mark complete so a resume run doesn't
             // re-pull it.
-            let mut m = manifest.lock().unwrap();
-            m.commit_cell(work_dir, cell_id, CellStats::default())?;
-            for b in &sorted_bands {
-                m.mark_band_complete(cell_id, b.band_idx);
-            }
-            m.save(work_dir)?;
-            drop(m);
-            n_cells_empty.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            commit_cell_progress(cell_id, CellStats::default())?;
+            n_cells_empty.fetch_add(1, Ordering::Relaxed);
             return Ok::<(), io::Error>(());
         }
 
@@ -426,27 +499,23 @@ pub fn build_bundle_work_dir<S: CellStarSource + ?Sized>(
         let n_stars = stars.len() as u64;
         let n_quads_total: u64 = band_blocks.iter().map(|(_, qs, _)| qs.len() as u64).sum();
 
-        let mut m = manifest.lock().unwrap();
-        m.commit_cell(
-            work_dir,
+        commit_cell_progress(
             cell_id,
             CellStats {
                 n_stars,
                 n_quads: n_quads_total,
             },
         )?;
-        for b in &sorted_bands {
-            m.mark_band_complete(cell_id, b.band_idx);
-        }
-        m.save(work_dir)?;
-        drop(m);
-
-        n_cells_processed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        n_cells_processed.fetch_add(1, Ordering::Relaxed);
         Ok(())
     });
     result?;
 
-    let final_manifest = manifest.into_inner().unwrap();
+    // Flush any cells that committed since the last batched save so
+    // the on-disk manifest matches the in-memory state on return.
+    state.lock().unwrap().flush(work_dir)?;
+
+    let final_manifest = state.into_inner().unwrap().manifest;
 
     // ---------- per-band totals via mmapped re-scan ----------------------
     let mut per_band_quad_counts = vec![0u64; n_bands];
@@ -629,6 +698,7 @@ mod tests {
             bands: three_bands(),
             max_stars_per_cell: 10_000,
             cell_depth: 5,
+            manifest_save_every: 1,
         }
     }
 
@@ -923,6 +993,7 @@ mod tests {
             ],
             max_stars_per_cell: 10_000,
             cell_depth: 5,
+            manifest_save_every: 1,
         };
 
         let source = SyntheticSource {
@@ -1005,6 +1076,7 @@ mod tests {
             bands: three_bands(),
             max_stars_per_cell: 10,
             cell_depth: 5,
+            manifest_save_every: 1,
         };
         build_bundle_work_dir(&LotsOfStars, &cfg, &paths).unwrap();
 
@@ -1085,6 +1157,7 @@ mod tests {
                 bands,
                 max_stars_per_cell: 100,
                 cell_depth: 5,
+                manifest_save_every: 1,
             };
             let source = SyntheticSource {
                 n_cells: 1,

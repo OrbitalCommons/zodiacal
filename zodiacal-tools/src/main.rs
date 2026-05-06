@@ -246,6 +246,17 @@ enum Commands {
         /// alternate output form without rebuilding.
         #[arg(long, default_value_t = false)]
         prune_work_dir: bool,
+
+        /// Persist the build manifest every N cell completions
+        /// instead of after every cell. Each save is an
+        /// fsync-blocking write; at large `cell_count` (e.g. 786K
+        /// at depth 8) this batching is the difference between a
+        /// 10-hour build and a 1-hour one. Resume granularity
+        /// becomes "at most N committed cells redone after a
+        /// crash", which is cheap. Pass 1 to recover per-cell-save
+        /// behaviour.
+        #[arg(long, default_value_t = 20)]
+        manifest_save_every: usize,
     },
 }
 
@@ -333,6 +344,7 @@ fn main() {
             experiment,
             threads,
             prune_work_dir,
+            manifest_save_every,
         } => {
             let cfg = BuildFromExcerptSeriesConfig {
                 excerpt_dir: excerpt_dir.clone(),
@@ -350,6 +362,7 @@ fn main() {
                 experiment: experiment.clone(),
                 threads: *threads,
                 prune_work_dir: *prune_work_dir,
+                manifest_save_every: *manifest_save_every,
             };
             if let Err(e) = run_build_from_excerpt_series(&cfg) {
                 eprintln!("build-from-excerpt-series failed: {e}");

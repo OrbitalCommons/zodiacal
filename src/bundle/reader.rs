@@ -934,6 +934,7 @@ mod tests {
             bands: two_bands(),
             max_stars_per_cell: 1_000,
             cell_depth: TEST_DEPTH,
+            manifest_save_every: 1,
         };
         let paths = BundleWorkDirPaths {
             work_dir: work_tmp.path().to_path_buf(),
@@ -954,6 +955,7 @@ mod tests {
             bands: two_bands(),
             max_stars_per_cell: 1_000,
             cell_depth: TEST_DEPTH,
+            manifest_save_every: 1,
         };
         let paths = BundleWorkDirPaths {
             work_dir: work_tmp.path().to_path_buf(),
