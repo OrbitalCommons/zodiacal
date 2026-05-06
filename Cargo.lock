@@ -3761,9 +3761,11 @@ dependencies = [
 name = "zodiacal-tools"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "clap",
  "rayon",
  "starfield-gaia",
+ "tempfile",
  "zodiacal",
 ]
 
