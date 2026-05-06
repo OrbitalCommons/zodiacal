@@ -566,7 +566,7 @@ pub fn build_bundle_work_dir<S: CellStarSource + ?Sized>(
                         Vec::with_capacity(band_cfg.quads_per_cell);
                     let mut keep_codes: Vec<Code> =
                         Vec::with_capacity(band_cfg.quads_per_cell);
-                    for (q, c) in raw_quads.into_iter().zip(raw_codes.into_iter()) {
+                    for (q, c) in raw_quads.into_iter().zip(raw_codes) {
                         if keep_quads.len() >= band_cfg.quads_per_cell {
                             break;
                         }
