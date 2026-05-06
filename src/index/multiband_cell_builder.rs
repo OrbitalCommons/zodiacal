@@ -37,8 +37,8 @@ use std::hash::{Hash, Hasher};
 use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use rayon::prelude::*;
 
@@ -258,6 +258,88 @@ impl ManifestState {
 }
 
 // ---------------------------------------------------------------------------
+//  Per-phase profiling counters
+// ---------------------------------------------------------------------------
+
+/// Per-phase timing accumulators. Workers add their own elapsed times
+/// to each bucket; one worker periodically prints a rolling summary
+/// (every `PROFILE_PRINT_EVERY` committed cells) to stderr so the
+/// rolling-build log shows where wall-time is going. Cost is one
+/// `Instant::now()` and one atomic add per phase per cell — vs.
+/// per-cell work in the millisecond range, this is well under 0.1%
+/// overhead and worth keeping always-on.
+struct PhaseStats {
+    pull_stars_us: AtomicU64,
+    truncate_us: AtomicU64,
+    build_quads_us: AtomicU64,
+    gaia_records_us: AtomicU64,
+    write_shards_us: AtomicU64,
+    commit_us: AtomicU64,
+    n_cells: AtomicU64,
+    n_empty: AtomicU64,
+    /// Number of cells committed at the last print, so any one worker
+    /// can claim the next print slot without coordinating.
+    last_print_n: AtomicU64,
+}
+
+const PROFILE_PRINT_EVERY: u64 = 1000;
+
+impl PhaseStats {
+    fn new() -> Self {
+        Self {
+            pull_stars_us: AtomicU64::new(0),
+            truncate_us: AtomicU64::new(0),
+            build_quads_us: AtomicU64::new(0),
+            gaia_records_us: AtomicU64::new(0),
+            write_shards_us: AtomicU64::new(0),
+            commit_us: AtomicU64::new(0),
+            n_cells: AtomicU64::new(0),
+            n_empty: AtomicU64::new(0),
+            last_print_n: AtomicU64::new(0),
+        }
+    }
+
+    /// Try to print a rolling summary if enough cells have been
+    /// committed since the last print. Atomic CAS on `last_print_n`
+    /// ensures only one worker prints per window.
+    fn maybe_print(&self) {
+        let n = self.n_cells.load(Ordering::Relaxed);
+        let last = self.last_print_n.load(Ordering::Relaxed);
+        if n.saturating_sub(last) < PROFILE_PRINT_EVERY {
+            return;
+        }
+        if self
+            .last_print_n
+            .compare_exchange(last, n, Ordering::Relaxed, Ordering::Relaxed)
+            .is_err()
+        {
+            return; // another worker already printed
+        }
+        self.print_summary();
+    }
+
+    fn print_summary(&self) {
+        let n = self.n_cells.load(Ordering::Relaxed);
+        if n == 0 {
+            return;
+        }
+        let nf = n as f64;
+        let avg_ms = |us: &AtomicU64| -> f64 { us.load(Ordering::Relaxed) as f64 / nf / 1000.0 };
+        eprintln!(
+            "[phase] n={} empty={} avg/cell ms: pull={:.2} trunc={:.2} quads={:.2} gaia={:.2} write={:.2} commit={:.2}",
+            n,
+            self.n_empty.load(Ordering::Relaxed),
+            avg_ms(&self.pull_stars_us),
+            avg_ms(&self.truncate_us),
+            avg_ms(&self.build_quads_us),
+            avg_ms(&self.gaia_records_us),
+            avg_ms(&self.write_shards_us),
+            avg_ms(&self.commit_us),
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 //  Per-cell write
 // ---------------------------------------------------------------------------
 
@@ -400,19 +482,34 @@ pub fn build_bundle_work_dir<S: CellStarSource + ?Sized>(
     let max_stars_per_cell = config.max_stars_per_cell;
     let cell_depth = config.cell_depth;
 
+    let phase_stats = PhaseStats::new();
+
     // Single chokepoint for "this cell is done"; both the empty-cell
     // and populated-cell paths funnel through here.
     let commit_cell_progress = |cell_id: u32, stats: CellStats| -> io::Result<()> {
-        state
-            .lock()
-            .unwrap()
-            .commit(work_dir, cell_id, stats, &sorted_bands, manifest_save_every)
+        let t0 = Instant::now();
+        let r = state.lock().unwrap().commit(
+            work_dir,
+            cell_id,
+            stats,
+            &sorted_bands,
+            manifest_save_every,
+        );
+        phase_stats
+            .commit_us
+            .fetch_add(t0.elapsed().as_micros() as u64, Ordering::Relaxed);
+        r
     };
 
     let result: io::Result<()> = to_process.par_iter().try_for_each(|&cell_id| {
+        let t_pull = Instant::now();
         let mut stars = source.stars_in_cell(cell_id)?;
+        phase_stats
+            .pull_stars_us
+            .fetch_add(t_pull.elapsed().as_micros() as u64, Ordering::Relaxed);
 
         // Brightness-truncate: sort by mag ascending, take the first N.
+        let t_trunc = Instant::now();
         if stars.len() > max_stars_per_cell {
             stars.sort_by(|a, b| {
                 a.mag
@@ -421,22 +518,33 @@ pub fn build_bundle_work_dir<S: CellStarSource + ?Sized>(
             });
             stars.truncate(max_stars_per_cell);
         }
+        phase_stats
+            .truncate_us
+            .fetch_add(t_trunc.elapsed().as_micros() as u64, Ordering::Relaxed);
 
         if stars.is_empty() {
             // Empty cell: still mark complete so a resume run doesn't
             // re-pull it.
             commit_cell_progress(cell_id, CellStats::default())?;
             n_cells_empty.fetch_add(1, Ordering::Relaxed);
+            phase_stats.n_empty.fetch_add(1, Ordering::Relaxed);
+            phase_stats.n_cells.fetch_add(1, Ordering::Relaxed);
+            phase_stats.maybe_print();
             return Ok::<(), io::Error>(());
         }
 
         // Build all bands' quads over this cell's stars (sorted-by-mag
         // already; build_quads_for_cell re-sorts internally, that's
         // fine — same result).
+        let t_quads = Instant::now();
         let mut band_blocks = build_quads_for_cell_multiband(&stars, &sorted_bands);
+        phase_stats
+            .build_quads_us
+            .fetch_add(t_quads.elapsed().as_micros() as u64, Ordering::Relaxed);
 
         // Build the gaia record vector for this cell, preserving
         // `stars` order so quad star_ids are still valid.
+        let t_gaia = Instant::now();
         let mut gaia_records: Vec<GaiaRecord> = stars
             .iter()
             .map(|s| {
@@ -477,6 +585,9 @@ pub fn build_bundle_work_dir<S: CellStarSource + ?Sized>(
                 }
             }
         }
+        phase_stats
+            .gaia_records_us
+            .fetch_add(t_gaia.elapsed().as_micros() as u64, Ordering::Relaxed);
 
         // Materialize band emit slices for the writer (must be after
         // the remap above).
@@ -489,6 +600,7 @@ pub fn build_bundle_work_dir<S: CellStarSource + ?Sized>(
             })
             .collect();
 
+        let t_write = Instant::now();
         let _ = write_cell_shards(
             work_dir,
             cell_depth,
@@ -497,6 +609,9 @@ pub fn build_bundle_work_dir<S: CellStarSource + ?Sized>(
             gaia_records,
             cell_id as u64,
         )?;
+        phase_stats
+            .write_shards_us
+            .fetch_add(t_write.elapsed().as_micros() as u64, Ordering::Relaxed);
 
         let n_stars = stars.len() as u64;
         let n_quads_total: u64 = band_blocks.iter().map(|(_, qs, _)| qs.len() as u64).sum();
@@ -509,9 +624,12 @@ pub fn build_bundle_work_dir<S: CellStarSource + ?Sized>(
             },
         )?;
         n_cells_processed.fetch_add(1, Ordering::Relaxed);
+        phase_stats.n_cells.fetch_add(1, Ordering::Relaxed);
+        phase_stats.maybe_print();
         Ok(())
     });
     result?;
+    phase_stats.print_summary();
 
     // Flush any cells that committed since the last batched save so
     // the on-disk manifest matches the in-memory state on return.
