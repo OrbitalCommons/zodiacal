@@ -403,7 +403,11 @@ impl std::fmt::Debug for BycellExcerptSource {
     }
 }
 
-const PARTITION_CACHE_CAPACITY: usize = 32;
+// Small because the orchestrator sorts work by partition key, so
+// adjacent units of work share the same partition. The cache only needs
+// to absorb the brief overlap when a worker advances to the next
+// partition while another is still finishing the previous one.
+const PARTITION_CACHE_CAPACITY: usize = 4;
 
 struct PartitionCache {
     /// Map: source_cell_id → Arc<HashMap<bundle_cell_id, stars>>.
@@ -602,21 +606,33 @@ impl BycellExcerptSource {
     }
 }
 
+impl BycellExcerptSource {
+    /// Map a bundle cell to its parent source-shard cell. Used both
+    /// internally and for `source_partition_key` so the orchestrator
+    /// can batch siblings together.
+    fn parent_source_cell(&self, cell_id: u32) -> u32 {
+        if self.bundle_depth == self.source_depth {
+            cell_id
+        } else {
+            let delta = self.bundle_depth - self.source_depth;
+            cell_id >> (2 * delta as u32)
+        }
+    }
+}
+
 impl CellStarSource for BycellExcerptSource {
     fn cell_count(&self) -> u32 {
         self.cell_count
     }
 
     fn stars_in_cell(&self, cell_id: u32) -> std::io::Result<Vec<CellStar>> {
-        // Find the parent source cell for this bundle cell.
-        let source_cell = if self.bundle_depth == self.source_depth {
-            cell_id
-        } else {
-            let delta = self.bundle_depth - self.source_depth;
-            cell_id >> (2 * delta as u32)
-        };
+        let source_cell = self.parent_source_cell(cell_id);
         let partition = self.load_and_partition(source_cell)?;
         Ok(partition.get(&cell_id).cloned().unwrap_or_default())
+    }
+
+    fn source_partition_key(&self, cell_id: u32) -> u32 {
+        self.parent_source_cell(cell_id)
     }
 }
 

@@ -91,6 +91,19 @@ pub trait CellStarSource: Sync {
     /// `cell_id`, after applying any source-side magnitude/quality
     /// filters. Order is irrelevant — the builder sorts.
     fn stars_in_cell(&self, cell_id: u32) -> io::Result<Vec<CellStar>>;
+
+    /// Group key for cache locality. Cells that return the same key
+    /// share an underlying source partition, so the orchestrator can
+    /// batch them together to keep the partition cache hot.
+    ///
+    /// The default returns `cell_id`, which disables grouping (every
+    /// cell is its own group). Sources that derive bundle cells from a
+    /// coarser source grid (e.g. depth-5 CSV shards feeding a depth-8
+    /// bundle) should override to return the source-cell parent so
+    /// bundle siblings cluster.
+    fn source_partition_key(&self, cell_id: u32) -> u32 {
+        cell_id
+    }
 }
 
 /// Configuration for [`build_index_cell_driven`].

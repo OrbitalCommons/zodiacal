@@ -345,6 +345,33 @@ pub fn build_bundle_work_dir<S: CellStarSource + ?Sized>(
         }
     }
 
+    // Group bundle cells by their source partition so a rayon worker
+    // processes all siblings of one source partition before moving on.
+    // This keeps the partition cache small: with random access, every
+    // worker can hold a different partition concurrently (peak memory
+    // ≈ N_workers × partition_size); with grouped access, each worker
+    // touches one partition at a time and the cache only needs a few
+    // slots to absorb cross-worker overlap.
+    to_process.sort_by_key(|&c| source.source_partition_key(c));
+    let mut partition_groups: Vec<Vec<u32>> = Vec::new();
+    {
+        let mut current_key: Option<u32> = None;
+        let mut current: Vec<u32> = Vec::new();
+        for cell_id in to_process {
+            let key = source.source_partition_key(cell_id);
+            if Some(key) != current_key {
+                if !current.is_empty() {
+                    partition_groups.push(std::mem::take(&mut current));
+                }
+                current_key = Some(key);
+            }
+            current.push(cell_id);
+        }
+        if !current.is_empty() {
+            partition_groups.push(current);
+        }
+    }
+
     // Sort the bands once up front; pass them to the per-cell loop in
     // a stable band-idx order so the band table on disk matches the
     // configured layout.
@@ -429,7 +456,9 @@ pub fn build_bundle_work_dir<S: CellStarSource + ?Sized>(
             Ok(())
         };
 
-        let result: io::Result<()> = to_process.par_iter().try_for_each(|&cell_id| {
+        // Per-cell body, hoisted into a closure so the par-over-groups
+        // loop below can call it in sequence within each group.
+        let process_cell = |cell_id: u32| -> io::Result<()> {
             let mut stars = source.stars_in_cell(cell_id)?;
 
             // Brightness-truncate: sort by mag ascending, take the first N.
@@ -447,7 +476,7 @@ pub fn build_bundle_work_dir<S: CellStarSource + ?Sized>(
                 // re-pull it.
                 commit_cell_progress(cell_id, CellStats::default())?;
                 n_cells_empty.fetch_add(1, Ordering::Relaxed);
-                return Ok::<(), io::Error>(());
+                return Ok(());
             }
 
             // Build all bands' quads over this cell's stars (sorted-by-mag
@@ -529,6 +558,17 @@ pub fn build_bundle_work_dir<S: CellStarSource + ?Sized>(
                 },
             )?;
             n_cells_processed.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        };
+
+        // Iterate over partition groups (one group = all bundle siblings
+        // of a source partition). Each rayon worker handles a whole
+        // group in sequence so the partition cache only needs to absorb
+        // cross-worker overlap, not random per-cell access.
+        let result: io::Result<()> = partition_groups.par_iter().try_for_each(|group| {
+            for &cell_id in group {
+                process_cell(cell_id)?;
+            }
             Ok(())
         });
         // Closing the channel signals the actor to drain remaining
