@@ -247,16 +247,16 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         prune_work_dir: bool,
 
-        /// Persist the build manifest every N cell completions
-        /// instead of after every cell. Each save is an
-        /// fsync-blocking write; at large `cell_count` (e.g. 786K
-        /// at depth 8) this batching is the difference between a
-        /// 10-hour build and a 1-hour one. Resume granularity
-        /// becomes "at most N committed cells redone after a
-        /// crash", which is cheap. Pass 1 to recover per-cell-save
-        /// behaviour.
-        #[arg(long, default_value_t = 20)]
-        manifest_save_every: usize,
+        /// Wall-clock seconds between BuildManifest snapshots to
+        /// disk. The orchestrator runs a dedicated actor thread
+        /// that owns the manifest; workers send completion events
+        /// to it via a channel and never block on a manifest mutex.
+        /// Resume granularity is "at most this many seconds of
+        /// progress redone after a crash". Pass 0 to save only on
+        /// shutdown (no periodic snapshots — fastest, but a crash
+        /// loses everything since the last clean exit).
+        #[arg(long, default_value_t = 30)]
+        manifest_save_interval_secs: u64,
     },
 }
 
@@ -344,7 +344,7 @@ fn main() {
             experiment,
             threads,
             prune_work_dir,
-            manifest_save_every,
+            manifest_save_interval_secs,
         } => {
             let cfg = BuildFromExcerptSeriesConfig {
                 excerpt_dir: excerpt_dir.clone(),
@@ -362,7 +362,7 @@ fn main() {
                 experiment: experiment.clone(),
                 threads: *threads,
                 prune_work_dir: *prune_work_dir,
-                manifest_save_every: *manifest_save_every,
+                manifest_save_interval_secs: *manifest_save_interval_secs,
             };
             if let Err(e) = run_build_from_excerpt_series(&cfg) {
                 eprintln!("build-from-excerpt-series failed: {e}");

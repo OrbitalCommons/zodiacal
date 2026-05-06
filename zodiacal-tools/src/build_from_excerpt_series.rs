@@ -106,9 +106,9 @@ pub struct BuildFromExcerptSeriesConfig {
     pub threads: Option<usize>,
     /// If true, [`prune_work_dir`] is called after a successful tidy.
     pub prune_work_dir: bool,
-    /// Save the build manifest to disk every N cell completions.
-    /// Defaults to 20 in the CLI; 1 recovers per-cell-save behaviour.
-    pub manifest_save_every: usize,
+    /// Wall-clock seconds between BuildManifest snapshots to disk.
+    /// Defaults to 30 in the CLI; 0 means "save only on shutdown".
+    pub manifest_save_interval_secs: u64,
 }
 
 /// Top-level entry point.
@@ -198,7 +198,7 @@ pub fn run(cfg: &BuildFromExcerptSeriesConfig) -> Result<(), String> {
         bands: bands.clone(),
         max_stars_per_cell: cfg.max_stars_per_cell,
         cell_depth: cfg.cell_depth,
-        manifest_save_every: cfg.manifest_save_every.max(1),
+        manifest_save_interval_secs: cfg.manifest_save_interval_secs,
     };
     let paths = BundleWorkDirPaths {
         work_dir: cfg.work_dir.clone(),
@@ -915,7 +915,7 @@ mod tests {
             bands: bands.clone(),
             max_stars_per_cell: 1_000,
             cell_depth: TEST_DEPTH,
-            manifest_save_every: 1,
+            manifest_save_interval_secs: 0,
         };
         let paths = BundleWorkDirPaths {
             work_dir: work_tmp.path().to_path_buf(),

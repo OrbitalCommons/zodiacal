@@ -36,9 +36,10 @@ use std::fs::File;
 use std::hash::{Hash, Hasher};
 use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::mpsc;
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use rayon::prelude::*;
 
@@ -83,18 +84,16 @@ pub struct MultiBandCellBuildConfig {
     pub max_stars_per_cell: usize,
     /// HEALPix depth at which cells are sharded.
     pub cell_depth: u8,
-    /// Save the build manifest to disk every N cell completions (and
-    /// once at end-of-build). Defaults to 20.
+    /// Wall-clock interval (seconds) between BuildManifest snapshots
+    /// to disk. Defaults to 30.
     ///
-    /// Each manifest save is a `BuildManifest::save` → fsync, which at
-    /// large `cell_count` (e.g. 786K cells at depth 8) becomes the
-    /// dominant wall-time cost — workers serialize on the manifest
-    /// mutex while one of them does a synchronous disk write. Batching
-    /// trades resume granularity (after a crash, at most N committed
-    /// cells may need to be redone) for ~N× wall-time speedup.
-    ///
-    /// `1` recovers the per-cell-save behaviour. `0` is treated as 1.
-    pub manifest_save_every: usize,
+    /// The orchestrator runs a dedicated actor thread that owns the
+    /// manifest; workers send completion events to it via a channel
+    /// and never block on a manifest mutex. The actor saves on this
+    /// cadence regardless of throughput, so resume granularity is
+    /// "at most this many seconds of progress redone after a crash".
+    /// `0` means "save only at end of build".
+    pub manifest_save_interval_secs: u64,
 }
 
 /// Filesystem layout for the build's work directory.
@@ -207,135 +206,54 @@ pub fn cleanup_work_dir_partials(work_dir: &Path) -> io::Result<()> {
 //  Build-manifest state (orchestrator-local)
 // ---------------------------------------------------------------------------
 
-/// Build-manifest plus the count of cells committed since the last
-/// `save`. The orchestrator wraps this in a `Mutex` so workers
-/// serialize on a single lock per cell-commit. `commit` advances the
-/// counter and only fsyncs the manifest when the configured batch
-/// threshold is reached; `flush` issues an unconditional save iff
-/// anything is pending. Both methods are private to this module.
+/// One worker → actor message: "I committed cell X, please record
+/// it." The actor thread (see `build_bundle_work_dir`) owns the
+/// `BuildManifest` and processes these in arrival order. Workers
+/// don't block on a mutex — they fire-and-forget into an unbounded
+/// `mpsc::channel`, so the only synchronization cost is the channel's
+/// internal lock-free queue.
+struct CellCompletion {
+    cell_id: u32,
+    stats: CellStats,
+}
+
+/// Build-manifest plus a "dirty since last save" flag. Owned
+/// exclusively by the actor thread; no locking. `apply` records one
+/// cell completion in memory; `flush` saves to disk iff dirty.
 struct ManifestState {
     manifest: BuildManifest,
-    /// Cells committed since the last `save`; reset on every save.
-    dirty: usize,
+    dirty: bool,
 }
 
 impl ManifestState {
     fn new(manifest: BuildManifest) -> Self {
-        Self { manifest, dirty: 0 }
+        Self {
+            manifest,
+            dirty: false,
+        }
     }
 
-    /// Mark a cell complete and advance the dirty counter; save to
-    /// disk when at least `save_every` cells have committed since
-    /// the last save.
-    fn commit(
+    fn apply(
         &mut self,
         work_dir: &Path,
-        cell_id: u32,
-        stats: CellStats,
+        completion: CellCompletion,
         bands: &[ScaleBand],
-        save_every: usize,
     ) -> io::Result<()> {
+        let CellCompletion { cell_id, stats } = completion;
         self.manifest.commit_cell(work_dir, cell_id, stats)?;
         for b in bands {
             self.manifest.mark_band_complete(cell_id, b.band_idx);
         }
-        self.dirty += 1;
-        if self.dirty >= save_every {
-            self.flush(work_dir)?;
-        }
+        self.dirty = true;
         Ok(())
     }
 
-    /// Save the manifest if anything has been committed since the
-    /// last save. No-op otherwise.
     fn flush(&mut self, work_dir: &Path) -> io::Result<()> {
-        if self.dirty > 0 {
+        if self.dirty {
             self.manifest.save(work_dir)?;
-            self.dirty = 0;
+            self.dirty = false;
         }
         Ok(())
-    }
-}
-
-// ---------------------------------------------------------------------------
-//  Per-phase profiling counters
-// ---------------------------------------------------------------------------
-
-/// Per-phase timing accumulators. Workers add their own elapsed times
-/// to each bucket; one worker periodically prints a rolling summary
-/// (every `PROFILE_PRINT_EVERY` committed cells) to stderr so the
-/// rolling-build log shows where wall-time is going. Cost is one
-/// `Instant::now()` and one atomic add per phase per cell — vs.
-/// per-cell work in the millisecond range, this is well under 0.1%
-/// overhead and worth keeping always-on.
-struct PhaseStats {
-    pull_stars_us: AtomicU64,
-    truncate_us: AtomicU64,
-    build_quads_us: AtomicU64,
-    gaia_records_us: AtomicU64,
-    write_shards_us: AtomicU64,
-    commit_us: AtomicU64,
-    n_cells: AtomicU64,
-    n_empty: AtomicU64,
-    /// Number of cells committed at the last print, so any one worker
-    /// can claim the next print slot without coordinating.
-    last_print_n: AtomicU64,
-}
-
-const PROFILE_PRINT_EVERY: u64 = 1000;
-
-impl PhaseStats {
-    fn new() -> Self {
-        Self {
-            pull_stars_us: AtomicU64::new(0),
-            truncate_us: AtomicU64::new(0),
-            build_quads_us: AtomicU64::new(0),
-            gaia_records_us: AtomicU64::new(0),
-            write_shards_us: AtomicU64::new(0),
-            commit_us: AtomicU64::new(0),
-            n_cells: AtomicU64::new(0),
-            n_empty: AtomicU64::new(0),
-            last_print_n: AtomicU64::new(0),
-        }
-    }
-
-    /// Try to print a rolling summary if enough cells have been
-    /// committed since the last print. Atomic CAS on `last_print_n`
-    /// ensures only one worker prints per window.
-    fn maybe_print(&self) {
-        let n = self.n_cells.load(Ordering::Relaxed);
-        let last = self.last_print_n.load(Ordering::Relaxed);
-        if n.saturating_sub(last) < PROFILE_PRINT_EVERY {
-            return;
-        }
-        if self
-            .last_print_n
-            .compare_exchange(last, n, Ordering::Relaxed, Ordering::Relaxed)
-            .is_err()
-        {
-            return; // another worker already printed
-        }
-        self.print_summary();
-    }
-
-    fn print_summary(&self) {
-        let n = self.n_cells.load(Ordering::Relaxed);
-        if n == 0 {
-            return;
-        }
-        let nf = n as f64;
-        let avg_ms = |us: &AtomicU64| -> f64 { us.load(Ordering::Relaxed) as f64 / nf / 1000.0 };
-        eprintln!(
-            "[phase] n={} empty={} avg/cell ms: pull={:.2} trunc={:.2} quads={:.2} gaia={:.2} write={:.2} commit={:.2}",
-            n,
-            self.n_empty.load(Ordering::Relaxed),
-            avg_ms(&self.pull_stars_us),
-            avg_ms(&self.truncate_us),
-            avg_ms(&self.build_quads_us),
-            avg_ms(&self.gaia_records_us),
-            avg_ms(&self.write_shards_us),
-            avg_ms(&self.commit_us),
-        );
     }
 }
 
@@ -473,169 +391,187 @@ pub fn build_bundle_work_dir<S: CellStarSource + ?Sized>(
     let mut sorted_bands: Vec<ScaleBand> = config.bands.clone();
     sorted_bands.sort_by_key(|b| b.band_idx);
 
-    // Manifest + "cells committed since last save" counter live behind
-    // one Mutex so each commit is a single lock acquire.
-    let state = Mutex::new(ManifestState::new(manifest));
-    let manifest_save_every = config.manifest_save_every.max(1);
+    let save_interval_secs = config.manifest_save_interval_secs;
     let n_cells_empty = AtomicU32::new(0);
     let n_cells_processed = AtomicU32::new(0);
     let max_stars_per_cell = config.max_stars_per_cell;
     let cell_depth = config.cell_depth;
 
-    let phase_stats = PhaseStats::new();
+    // Run the rayon work plus the manifest-actor inside a scoped
+    // thread context. The actor owns the `BuildManifest` exclusively
+    // and saves to disk on a wall-clock cadence; workers send
+    // `CellCompletion` messages via a channel and never block on
+    // mutex contention.
+    let final_manifest: BuildManifest = thread::scope(|s| -> io::Result<BuildManifest> {
+        let (commit_tx, commit_rx) = mpsc::channel::<CellCompletion>();
 
-    // Single chokepoint for "this cell is done"; both the empty-cell
-    // and populated-cell paths funnel through here.
-    let commit_cell_progress = |cell_id: u32, stats: CellStats| -> io::Result<()> {
-        let t0 = Instant::now();
-        let r = state.lock().unwrap().commit(
-            work_dir,
-            cell_id,
-            stats,
-            &sorted_bands,
-            manifest_save_every,
-        );
-        phase_stats
-            .commit_us
-            .fetch_add(t0.elapsed().as_micros() as u64, Ordering::Relaxed);
-        r
-    };
-
-    let result: io::Result<()> = to_process.par_iter().try_for_each(|&cell_id| {
-        let t_pull = Instant::now();
-        let mut stars = source.stars_in_cell(cell_id)?;
-        phase_stats
-            .pull_stars_us
-            .fetch_add(t_pull.elapsed().as_micros() as u64, Ordering::Relaxed);
-
-        // Brightness-truncate: sort by mag ascending, take the first N.
-        let t_trunc = Instant::now();
-        if stars.len() > max_stars_per_cell {
-            stars.sort_by(|a, b| {
-                a.mag
-                    .partial_cmp(&b.mag)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-            stars.truncate(max_stars_per_cell);
-        }
-        phase_stats
-            .truncate_us
-            .fetch_add(t_trunc.elapsed().as_micros() as u64, Ordering::Relaxed);
-
-        if stars.is_empty() {
-            // Empty cell: still mark complete so a resume run doesn't
-            // re-pull it.
-            commit_cell_progress(cell_id, CellStats::default())?;
-            n_cells_empty.fetch_add(1, Ordering::Relaxed);
-            phase_stats.n_empty.fetch_add(1, Ordering::Relaxed);
-            phase_stats.n_cells.fetch_add(1, Ordering::Relaxed);
-            phase_stats.maybe_print();
-            return Ok::<(), io::Error>(());
-        }
-
-        // Build all bands' quads over this cell's stars (sorted-by-mag
-        // already; build_quads_for_cell re-sorts internally, that's
-        // fine — same result).
-        let t_quads = Instant::now();
-        let mut band_blocks = build_quads_for_cell_multiband(&stars, &sorted_bands);
-        phase_stats
-            .build_quads_us
-            .fetch_add(t_quads.elapsed().as_micros() as u64, Ordering::Relaxed);
-
-        // Build the gaia record vector for this cell, preserving
-        // `stars` order so quad star_ids are still valid.
-        let t_gaia = Instant::now();
-        let mut gaia_records: Vec<GaiaRecord> = stars
-            .iter()
-            .map(|s| {
-                let mut g = s.gaia;
-                // Set the supplement bit if the source_id's high bit
-                // is set; mirrors starfield-gaia's encoding.
-                if (s.gaia.source_id >> 63) & 1 == 1 {
-                    g.flags |= GaiaRecord::FLAG_SOURCE_KIND_SUPPLEMENT;
-                }
-                g
-            })
-            .collect();
-
-        // The on-disk `.zga` is sorted by source_id (write_gaia_shard
-        // sorts internally). Quad star_ids reference cell-local
-        // indices, so we must remap them through the same permutation
-        // used to sort the gaia records — otherwise the reader walks
-        // a quad's star_ids into the SORTED vec but the original
-        // computation referenced UNSORTED positions, producing
-        // garbage WCS hypotheses on lookup.
-        //
-        // Build the source_id-sort permutation, apply it to
-        // `gaia_records`, then rewrite every quad's star_ids through
-        // the inverse permutation `old_idx -> new_idx`.
-        let n_records = gaia_records.len();
-        let mut order: Vec<usize> = (0..n_records).collect();
-        order.sort_by_key(|&i| gaia_records[i].source_id);
-        let mut old_to_new = vec![0usize; n_records];
-        for (new_idx, &old_idx) in order.iter().enumerate() {
-            old_to_new[old_idx] = new_idx;
-        }
-        let sorted_gaia: Vec<GaiaRecord> = order.iter().map(|&i| gaia_records[i]).collect();
-        gaia_records = sorted_gaia;
-        for (_band_idx, quads, _codes) in band_blocks.iter_mut() {
-            for q in quads.iter_mut() {
-                for slot in q.star_ids.iter_mut() {
-                    *slot = old_to_new[*slot];
+        // Manifest actor. Receives `CellCompletion` events, applies
+        // them in-memory, and saves to disk on the configured
+        // wall-clock cadence. Returns the final manifest on shutdown.
+        let actor_bands = sorted_bands.clone();
+        let actor: thread::ScopedJoinHandle<'_, io::Result<BuildManifest>> = s.spawn(move || {
+            let mut state = ManifestState::new(manifest);
+            let mut last_save = Instant::now();
+            let interval = if save_interval_secs == 0 {
+                Duration::MAX
+            } else {
+                Duration::from_secs(save_interval_secs)
+            };
+            // Use a recv timeout so an idle channel still triggers a
+            // periodic flush. A `save_interval_secs == 0` config
+            // means "save only on shutdown" — recv blocks indefinitely
+            // and only flush in the disconnect arm.
+            let recv_timeout = if save_interval_secs == 0 {
+                Duration::from_secs(3600 * 24)
+            } else {
+                interval
+            };
+            loop {
+                match commit_rx.recv_timeout(recv_timeout) {
+                    Ok(c) => {
+                        state.apply(work_dir, c, &actor_bands)?;
+                        if last_save.elapsed() >= interval {
+                            state.flush(work_dir)?;
+                            last_save = Instant::now();
+                        }
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                        state.flush(work_dir)?;
+                        last_save = Instant::now();
+                    }
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 }
             }
+            state.flush(work_dir)?;
+            Ok(state.manifest)
+        });
+
+        // Worker chokepoint for "this cell is done"; both the empty-cell
+        // and populated-cell paths funnel through here. A worker is
+        // never blocked by another worker — channel send is lock-free
+        // for unbounded mpsc.
+        let commit_cell_progress = |cell_id: u32, stats: CellStats| -> io::Result<()> {
+            commit_tx
+                .send(CellCompletion { cell_id, stats })
+                .map_err(|_| io::Error::other("manifest actor disconnected"))?;
+            Ok(())
+        };
+
+        let result: io::Result<()> = to_process.par_iter().try_for_each(|&cell_id| {
+            let mut stars = source.stars_in_cell(cell_id)?;
+
+            // Brightness-truncate: sort by mag ascending, take the first N.
+            if stars.len() > max_stars_per_cell {
+                stars.sort_by(|a, b| {
+                    a.mag
+                        .partial_cmp(&b.mag)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                stars.truncate(max_stars_per_cell);
+            }
+
+            if stars.is_empty() {
+                // Empty cell: still mark complete so a resume run doesn't
+                // re-pull it.
+                commit_cell_progress(cell_id, CellStats::default())?;
+                n_cells_empty.fetch_add(1, Ordering::Relaxed);
+                return Ok::<(), io::Error>(());
+            }
+
+            // Build all bands' quads over this cell's stars (sorted-by-mag
+            // already; build_quads_for_cell re-sorts internally, that's
+            // fine — same result).
+            let mut band_blocks = build_quads_for_cell_multiband(&stars, &sorted_bands);
+
+            // Build the gaia record vector for this cell, preserving
+            // `stars` order so quad star_ids are still valid.
+            let mut gaia_records: Vec<GaiaRecord> = stars
+                .iter()
+                .map(|s| {
+                    let mut g = s.gaia;
+                    // Set the supplement bit if the source_id's high bit
+                    // is set; mirrors starfield-gaia's encoding.
+                    if (s.gaia.source_id >> 63) & 1 == 1 {
+                        g.flags |= GaiaRecord::FLAG_SOURCE_KIND_SUPPLEMENT;
+                    }
+                    g
+                })
+                .collect();
+
+            // The on-disk `.zga` is sorted by source_id (write_gaia_shard
+            // sorts internally). Quad star_ids reference cell-local
+            // indices, so we must remap them through the same permutation
+            // used to sort the gaia records — otherwise the reader walks
+            // a quad's star_ids into the SORTED vec but the original
+            // computation referenced UNSORTED positions, producing
+            // garbage WCS hypotheses on lookup.
+            //
+            // Build the source_id-sort permutation, apply it to
+            // `gaia_records`, then rewrite every quad's star_ids through
+            // the inverse permutation `old_idx -> new_idx`.
+            let n_records = gaia_records.len();
+            let mut order: Vec<usize> = (0..n_records).collect();
+            order.sort_by_key(|&i| gaia_records[i].source_id);
+            let mut old_to_new = vec![0usize; n_records];
+            for (new_idx, &old_idx) in order.iter().enumerate() {
+                old_to_new[old_idx] = new_idx;
+            }
+            let sorted_gaia: Vec<GaiaRecord> = order.iter().map(|&i| gaia_records[i]).collect();
+            gaia_records = sorted_gaia;
+            for (_band_idx, quads, _codes) in band_blocks.iter_mut() {
+                for q in quads.iter_mut() {
+                    for slot in q.star_ids.iter_mut() {
+                        *slot = old_to_new[*slot];
+                    }
+                }
+            }
+
+            // Materialize band emit slices for the writer (must be after
+            // the remap above).
+            let bands_emit: Vec<BandEmit<'_>> = band_blocks
+                .iter()
+                .map(|(idx, qs, cs)| BandEmit {
+                    band_idx: *idx,
+                    quads: qs,
+                    codes: cs,
+                })
+                .collect();
+
+            let _ = write_cell_shards(
+                work_dir,
+                cell_depth,
+                cell_id,
+                &bands_emit,
+                gaia_records,
+                cell_id as u64,
+            )?;
+
+            let n_stars = stars.len() as u64;
+            let n_quads_total: u64 = band_blocks.iter().map(|(_, qs, _)| qs.len() as u64).sum();
+
+            commit_cell_progress(
+                cell_id,
+                CellStats {
+                    n_stars,
+                    n_quads: n_quads_total,
+                },
+            )?;
+            n_cells_processed.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        });
+        // Closing the channel signals the actor to drain remaining
+        // messages, do a final flush, and exit. Always wait for the
+        // actor before returning a result — both the rayon and actor
+        // results may carry an error, and the actor's is usually the
+        // root cause if both fired.
+        drop(commit_tx);
+        let actor_result = actor.join().expect("manifest actor panicked");
+        match (result, actor_result) {
+            (Ok(()), Ok(m)) => Ok(m),
+            (_, Err(e)) => Err(e),
+            (Err(e), Ok(_)) => Err(e),
         }
-        phase_stats
-            .gaia_records_us
-            .fetch_add(t_gaia.elapsed().as_micros() as u64, Ordering::Relaxed);
-
-        // Materialize band emit slices for the writer (must be after
-        // the remap above).
-        let bands_emit: Vec<BandEmit<'_>> = band_blocks
-            .iter()
-            .map(|(idx, qs, cs)| BandEmit {
-                band_idx: *idx,
-                quads: qs,
-                codes: cs,
-            })
-            .collect();
-
-        let t_write = Instant::now();
-        let _ = write_cell_shards(
-            work_dir,
-            cell_depth,
-            cell_id,
-            &bands_emit,
-            gaia_records,
-            cell_id as u64,
-        )?;
-        phase_stats
-            .write_shards_us
-            .fetch_add(t_write.elapsed().as_micros() as u64, Ordering::Relaxed);
-
-        let n_stars = stars.len() as u64;
-        let n_quads_total: u64 = band_blocks.iter().map(|(_, qs, _)| qs.len() as u64).sum();
-
-        commit_cell_progress(
-            cell_id,
-            CellStats {
-                n_stars,
-                n_quads: n_quads_total,
-            },
-        )?;
-        n_cells_processed.fetch_add(1, Ordering::Relaxed);
-        phase_stats.n_cells.fetch_add(1, Ordering::Relaxed);
-        phase_stats.maybe_print();
-        Ok(())
-    });
-    result?;
-    phase_stats.print_summary();
-
-    // Flush any cells that committed since the last batched save so
-    // the on-disk manifest matches the in-memory state on return.
-    state.lock().unwrap().flush(work_dir)?;
-
-    let final_manifest = state.into_inner().unwrap().manifest;
+    })?;
 
     // ---------- per-band totals via mmapped re-scan ----------------------
     let mut per_band_quad_counts = vec![0u64; n_bands];
@@ -818,7 +754,7 @@ mod tests {
             bands: three_bands(),
             max_stars_per_cell: 10_000,
             cell_depth: 5,
-            manifest_save_every: 1,
+            manifest_save_interval_secs: 0,
         }
     }
 
@@ -1113,7 +1049,7 @@ mod tests {
             ],
             max_stars_per_cell: 10_000,
             cell_depth: 5,
-            manifest_save_every: 1,
+            manifest_save_interval_secs: 0,
         };
 
         let source = SyntheticSource {
@@ -1196,7 +1132,7 @@ mod tests {
             bands: three_bands(),
             max_stars_per_cell: 10,
             cell_depth: 5,
-            manifest_save_every: 1,
+            manifest_save_interval_secs: 0,
         };
         build_bundle_work_dir(&LotsOfStars, &cfg, &paths).unwrap();
 
@@ -1277,7 +1213,7 @@ mod tests {
                 bands,
                 max_stars_per_cell: 100,
                 cell_depth: 5,
-                manifest_save_every: 1,
+                manifest_save_interval_secs: 0,
             };
             let source = SyntheticSource {
                 n_cells: 1,
