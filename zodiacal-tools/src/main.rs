@@ -15,11 +15,13 @@ use zodiacal::index::source::DEFAULT_CELL_DEPTH;
 
 mod bench_bundle;
 mod bench_indexes;
+mod bench_triage;
 mod build_from_excerpt_series;
 mod build_from_shards;
 
 use bench_bundle::{BenchBundleConfig, run as run_bench_bundle};
 use bench_indexes::{BenchIndexesConfig, run as run_bench_indexes};
+use bench_triage::{BenchTriageConfig, run as run_bench_triage};
 use build_from_excerpt_series::{
     BuildFromExcerptSeriesConfig, OutputFormat, run as run_build_from_excerpt_series,
 };
@@ -160,6 +162,53 @@ enum Commands {
         /// Per-case solve timeout in seconds. 0 disables.
         #[arg(long, default_value_t = 0)]
         timeout_secs: u64,
+    },
+
+    /// Triage why specific bench cases failed. Projects bundle catalog
+    /// stars and quads through the truth WCS into image pixels, then
+    /// reports catalog-vs-detection coverage and a count of "findable"
+    /// quads (4 cataloged stars projecting onto detected sources).
+    BenchTriage {
+        /// Bundle to query (folder or `.zip`).
+        #[arg(long)]
+        bundle_path: PathBuf,
+
+        /// Directory of `NNNN.json` test cases.
+        #[arg(long, default_value = "../zodiacal-test-cases/set2-dr3-mag19")]
+        test_cases_dir: PathBuf,
+
+        /// Path to a prior `bench-bundle` CSV. Every row with `solved=0`
+        /// is triaged. Mutually exclusive with `--case-ids`.
+        #[arg(long)]
+        csv: Option<PathBuf>,
+
+        /// Explicit comma-separated case IDs (e.g. `0042,0123`). Takes
+        /// precedence over `--csv` when both are given.
+        #[arg(long, value_delimiter = ',')]
+        case_ids: Vec<String>,
+
+        /// Region radius in degrees. Should match the bench's radius.
+        #[arg(long, default_value = "1.4142")]
+        radius_deg: f64,
+
+        /// Pixel-radius for catalog-vs-detection match.
+        #[arg(long, default_value = "3.0")]
+        match_radius_pix: f64,
+
+        /// Cap on bright field stars considered (mirror solver's
+        /// `max_field_stars`).
+        #[arg(long, default_value_t = 50)]
+        max_field_stars: usize,
+
+        /// Stop after this many cases (default: all).
+        #[arg(long)]
+        limit: Option<usize>,
+
+        /// If set, sweep the 8 standard CD orientations on each case
+        /// and print which one matches the most detections. Used to
+        /// figure out the renderer's WCS convention.
+        #[arg(long, default_value_t = false)]
+        probe_cd: bool,
     },
 
     /// Build a multi-band `.zdcl.bundle` from a starfield-gaia
@@ -325,6 +374,33 @@ fn main() {
             };
             if let Err(e) = run_bench_bundle(&cfg) {
                 eprintln!("bench-bundle failed: {e}");
+                process::exit(1);
+            }
+        }
+        Commands::BenchTriage {
+            bundle_path,
+            test_cases_dir,
+            csv,
+            case_ids,
+            radius_deg,
+            match_radius_pix,
+            max_field_stars,
+            limit,
+            probe_cd,
+        } => {
+            let cfg = BenchTriageConfig {
+                bundle_path: bundle_path.clone(),
+                test_cases_dir: test_cases_dir.clone(),
+                csv: csv.clone(),
+                case_ids: case_ids.clone(),
+                radius_deg: *radius_deg,
+                match_radius_pix: *match_radius_pix,
+                max_field_stars: *max_field_stars,
+                limit: *limit,
+                probe_cd: *probe_cd,
+            };
+            if let Err(e) = run_bench_triage(&cfg) {
+                eprintln!("bench-triage failed: {e}");
                 process::exit(1);
             }
         }
