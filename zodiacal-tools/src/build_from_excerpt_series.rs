@@ -399,6 +399,14 @@ pub struct BycellExcerptSource {
     /// populated when `bundle_depth > source_depth`. Bounded LRU; size
     /// is small (handful of recently-loaded source cells per worker).
     partition_cache: std::sync::Mutex<PartitionCache>,
+    /// Bounded concurrency for in-flight partition parses. Each parse
+    /// holds a transient Dr3Catalog (~5 GB for galactic-plane shards
+    /// at mag-20) plus an un-truncated bundle-bucket HashMap (~5 GB
+    /// before pre-truncate). With 80 rayon workers and 4 plane source
+    /// shards in flight we'd push ~40 GB of transient memory; the
+    /// Tokio-style permit limits this to a handful at a time.
+    load_permits: std::sync::Mutex<u32>,
+    load_permits_cv: std::sync::Condvar,
 }
 
 impl std::fmt::Debug for BycellExcerptSource {
@@ -417,6 +425,12 @@ impl std::fmt::Debug for BycellExcerptSource {
 // to absorb the brief overlap when a worker advances to the next
 // partition while another is still finishing the previous one.
 const PARTITION_CACHE_CAPACITY: usize = 4;
+
+/// Cap on concurrent in-flight CSV parses. Each parse transiently
+/// holds a multi-GB `Dr3Catalog` plus an un-truncated bundle-bucket
+/// `HashMap` until [`PartitionCache::insert`]; without a cap, a burst
+/// of cache misses across 80 rayon workers blows past available RAM.
+const MAX_CONCURRENT_PARSES: u32 = 4;
 
 struct PartitionCache {
     /// Map: source_cell_id → Arc<HashMap<bundle_cell_id, stars>>.
@@ -544,6 +558,12 @@ impl BycellExcerptSource {
             mag_limit,
             max_stars_per_cell,
             partition_cache: std::sync::Mutex::new(PartitionCache::new()),
+            // Cap concurrent in-flight parses. 4 keeps peak transient
+            // memory at ~40 GB (4 plane shards × ~10 GB each), safe
+            // under a 62 GB host. Sorted-by-partition iteration means
+            // most workers hit the cache, so this rarely throttles.
+            load_permits: std::sync::Mutex::new(MAX_CONCURRENT_PARSES),
+            load_permits_cv: std::sync::Condvar::new(),
         })
     }
 
@@ -560,6 +580,11 @@ impl BycellExcerptSource {
     /// Load + partition one source cell's CSV. Idempotent; the result
     /// is cached so subsequent `stars_in_cell` calls for any of this
     /// source cell's bundle-depth children get O(1) access.
+    ///
+    /// Cache-miss loads acquire a permit from `load_permits` so at most
+    /// [`MAX_CONCURRENT_PARSES`] CSV parses run at once. Multi-GB
+    /// transient state during parse would otherwise OOM the host when
+    /// 80 workers hit different source partitions simultaneously.
     fn load_and_partition(
         &self,
         source_cell: u32,
@@ -584,6 +609,46 @@ impl BycellExcerptSource {
                 return Ok(empty);
             }
         };
+
+        // Acquire a parse permit. Block while the cap is saturated; the
+        // RAII guard at end-of-scope releases it.
+        struct Permit<'a> {
+            mu: &'a std::sync::Mutex<u32>,
+            cv: &'a std::sync::Condvar,
+        }
+        impl Drop for Permit<'_> {
+            fn drop(&mut self) {
+                let mut g = self.mu.lock().expect("load permits poisoned");
+                *g += 1;
+                self.cv.notify_one();
+            }
+        }
+        let _permit = {
+            let mut g = self.load_permits.lock().expect("load permits poisoned");
+            while *g == 0 {
+                g = self
+                    .load_permits_cv
+                    .wait(g)
+                    .expect("load permits cv poisoned");
+            }
+            *g -= 1;
+            Permit {
+                mu: &self.load_permits,
+                cv: &self.load_permits_cv,
+            }
+        };
+
+        // Re-check cache after acquiring permit — another worker may
+        // have populated this source cell while we were waiting.
+        if let Some(hit) = self
+            .partition_cache
+            .lock()
+            .expect("partition cache poisoned")
+            .get(source_cell)
+        {
+            return Ok(hit);
+        }
+
         let catalog = Dr3Catalog::from_csv_file(path, self.mag_limit)
             .map_err(|e| std::io::Error::other(format!("{}: load failed: {e}", path.display())))?;
         let entries = catalog.0.brighter_than_ref(f64::INFINITY);
