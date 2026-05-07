@@ -50,17 +50,13 @@ use super::IndexStar;
 use super::build_manifest::{BuildManifest, CellStats};
 use super::quads::build_quads_for_cell;
 
-/// One star produced by a [`CellStarSource`]. Carries everything the
-/// builder needs (index tuple + sidecar payload + bundle Gaia payload)
-/// so the caller doesn't need to thread parallel collections.
+/// One star produced by a [`CellStarSource`]. Carries the index tuple
+/// plus a single bundle-format `gaia: GaiaRecord` payload. The legacy
+/// single-band path derives its 88-byte sidecar record from `gaia` via
+/// [`sidecar_from_gaia`] — `gaia` is a superset.
 ///
-/// `sidecar` is the legacy 88-byte refinement sidecar record consumed
-/// by the single-band path's `.zdcl.gaia` writer. `gaia` is the new
-/// 104-byte bundle-format record consumed by the multi-band cell-driven
-/// builder's `.zga` writer (PR3+). The two carry overlapping but not
-/// identical information; sources are expected to populate both, and
-/// each consumer reads only the field it needs. Existing single-band
-/// callers ignore `gaia` entirely.
+/// Removing the redundant 88-byte sidecar field cuts in-memory partition
+/// caches by ~40% at depth 8, which materially shifts the OOM ceiling.
 #[derive(Debug, Clone)]
 pub struct CellStar {
     pub catalog_id: u64,
@@ -69,16 +65,36 @@ pub struct CellStar {
     /// Declination, radians.
     pub dec_rad: f64,
     pub mag: f64,
-    /// Full astrometric record for the refinement sidecar. Note: the
-    /// sidecar stores RA/Dec in degrees per the existing on-disk
-    /// schema; the source is expected to populate `sidecar.ra/dec` in
-    /// degrees.
-    pub sidecar: SidecarRecord,
-    /// Bundle-format 104-byte Gaia record consumed by the multi-band
-    /// cell-driven builder. Single-band callers don't read this; new
-    /// callers (PR3+) populate it from the same upstream Gaia row that
-    /// produces `sidecar`.
+    /// Bundle-format 104-byte Gaia record. Consumed directly by the
+    /// multi-band `.zga` writer; the single-band path projects it
+    /// through [`sidecar_from_gaia`] to fill the legacy `.zdcl.gaia`.
     pub gaia: GaiaRecord,
+}
+
+/// Project a `GaiaRecord` (104 bytes, bundle wire format) into a
+/// `SidecarRecord` (88 bytes, legacy `.zdcl.gaia` wire format).
+///
+/// `gaia` is a strict superset: it carries every astrometric field the
+/// sidecar reader consumes. We pass `flags` through opaquely — the
+/// sidecar format never assigned a public bit layout, and no current
+/// consumer reads its bits.
+pub fn sidecar_from_gaia(gaia: &GaiaRecord) -> SidecarRecord {
+    SidecarRecord {
+        source_id: gaia.source_id,
+        ref_epoch: gaia.ref_epoch,
+        ra: gaia.ra,
+        dec: gaia.dec,
+        pmra: gaia.pmra,
+        pmdec: gaia.pmdec,
+        parallax: gaia.parallax,
+        radial_velocity: gaia.radial_velocity,
+        sigma_ra: gaia.sigma_ra,
+        sigma_dec: gaia.sigma_dec,
+        sigma_pmra: gaia.sigma_pmra,
+        sigma_pmdec: gaia.sigma_pmdec,
+        sigma_parallax: gaia.sigma_parallax,
+        flags: gaia.flags,
+    }
 }
 
 /// Per-cell read interface. Implementations must be `Sync` because the
@@ -235,7 +251,8 @@ pub fn build_index_cell_driven<S: CellStarSource + ?Sized>(
         write_cell_artifact(&artifact_path, &stars, &cell_quads, &cell_codes)?;
 
         // Append sidecar chunk (records sorted internally by the writer).
-        let sidecar_records: Vec<SidecarRecord> = stars.iter().map(|s| s.sidecar).collect();
+        let sidecar_records: Vec<SidecarRecord> =
+            stars.iter().map(|s| sidecar_from_gaia(&s.gaia)).collect();
         sidecar_writer.append_chunk(sidecar_records)?;
 
         // Atomically commit the cell to the manifest. From here, a
@@ -530,7 +547,7 @@ fn write_index_to_path(
 mod tests {
     use super::*;
     use crate::index::{Index, IndexFragment, IndexSource};
-    use crate::refinement::{SidecarReader, SidecarRecord};
+    use crate::refinement::SidecarReader;
 
     fn tmp_dir(name: &str) -> PathBuf {
         let mut p = std::env::temp_dir();
@@ -553,22 +570,6 @@ mod tests {
             ra_rad,
             dec_rad,
             mag,
-            sidecar: SidecarRecord {
-                source_id: catalog_id,
-                ref_epoch: 2016.0,
-                ra: ra_rad.to_degrees(),
-                dec: dec_rad.to_degrees(),
-                pmra: 0.0,
-                pmdec: 0.0,
-                parallax: 0.0,
-                radial_velocity: f64::NAN,
-                sigma_ra: 0.1,
-                sigma_dec: 0.1,
-                sigma_pmra: 0.01,
-                sigma_pmdec: 0.01,
-                sigma_parallax: 0.02,
-                flags: 0,
-            },
             gaia: GaiaRecord {
                 source_id: catalog_id,
                 ref_epoch: 2016.0,

@@ -626,7 +626,6 @@ mod tests {
     use super::*;
     use crate::bundle::gaia_shard::GaiaShard;
     use crate::index::cell_builder::CellStar;
-    use crate::refinement::SidecarRecord;
     use std::cell::Cell;
     use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -673,22 +672,6 @@ mod tests {
             ra_rad,
             dec_rad,
             mag,
-            sidecar: SidecarRecord {
-                source_id: catalog_id,
-                ref_epoch: 2016.0,
-                ra: ra_rad.to_degrees(),
-                dec: dec_rad.to_degrees(),
-                pmra: 0.0,
-                pmdec: 0.0,
-                parallax: 0.0,
-                radial_velocity: f64::NAN,
-                sigma_ra: 0.1,
-                sigma_dec: 0.1,
-                sigma_pmra: 0.0,
-                sigma_pmdec: 0.0,
-                sigma_parallax: 0.0,
-                flags: 0,
-            },
             gaia: GaiaRecord {
                 ra: ra_rad.to_degrees(),
                 dec: dec_rad.to_degrees(),

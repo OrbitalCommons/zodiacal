@@ -42,7 +42,6 @@ use zodiacal::index::cell_builder::{CellStar, CellStarSource};
 use zodiacal::index::multiband_cell_builder::{
     BundleWorkDirPaths, MultiBandCellBuildConfig, ScaleBand, build_bundle_work_dir,
 };
-use zodiacal::refinement::SidecarRecord;
 
 /// Hard cap on the magnitude limit. Bundles write per-cell `.zga`
 /// shards rather than one global sidecar, so the original `build-from-shards`
@@ -169,7 +168,12 @@ pub fn run(cfg: &BuildFromExcerptSeriesConfig) -> Result<(), String> {
     };
     eprintln!("Excerpt source: {source_label}");
 
-    let source = BycellExcerptSource::open(&excerpt_dir, cfg.cell_depth, cfg.mag_limit)?;
+    let source = BycellExcerptSource::open(
+        &excerpt_dir,
+        cfg.cell_depth,
+        cfg.mag_limit,
+        cfg.max_stars_per_cell,
+    )?;
     eprintln!(
         "Indexed {} populated shard(s) at source_depth={}; bundle_depth={} (cell_count={})",
         source.populated_count(),
@@ -386,6 +390,11 @@ pub struct BycellExcerptSource {
     bundle_depth: u8,
     /// Magnitude cap applied to the loaded CSV rows.
     mag_limit: f64,
+    /// Per-bundle-cell brightness-truncation cap, applied at partition
+    /// build time. Cached partitions only retain the brightest N stars
+    /// per child cell, so dense galactic-plane partitions stay bounded
+    /// regardless of underlying source density.
+    max_stars_per_cell: usize,
     /// Cached partitions of source-cell CSV → child-cell stars. Only
     /// populated when `bundle_depth > source_depth`. Bounded LRU; size
     /// is small (handful of recently-loaded source cells per worker).
@@ -447,7 +456,12 @@ impl BycellExcerptSource {
     /// index range determines `source_depth` (chosen as the smallest
     /// depth whose `12 * 4^depth` count exceeds the largest shard id).
     /// `bundle_depth` may equal or exceed `source_depth`.
-    pub fn open(excerpt_dir: &Path, bundle_depth: u8, mag_limit: f64) -> Result<Self, String> {
+    pub fn open(
+        excerpt_dir: &Path,
+        bundle_depth: u8,
+        mag_limit: f64,
+        max_stars_per_cell: usize,
+    ) -> Result<Self, String> {
         if !excerpt_dir.is_dir() {
             return Err(format!(
                 "--excerpt-dir {} is not a directory",
@@ -528,6 +542,7 @@ impl BycellExcerptSource {
             source_depth,
             bundle_depth,
             mag_limit,
+            max_stars_per_cell,
             partition_cache: std::sync::Mutex::new(PartitionCache::new()),
         })
     }
@@ -597,6 +612,26 @@ impl BycellExcerptSource {
             }
         }
 
+        // Brightness-truncate each bundle bucket to `max_stars_per_cell`
+        // before caching. This is the dominant memory knob at
+        // depth-8/mag-20: a galactic-plane source partition can hold
+        // millions of stars per child cell, but downstream code only
+        // ever consumes the top N — caching the rest just wastes RAM.
+        if self.max_stars_per_cell > 0 {
+            for bucket in partitions.values_mut() {
+                if bucket.len() > self.max_stars_per_cell {
+                    // partial sort: brightest N stars first.
+                    bucket.select_nth_unstable_by(self.max_stars_per_cell, |a, b| {
+                        a.mag
+                            .partial_cmp(&b.mag)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    });
+                    bucket.truncate(self.max_stars_per_cell);
+                    bucket.shrink_to_fit();
+                }
+            }
+        }
+
         let arc = std::sync::Arc::new(partitions);
         self.partition_cache
             .lock()
@@ -637,10 +672,7 @@ impl CellStarSource for BycellExcerptSource {
 }
 
 /// Convert one `Dr3Entry` row to the [`CellStar`] tuple consumed by the
-/// cell-driven builder. `sidecar` and `gaia` are populated from the
-/// same source columns; the multi-band builder reads `gaia`, the
-/// legacy single-band path would read `sidecar` (unused here but we
-/// populate both for forward compat with mixed pipelines).
+/// cell-driven builder.
 pub fn entry_to_cell_star(entry: &Dr3Entry) -> CellStar {
     let core = &entry.core;
     let ra_rad = core.ra.to_radians();
@@ -679,23 +711,6 @@ pub fn entry_to_cell_star(entry: &Dr3Entry) -> CellStar {
         flags |= GaiaRecord::FLAG_HAS_RUWE;
     }
 
-    let sidecar = SidecarRecord {
-        source_id: core.source_id,
-        ref_epoch: core.ref_epoch,
-        ra: core.ra,
-        dec: core.dec,
-        pmra,
-        pmdec,
-        parallax,
-        radial_velocity,
-        sigma_ra: core.ra_error,
-        sigma_dec: core.dec_error,
-        sigma_pmra: pmra_err,
-        sigma_pmdec: pmdec_err,
-        sigma_parallax: parallax_err,
-        flags: 0,
-    };
-
     let gaia = GaiaRecord {
         source_id: core.source_id,
         ref_epoch: core.ref_epoch,
@@ -721,7 +736,6 @@ pub fn entry_to_cell_star(entry: &Dr3Entry) -> CellStar {
         ra_rad,
         dec_rad,
         mag,
-        sidecar,
         gaia,
     }
 }
@@ -778,7 +792,7 @@ mod tests {
         // (12*16=192). Asking for a bundle at depth 0 (coarser than 2)
         // is rejected — coarser-bundle resharding is unsupported.
         touch_synthetic_shard(tmp.path(), 99);
-        let err = BycellExcerptSource::open(tmp.path(), 0, 16.0).unwrap_err();
+        let err = BycellExcerptSource::open(tmp.path(), 0, 16.0, 10_000).unwrap_err();
         assert!(
             err.contains("shallower than excerpt depth"),
             "expected coarser-bundle rejection, got: {err}"
@@ -788,7 +802,7 @@ mod tests {
     #[test]
     fn excerpt_source_open_empty_dir_errors() {
         let tmp = tempfile::tempdir().unwrap();
-        let err = BycellExcerptSource::open(tmp.path(), 5, 16.0).unwrap_err();
+        let err = BycellExcerptSource::open(tmp.path(), 5, 16.0, 10_000).unwrap_err();
         assert!(
             err.contains("no shard_"),
             "expected empty-dir error, got: {err}"
@@ -805,7 +819,7 @@ mod tests {
         for &cid in &[0u32, 1, 7, 42] {
             touch_synthetic_shard(tmp.path(), cid);
         }
-        let src = BycellExcerptSource::open(tmp.path(), 1, 16.0).unwrap();
+        let src = BycellExcerptSource::open(tmp.path(), 1, 16.0, 10_000).unwrap();
         assert_eq!(src.populated_count(), 4);
         assert_eq!(src.source_depth(), 1);
         assert_eq!(src.cell_count(), 43);
@@ -819,7 +833,7 @@ mod tests {
         for &cid in &[0u32, 1, 7, 42] {
             touch_synthetic_shard(tmp.path(), cid);
         }
-        let src = BycellExcerptSource::open(tmp.path(), 5, 16.0).unwrap();
+        let src = BycellExcerptSource::open(tmp.path(), 5, 16.0, 10_000).unwrap();
         assert_eq!(src.source_depth(), 1);
         assert_eq!(src.cell_count(), 43 << 8);
     }
@@ -840,7 +854,6 @@ mod tests {
         use zodiacal::index::multiband_cell_builder::{
             BundleWorkDirPaths, MultiBandCellBuildConfig, build_bundle_work_dir,
         };
-        use zodiacal::refinement::SidecarRecord;
 
         const TEST_DEPTH: u8 = 5;
 
@@ -878,22 +891,6 @@ mod tests {
                         ra_rad: ra,
                         dec_rad: dec,
                         mag,
-                        sidecar: SidecarRecord {
-                            source_id,
-                            ref_epoch: 2016.0,
-                            ra: ra.to_degrees(),
-                            dec: dec.to_degrees(),
-                            pmra: 0.0,
-                            pmdec: 0.0,
-                            parallax: 0.0,
-                            radial_velocity: f64::NAN,
-                            sigma_ra: 0.1,
-                            sigma_dec: 0.1,
-                            sigma_pmra: 0.0,
-                            sigma_pmdec: 0.0,
-                            sigma_parallax: 0.0,
-                            flags: 0,
-                        },
                         gaia: GaiaRecord {
                             source_id,
                             ref_epoch: 2016.0,

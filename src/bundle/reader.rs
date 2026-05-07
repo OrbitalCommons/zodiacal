@@ -752,7 +752,6 @@ mod tests {
     use crate::index::multiband_cell_builder::{
         BundleWorkDirPaths, MultiBandCellBuildConfig, ScaleBand, build_bundle_work_dir,
     };
-    use crate::refinement::SidecarRecord;
 
     const TEST_DEPTH: u8 = 5;
 
@@ -844,22 +843,6 @@ mod tests {
             ra_rad,
             dec_rad,
             mag,
-            sidecar: SidecarRecord {
-                source_id: catalog_id,
-                ref_epoch: 2016.0,
-                ra: ra_rad.to_degrees(),
-                dec: dec_rad.to_degrees(),
-                pmra: 0.0,
-                pmdec: 0.0,
-                parallax: 0.0,
-                radial_velocity: f64::NAN,
-                sigma_ra: 0.1,
-                sigma_dec: 0.1,
-                sigma_pmra: 0.0,
-                sigma_pmdec: 0.0,
-                sigma_parallax: 0.0,
-                flags: 0,
-            },
             gaia: make_gaia(catalog_id, ra_rad.to_degrees(), dec_rad.to_degrees(), mag),
         }
     }
