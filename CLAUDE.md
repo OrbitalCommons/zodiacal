@@ -21,6 +21,7 @@ Zodiacal is a blind astrometry library written in Rust.
 - Never use --allow-dirty with cargo publish
 - Never use `git add -A` or `git add .` — always stage files by name to avoid pulling unrelated work into a commit
 - Don't bother creating git tags after a release — the user doesn't use them and the published crate version on crates.io is the source of truth for which release shipped what
+- **Always run `cargo fmt` and `cargo clippy --all-targets --workspace -- -D warnings` before committing.** CI runs Format and Clippy as required checks; pushing un-formatted or clippy-flagged code wastes a CI cycle and an auto-merge. The two-step pre-commit is `cargo fmt && cargo clippy --all-targets --workspace -- -D warnings && cargo test --lib`.
 
 ## Starfield Integration
 
