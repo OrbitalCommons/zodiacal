@@ -27,7 +27,6 @@ use zodiacal::index::cell_builder::{CellStar, CellStarSource};
 use zodiacal::index::multiband_cell_builder::{
     BundleWorkDirPaths, MultiBandCellBuildConfig, ScaleBand, build_bundle_work_dir,
 };
-use zodiacal::refinement::SidecarRecord;
 use zodiacal::solver::{SkyRegion, SolverConfig, solve};
 use zodiacal::verify::VerifyConfig;
 
@@ -83,22 +82,6 @@ fn make_cell_star(source_id: u64, ra_rad: f64, dec_rad: f64, mag: f64) -> CellSt
         ra_rad,
         dec_rad,
         mag,
-        sidecar: SidecarRecord {
-            source_id,
-            ref_epoch: 2016.0,
-            ra: ra_rad.to_degrees(),
-            dec: dec_rad.to_degrees(),
-            pmra: 0.0,
-            pmdec: 0.0,
-            parallax: 0.0,
-            radial_velocity: f64::NAN,
-            sigma_ra: 0.1,
-            sigma_dec: 0.1,
-            sigma_pmra: 0.0,
-            sigma_pmdec: 0.0,
-            sigma_parallax: 0.0,
-            flags: 0,
-        },
         gaia: make_gaia(source_id, ra_rad.to_degrees(), dec_rad.to_degrees(), mag),
     }
 }
