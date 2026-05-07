@@ -111,10 +111,16 @@ pub fn run(cfg: &BenchTriageConfig) -> io::Result<()> {
     for (i, id) in case_ids.iter().enumerate() {
         let path = cfg.test_cases_dir.join(format!("{id}.json"));
         let raw = fs::read_to_string(&path).map_err(|e| {
-            io::Error::new(io::ErrorKind::InvalidData, format!("{}: {e}", path.display()))
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("{}: {e}", path.display()),
+            )
         })?;
         let tc: TestCase = serde_json::from_str(&raw).map_err(|e| {
-            io::Error::new(io::ErrorKind::InvalidData, format!("{}: {e}", path.display()))
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("{}: {e}", path.display()),
+            )
         })?;
 
         let row = triage_case(&bundle, id, &tc, cfg)?;
@@ -155,16 +161,13 @@ fn collect_case_ids(cfg: &BenchTriageConfig) -> io::Result<Vec<String>> {
         return Ok(ids);
     }
     let csv = cfg.csv.as_ref().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "must pass --csv or --case-ids",
-        )
+        io::Error::new(io::ErrorKind::InvalidInput, "must pass --csv or --case-ids")
     })?;
     let raw = fs::read_to_string(csv)?;
     let mut lines = raw.lines();
-    let header = lines.next().ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidData, "empty CSV")
-    })?;
+    let header = lines
+        .next()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "empty CSV"))?;
     let cols: Vec<&str> = header.split(',').collect();
     let case_idx = cols
         .iter()
@@ -245,7 +248,11 @@ fn triage_case(
 
     // Top-N brightest detected sources (mirrors solver_cfg.max_field_stars).
     let mut top: Vec<TestCaseSource> = tc.sources.clone();
-    top.sort_by(|a, b| b.flux.partial_cmp(&a.flux).unwrap_or(std::cmp::Ordering::Equal));
+    top.sort_by(|a, b| {
+        b.flux
+            .partial_cmp(&a.flux)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     top.truncate(cfg.max_field_stars);
     let n_top_field = top.len();
 
@@ -376,7 +383,10 @@ fn probe_cd_orientations(
         let path = cfg.test_cases_dir.join(format!("{id}.json"));
         let raw = fs::read_to_string(&path)?;
         let tc: TestCase = serde_json::from_str(&raw).map_err(|e| {
-            io::Error::new(io::ErrorKind::InvalidData, format!("{}: {e}", path.display()))
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("{}: {e}", path.display()),
+            )
         })?;
         let region = SkyRegion::from_degrees(
             Equatorial::new(tc.ra_deg.to_radians(), tc.dec_deg.to_radians()),
@@ -384,7 +394,11 @@ fn probe_cd_orientations(
         );
         let multi = bundle.load_region(&region)?;
         let mut top: Vec<TestCaseSource> = tc.sources.clone();
-        top.sort_by(|a, b| b.flux.partial_cmp(&a.flux).unwrap_or(std::cmp::Ordering::Equal));
+        top.sort_by(|a, b| {
+            b.flux
+                .partial_cmp(&a.flux)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         top.truncate(cfg.max_field_stars);
 
         let s = tc.plate_scale_arcsec * std::f64::consts::PI / (180.0 * 3600.0);
