@@ -29,12 +29,20 @@
 //! to a later PR. The duplication only costs a few hundred kB per band
 //! per region load and never changes solver semantics.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 use std::io;
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use cdshealpix::nested;
+use lru::LruCache;
+
+/// Default eviction cap for [`ZdclBundle`]'s per-cell shard LRU. Tuned
+/// so a 1000-case bench-bundle sweep at ~6,000 cells/case (5° hint on
+/// a depth-9 bundle) stays within typical host RAM. Override via
+/// [`ZdclBundle::open_with_capacity`].
+pub const ZDCL_BUNDLE_DEFAULT_CACHE_CAP: usize = 100_000;
 
 use crate::index::IndexStar;
 use crate::index::source::IndexFragment;
@@ -127,7 +135,7 @@ pub struct ZdclBundle {
     accessor: Box<dyn SubfileAccessor>,
     manifest: BundleManifest,
     populated_cells: BTreeSet<u32>,
-    cell_cache: Mutex<HashMap<u32, Arc<CellEntries>>>,
+    cell_cache: Mutex<LruCache<u32, Arc<CellEntries>>>,
 }
 
 impl std::fmt::Debug for ZdclBundle {
@@ -152,6 +160,14 @@ impl ZdclBundle {
     /// cell ids by listing entries under `quads/`. The populated-cell set
     /// is cached for the bundle's lifetime.
     pub fn open(path: impl AsRef<Path>) -> io::Result<Self> {
+        Self::open_with_capacity(path, ZDCL_BUNDLE_DEFAULT_CACHE_CAP)
+    }
+
+    /// Open a bundle with an explicit per-cell shard LRU cap. Use a
+    /// larger cap for long-running query servers; smaller caps trade
+    /// hit rate for tighter memory use.
+    pub fn open_with_capacity(path: impl AsRef<Path>, cap: usize) -> io::Result<Self> {
+        let cap = NonZeroUsize::new(cap.max(1)).expect("max(1) ensures non-zero");
         let path = path.as_ref();
         let meta = std::fs::metadata(path)?;
         let accessor: Box<dyn SubfileAccessor> = if meta.is_dir() {
@@ -189,7 +205,7 @@ impl ZdclBundle {
             accessor,
             manifest,
             populated_cells,
-            cell_cache: Mutex::new(HashMap::new()),
+            cell_cache: Mutex::new(LruCache::new(cap)),
         })
     }
 
@@ -539,8 +555,9 @@ impl ZdclBundle {
 
     /// Load the per-cell `.zqd` + `.zga` byte buffers (cached).
     fn cell_bytes(&self, cell_id: u32) -> io::Result<Arc<CellEntries>> {
+        // Fast path: LRU hit. `get` promotes the entry to most-recent.
         {
-            let cache = self.cell_cache.lock().expect("cell cache poisoned");
+            let mut cache = self.cell_cache.lock().expect("cell cache poisoned");
             if let Some(entry) = cache.get(&cell_id) {
                 return Ok(Arc::clone(entry));
             }
@@ -561,9 +578,13 @@ impl ZdclBundle {
         });
 
         let mut cache = self.cell_cache.lock().expect("cell cache poisoned");
-        // Lost a race? Use whatever's already there.
-        let entry = cache.entry(cell_id).or_insert_with(|| Arc::clone(&entries));
-        Ok(Arc::clone(entry))
+        // Lost a race? Use whatever's already there so concurrent
+        // callers converge on the same Arc when possible.
+        if let Some(existing) = cache.get(&cell_id) {
+            return Ok(Arc::clone(existing));
+        }
+        cache.put(cell_id, Arc::clone(&entries));
+        Ok(entries)
     }
 
     /// Derive the bundle-depth cell id from a Gaia DR3 `source_id`.
