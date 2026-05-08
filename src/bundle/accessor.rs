@@ -16,15 +16,22 @@
 //!
 //! See `docs/bundle-format.md` for the broader bundle format design.
 
-use std::collections::HashMap;
 use std::fs::File;
 use std::io;
+use std::num::NonZeroUsize;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
+use lru::LruCache;
 use memmap2::Mmap;
 use zip::ZipArchive;
+
+/// Default eviction cap for [`FsAccessor`]'s mmap LRU. Tuned so a
+/// 1000-case bench-bundle sweep at ~6,000 cells/case (5° hint on a
+/// depth-9 bundle) stays within typical host RAM. Override via
+/// [`FsAccessor::open_with_capacity`].
+pub const FS_ACCESSOR_DEFAULT_CACHE_CAP: usize = 100_000;
 
 /// Storage-agnostic entry access for a bundle.
 ///
@@ -47,47 +54,50 @@ pub trait SubfileAccessor: Send + Sync {
 
     /// Return a read-only view of the entry's bytes.
     ///
-    /// For [`FsAccessor`] this is an mmap-backed slice cached for the
-    /// lifetime of the accessor; for [`ZipAccessor`] this is a freshly
+    /// For [`FsAccessor`] this hands back an `Arc<Mmap>` (cheap clone of
+    /// a cached entry; the Arc keeps the mapping alive even if the LRU
+    /// cache evicts the slot). For [`ZipAccessor`] this is a freshly
     /// decompressed owned buffer.
-    fn read_entry(&self, rel: &str) -> io::Result<EntryBytes<'_>>;
+    fn read_entry(&self, rel: &str) -> io::Result<EntryBytes>;
 }
 
 /// A read-only view of an entry's bytes.
 ///
-/// `Mmap` borrows a slice from a memory map owned by the accessor;
-/// `Owned` carries a freshly decompressed buffer. Both deref to `[u8]`,
-/// so consumer code can treat them identically.
-pub enum EntryBytes<'a> {
-    /// Borrowed slice into an mmap owned by the accessor.
-    Mmap(&'a [u8]),
+/// `Mmap` carries an [`Arc`]-shared memory map; `Owned` carries a freshly
+/// decompressed buffer. Both deref to `[u8]`, so consumer code can treat
+/// them identically. The `Arc<Mmap>` keeps the mapping alive for as long
+/// as any caller holds an `EntryBytes`, even if the originating
+/// accessor's LRU cache has since evicted the slot.
+pub enum EntryBytes {
+    /// Shared memory map backing the entry's bytes.
+    Mmap(Arc<Mmap>),
     /// Owned buffer (e.g. decompressed from a zip entry).
     Owned(Vec<u8>),
 }
 
-impl<'a> Deref for EntryBytes<'a> {
+impl Deref for EntryBytes {
     type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
         match self {
-            EntryBytes::Mmap(slice) => slice,
+            EntryBytes::Mmap(arc) => &arc[..],
             EntryBytes::Owned(buf) => buf.as_slice(),
         }
     }
 }
 
-impl<'a> AsRef<[u8]> for EntryBytes<'a> {
+impl AsRef<[u8]> for EntryBytes {
     fn as_ref(&self) -> &[u8] {
         self
     }
 }
 
-impl<'a> std::fmt::Debug for EntryBytes<'a> {
+impl std::fmt::Debug for EntryBytes {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            EntryBytes::Mmap(slice) => f
+            EntryBytes::Mmap(arc) => f
                 .debug_struct("EntryBytes::Mmap")
-                .field("len", &slice.len())
+                .field("len", &arc.len())
                 .finish(),
             EntryBytes::Owned(buf) => f
                 .debug_struct("EntryBytes::Owned")
@@ -99,14 +109,13 @@ impl<'a> std::fmt::Debug for EntryBytes<'a> {
 
 /// Filesystem-backed accessor.
 ///
-/// Each entry is mmapped on first access; subsequent reads return a slice
-/// into the cached mmap. The cache lives in a `Mutex<HashMap<...>>`
-/// guarded by interior mutability, so the accessor itself is `Send + Sync`
-/// and the trait method takes `&self`.
-///
-/// The mmaps are stored as `Box<Mmap>` to keep their addresses stable
-/// across hash-map rehashes, which lets us hand out `&[u8]` slices
-/// borrowing from those mmaps for the lifetime of the accessor.
+/// Each entry is mmapped on first access. The mapping is wrapped in
+/// `Arc<Mmap>` and stored in a bounded LRU cache; on a hit the accessor
+/// hands back an `Arc<Mmap>` clone. Eviction is safe because callers
+/// holding an [`EntryBytes::Mmap`] keep the underlying mapping alive
+/// through their `Arc`, even after the LRU drops the slot. The cap is
+/// configurable via [`Self::open_with_capacity`]; the default is
+/// [`FS_ACCESSOR_DEFAULT_CACHE_CAP`].
 ///
 /// # Path-traversal hardening
 ///
@@ -122,18 +131,27 @@ pub struct FsAccessor {
     /// Canonicalized base directory. All resolved entries must live
     /// underneath this path post-canonicalization.
     root: PathBuf,
-    cache: Mutex<HashMap<String, Box<Mmap>>>,
+    cache: Mutex<LruCache<String, Arc<Mmap>>>,
 }
 
 impl FsAccessor {
-    /// Open a directory root as an accessor.
+    /// Open a directory root as an accessor with the default
+    /// per-process mmap LRU capacity ([`FS_ACCESSOR_DEFAULT_CACHE_CAP`]).
+    pub fn open(root: impl AsRef<Path>) -> io::Result<Self> {
+        Self::open_with_capacity(root, FS_ACCESSOR_DEFAULT_CACHE_CAP)
+    }
+
+    /// Open a directory root with an explicit cache cap. Smaller caps
+    /// trade hit rate for VM/RAM bound; larger caps suit long-running
+    /// services that stream many distinct entries.
     ///
     /// The path must point at an existing directory; otherwise an
     /// `io::Error` of kind [`io::ErrorKind::NotFound`] (or similar) is
     /// returned. The directory is canonicalized once at construction
     /// time and that canonical path is used as the traversal-check
     /// prefix for every subsequent entry lookup.
-    pub fn open(root: impl AsRef<Path>) -> io::Result<Self> {
+    pub fn open_with_capacity(root: impl AsRef<Path>, cap: usize) -> io::Result<Self> {
+        let cap = NonZeroUsize::new(cap.max(1)).expect("max(1) ensures non-zero");
         let root = root.as_ref().to_path_buf();
         let meta = std::fs::metadata(&root)?;
         if !meta.is_dir() {
@@ -148,7 +166,7 @@ impl FsAccessor {
         let root = std::fs::canonicalize(&root)?;
         Ok(Self {
             root,
-            cache: Mutex::new(HashMap::new()),
+            cache: Mutex::new(LruCache::new(cap)),
         })
     }
 
@@ -237,7 +255,7 @@ impl SubfileAccessor for FsAccessor {
         Ok(out)
     }
 
-    fn read_entry(&self, rel: &str) -> io::Result<EntryBytes<'_>> {
+    fn read_entry(&self, rel: &str) -> io::Result<EntryBytes> {
         // Validate the name up-front so a malicious raw key can't slip
         // past the cache layer. The cache key is the *raw*
         // bundle-relative name, but we only ever insert via the
@@ -245,18 +263,11 @@ impl SubfileAccessor for FsAccessor {
         // safe path.
         Self::validate_name(rel)?;
 
-        // Fast path: cache hit.
+        // Fast path: LRU hit. `get` promotes the entry to most-recent.
         {
-            let cache = self.cache.lock().expect("FsAccessor cache poisoned");
+            let mut cache = self.cache.lock().expect("FsAccessor cache poisoned");
             if let Some(mmap) = cache.get(rel) {
-                let slice: &[u8] = &mmap[..];
-                // SAFETY: the `Box<Mmap>` is stored in the cache and
-                // never removed for the lifetime of `self`. Its mapped
-                // memory has a stable address (independent of the
-                // HashMap's bucket layout, since we go through `Box`).
-                // Therefore the slice is valid for `&'_ self`.
-                let extended: &[u8] = unsafe { std::mem::transmute::<&[u8], &[u8]>(slice) };
-                return Ok(EntryBytes::Mmap(extended));
+                return Ok(EntryBytes::Mmap(Arc::clone(mmap)));
             }
         }
 
@@ -264,17 +275,22 @@ impl SubfileAccessor for FsAccessor {
         let abs = self.resolve(rel)?;
         let file = File::open(&abs)?;
         // SAFETY: we treat the mapping as immutable for the lifetime of
-        // the accessor, which matches the `Mmap` (read-only) contract.
+        // the Arc, which matches the `Mmap` (read-only) contract.
         let mmap = unsafe { Mmap::map(&file)? };
-        let boxed = Box::new(mmap);
+        let arc = Arc::new(mmap);
 
         let mut cache = self.cache.lock().expect("FsAccessor cache poisoned");
-        // Another thread may have raced us; if so, drop our mapping and
-        // use theirs so callers see a consistent ptr per entry.
-        let entry = cache.entry(rel.to_string()).or_insert(boxed);
-        let slice: &[u8] = &entry[..];
-        let extended: &[u8] = unsafe { std::mem::transmute::<&[u8], &[u8]>(slice) };
-        Ok(EntryBytes::Mmap(extended))
+        // Another thread may have raced us; if so, prefer the entry
+        // that's already cached so concurrent callers converge on the
+        // same Arc when possible. The LRU's `put` returns the previous
+        // value if the key was already present.
+        let to_return = if let Some(existing) = cache.get(rel) {
+            Arc::clone(existing)
+        } else {
+            cache.put(rel.to_string(), Arc::clone(&arc));
+            arc
+        };
+        Ok(EntryBytes::Mmap(to_return))
     }
 }
 
@@ -354,7 +370,7 @@ impl SubfileAccessor for ZipAccessor {
         Ok(out)
     }
 
-    fn read_entry(&self, rel: &str) -> io::Result<EntryBytes<'_>> {
+    fn read_entry(&self, rel: &str) -> io::Result<EntryBytes> {
         use std::io::Read;
         let mut archive = self.archive.lock().expect("ZipAccessor mutex poisoned");
         let mut entry = archive.by_name(rel).map_err(zip_to_io_err)?;
