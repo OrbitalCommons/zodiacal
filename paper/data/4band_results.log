@@ -1,0 +1,1025 @@
+Loaded 4 index(es)
+Found 1000 images to solve
+
+[  1/1000] 0000.json: SOLVED in 1.9s  RA=263.2008 Dec=+33.1560  matched=10  verified=3157  accept_lo=101.8  best_reject_lo=49.4
+[  2/1000] 0001.json: SOLVED in 0.3s  RA=9.3041 Dec=+9.6901  matched=10  verified=814  accept_lo=104.7  best_reject_lo=48.6
+[  3/1000] 0002.json: SOLVED in 5.3s  RA=94.3814 Dec=+32.9546  matched=10  verified=16431  accept_lo=101.2  best_reject_lo=49.1
+[  4/1000] 0003.json: SOLVED in 0.1s  RA=78.7309 Dec=+35.9747  matched=10  verified=337  accept_lo=103.6  best_reject_lo=48.8
+[  5/1000] 0004.json: SOLVED in 2.4s  RA=269.7618 Dec=+69.6978  matched=10  verified=6934  accept_lo=102.6  best_reject_lo=49.7
+[  6/1000] 0005.json: SOLVED in 0.1s  RA=358.6743 Dec=-46.1575  matched=10  verified=567  accept_lo=109.2  best_reject_lo=48.5
+[  7/1000] 0006.json: SOLVED in 6.6s  RA=40.6314 Dec=+68.3837  matched=10  verified=23383  accept_lo=101.0  best_reject_lo=48.8
+[  8/1000] 0007.json: SOLVED in 0.3s  RA=17.7840 Dec=-8.5455  matched=10  verified=838  accept_lo=106.7  best_reject_lo=48.4
+[  9/1000] 0008.json: SOLVED in 9.5s  RA=165.8087 Dec=+58.0517  matched=10  verified=35764  accept_lo=108.8  best_reject_lo=49.0
+[ 10/1000] 0009.json: SOLVED in 0.6s  RA=81.7346 Dec=+6.8151  matched=10  verified=2663  accept_lo=102.3  best_reject_lo=49.0
+[ 11/1000] 0010.json: SOLVED in 1.0s  RA=55.9401 Dec=+42.1443  matched=10  verified=2069  accept_lo=101.4  best_reject_lo=48.4
+[ 12/1000] 0011.json: SOLVED in 1.6s  RA=73.6471 Dec=+0.3586  matched=10  verified=6879  accept_lo=98.6  best_reject_lo=48.9
+[ 13/1000] 0012.json: SOLVED in 1.3s  RA=229.5898 Dec=-2.4244  matched=10  verified=7703  accept_lo=102.6  best_reject_lo=49.9
+[ 14/1000] 0013.json: SOLVED in 0.3s  RA=315.3878 Dec=+47.8441  matched=10  verified=845  accept_lo=102.6  best_reject_lo=49.8
+[ 15/1000] 0014.json: SOLVED in 0.3s  RA=22.7633 Dec=+76.8509  matched=10  verified=1271  accept_lo=101.6  best_reject_lo=49.8
+[ 16/1000] 0015.json: SOLVED in 0.2s  RA=78.0471 Dec=+72.5745  matched=10  verified=726  accept_lo=102.8  best_reject_lo=47.1
+[ 17/1000] 0016.json: SOLVED in 3.3s  RA=330.2798 Dec=+20.7571  matched=10  verified=14802  accept_lo=101.6  best_reject_lo=50.1
+[ 18/1000] 0017.json: SOLVED in 0.9s  RA=5.4090 Dec=-59.4918  matched=10  verified=3300  accept_lo=106.4  best_reject_lo=49.9
+[ 19/1000] 0018.json: SOLVED in 4.4s  RA=222.5357 Dec=+13.1522  matched=10  verified=4181  accept_lo=101.2  best_reject_lo=49.5
+[ 20/1000] 0019.json: SOLVED in 0.1s  RA=282.6856 Dec=+19.3767  matched=10  verified=441  accept_lo=101.2  best_reject_lo=48.8
+[ 21/1000] 0020.json: SOLVED in 0.2s  RA=30.3863 Dec=-56.3120  matched=10  verified=973  accept_lo=102.5  best_reject_lo=48.8
+[ 22/1000] 0021.json: SOLVED in 1.0s  RA=186.7363 Dec=+30.3895  matched=10  verified=3762  accept_lo=108.8  best_reject_lo=48.5
+[ 23/1000] 0022.json: SOLVED in 2.5s  RA=312.3987 Dec=-55.5672  matched=10  verified=6384  accept_lo=101.0  best_reject_lo=49.5
+[ 24/1000] 0023.json: SOLVED in 9.7s  RA=126.4040 Dec=-38.7039  matched=10  verified=29124  accept_lo=102.1  best_reject_lo=49.5
+[ 25/1000] 0024.json: SOLVED in 1.4s  RA=188.0792 Dec=+72.4309  matched=10  verified=3224  accept_lo=106.0  best_reject_lo=49.3
+[ 26/1000] 0025.json: FAILED in 64.2s  verified=205647  best_lo=49.6(4m)  TIMEOUT
+[ 27/1000] 0026.json: SOLVED in 9.7s  RA=354.5870 Dec=+19.3918  matched=10  verified=35296  accept_lo=102.8  best_reject_lo=49.6
+[ 28/1000] 0027.json: SOLVED in 2.6s  RA=241.9441 Dec=+35.7025  matched=10  verified=5486  accept_lo=102.8  best_reject_lo=49.5
+[ 29/1000] 0028.json: SOLVED in 0.9s  RA=105.3224 Dec=+15.6012  matched=10  verified=4883  accept_lo=99.4  best_reject_lo=49.5
+[ 30/1000] 0029.json: SOLVED in 0.6s  RA=12.3539 Dec=-56.3897  matched=10  verified=2375  accept_lo=104.7  best_reject_lo=49.9
+[ 31/1000] 0030.json: SOLVED in 0.0s  RA=69.6802 Dec=+18.1642  matched=10  verified=233  accept_lo=101.8  best_reject_lo=47.9
+[ 32/1000] 0031.json: SOLVED in 0.2s  RA=209.3255 Dec=-38.7904  matched=10  verified=322  accept_lo=102.1  best_reject_lo=48.7
+[ 33/1000] 0032.json: SOLVED in 6.3s  RA=77.8444 Dec=-21.2706  matched=10  verified=21855  accept_lo=102.1  best_reject_lo=49.4
+[ 34/1000] 0033.json: SOLVED in 1.8s  RA=127.1071 Dec=+6.5217  matched=10  verified=6014  accept_lo=102.3  best_reject_lo=49.6
+[ 35/1000] 0034.json: SOLVED in 0.0s  RA=228.4157 Dec=-74.5558  matched=10  verified=196  accept_lo=101.6  best_reject_lo=47.8
+[ 36/1000] 0035.json: SOLVED in 1.1s  RA=29.9458 Dec=-20.6264  matched=10  verified=5032  accept_lo=111.4  best_reject_lo=49.1
+[ 37/1000] 0036.json: SOLVED in 10.6s  RA=88.5031 Dec=-67.2838  matched=10  verified=31194  accept_lo=101.8  best_reject_lo=49.8
+[ 38/1000] 0037.json: SOLVED in 5.6s  RA=329.5431 Dec=-6.6750  matched=10  verified=18975  accept_lo=102.5  best_reject_lo=49.7
+[ 39/1000] 0038.json: SOLVED in 3.4s  RA=219.6118 Dec=-64.7929  matched=10  verified=8045  accept_lo=101.6  best_reject_lo=49.6
+[ 40/1000] 0039.json: SOLVED in 1.5s  RA=288.3246 Dec=+38.8708  matched=10  verified=2462  accept_lo=99.8  best_reject_lo=50.0
+[ 41/1000] 0040.json: SOLVED in 1.6s  RA=302.8347 Dec=+56.2808  matched=10  verified=3816  accept_lo=100.8  best_reject_lo=49.7
+[ 42/1000] 0041.json: SOLVED in 3.3s  RA=275.6157 Dec=+49.4161  matched=10  verified=10558  accept_lo=102.1  best_reject_lo=48.9
+[ 43/1000] 0042.json: SOLVED in 2.2s  RA=126.7553 Dec=+51.4114  matched=10  verified=5991  accept_lo=101.0  best_reject_lo=49.7
+[ 44/1000] 0043.json: SOLVED in 6.6s  RA=194.8137 Dec=-51.8466  matched=10  verified=20756  accept_lo=101.2  best_reject_lo=49.4
+[ 45/1000] 0044.json: SOLVED in 2.3s  RA=103.4002 Dec=-16.1184  matched=10  verified=9772  accept_lo=99.6  best_reject_lo=49.2
+[ 46/1000] 0045.json: SOLVED in 11.0s  RA=277.3417 Dec=+45.6598  matched=10  verified=32919  accept_lo=101.2  best_reject_lo=49.3
+[ 47/1000] 0046.json: SOLVED in 1.1s  RA=62.6091 Dec=+1.7905  matched=10  verified=4080  accept_lo=104.1  best_reject_lo=49.2
+[ 48/1000] 0047.json: SOLVED in 0.3s  RA=71.5748 Dec=-51.7857  matched=10  verified=761  accept_lo=102.1  best_reject_lo=49.2
+[ 49/1000] 0048.json: SOLVED in 0.7s  RA=101.4457 Dec=-20.6752  matched=10  verified=5755  accept_lo=98.3  best_reject_lo=49.1
+[ 50/1000] 0049.json: SOLVED in 2.3s  RA=101.2875 Dec=-22.1579  matched=10  verified=10666  accept_lo=102.3  best_reject_lo=49.6
+[ 51/1000] 0050.json: SOLVED in 0.0s  RA=303.7281 Dec=+47.9838  matched=10  verified=258  accept_lo=103.3  best_reject_lo=48.5
+[ 52/1000] 0051.json: SOLVED in 0.3s  RA=179.3563 Dec=+6.4792  matched=10  verified=1482  accept_lo=105.7  best_reject_lo=50.0
+[ 53/1000] 0052.json: SOLVED in 6.3s  RA=278.6539 Dec=+2.4392  matched=10  verified=22810  accept_lo=99.3  best_reject_lo=50.2
+[ 54/1000] 0053.json: SOLVED in 0.0s  RA=28.5269 Dec=+73.0213  matched=10  verified=44  accept_lo=102.1  best_reject_lo=22.7
+[ 55/1000] 0054.json: SOLVED in 33.7s  RA=272.6465 Dec=-35.1030  matched=10  verified=85546  accept_lo=101.1  best_reject_lo=49.2
+[ 56/1000] 0055.json: SOLVED in 0.5s  RA=259.5064 Dec=+76.6471  matched=10  verified=1742  accept_lo=101.8  best_reject_lo=49.0
+[ 57/1000] 0056.json: SOLVED in 0.3s  RA=62.0737 Dec=-29.5629  matched=10  verified=1708  accept_lo=98.2  best_reject_lo=49.7
+[ 58/1000] 0057.json: SOLVED in 0.3s  RA=124.1131 Dec=-25.6488  matched=10  verified=825  accept_lo=103.6  best_reject_lo=50.0
+[ 59/1000] 0058.json: SOLVED in 0.0s  RA=318.4673 Dec=+11.3892  matched=10  verified=71  accept_lo=103.3  best_reject_lo=49.4
+[ 60/1000] 0059.json: SOLVED in 0.0s  RA=72.2990 Dec=+4.2096  matched=10  verified=99  accept_lo=101.6  best_reject_lo=38.4
+[ 61/1000] 0060.json: SOLVED in 0.6s  RA=179.1281 Dec=-48.0251  matched=10  verified=2094  accept_lo=103.6  best_reject_lo=50.2
+[ 62/1000] 0061.json: SOLVED in 19.4s  RA=296.3712 Dec=-22.1323  matched=10  verified=50411  accept_lo=103.1  best_reject_lo=49.3
+[ 63/1000] 0062.json: SOLVED in 0.0s  RA=283.2507 Dec=+17.7351  matched=10  verified=56  accept_lo=101.4  best_reject_lo=49.6
+[ 64/1000] 0063.json: SOLVED in 45.3s  RA=317.8066 Dec=+9.2068  matched=10  verified=141417  accept_lo=101.4  best_reject_lo=49.3
+[ 65/1000] 0064.json: SOLVED in 0.1s  RA=162.2010 Dec=-34.7116  matched=10  verified=486  accept_lo=102.8  best_reject_lo=49.3
+[ 66/1000] 0065.json: SOLVED in 0.0s  RA=137.1354 Dec=+6.5913  matched=10  verified=144  accept_lo=103.3  best_reject_lo=46.0
+[ 67/1000] 0066.json: SOLVED in 3.3s  RA=222.1012 Dec=-29.8119  matched=10  verified=12360  accept_lo=102.8  best_reject_lo=50.0
+[ 68/1000] 0067.json: SOLVED in 31.8s  RA=352.5011 Dec=-59.8334  matched=10  verified=117087  accept_lo=105.3  best_reject_lo=49.2
+[ 69/1000] 0068.json: SOLVED in 0.3s  RA=20.0046 Dec=+42.2491  matched=10  verified=1174  accept_lo=99.8  best_reject_lo=48.6
+[ 70/1000] 0069.json: SOLVED in 8.5s  RA=41.2637 Dec=-27.1987  matched=10  verified=20044  accept_lo=112.6  best_reject_lo=49.9
+[ 71/1000] 0070.json: SOLVED in 1.8s  RA=10.4908 Dec=+17.8076  matched=10  verified=4256  accept_lo=102.8  best_reject_lo=48.9
+[ 72/1000] 0071.json: SOLVED in 1.2s  RA=9.3759 Dec=-70.1739  matched=10  verified=54240  accept_lo=102.3  best_reject_lo=49.5
+[ 73/1000] 0072.json: SOLVED in 0.2s  RA=143.3803 Dec=-33.8464  matched=10  verified=978  accept_lo=101.8  best_reject_lo=49.1
+[ 74/1000] 0073.json: SOLVED in 7.1s  RA=121.6454 Dec=+48.6889  matched=10  verified=21692  accept_lo=101.8  best_reject_lo=49.7
+[ 75/1000] 0074.json: SOLVED in 16.2s  RA=89.3497 Dec=+24.7344  matched=10  verified=56627  accept_lo=100.4  best_reject_lo=50.1
+[ 76/1000] 0075.json: SOLVED in 0.0s  RA=50.8151 Dec=+18.7191  matched=10  verified=139  accept_lo=99.8  best_reject_lo=27.6
+[ 77/1000] 0076.json: SOLVED in 1.0s  RA=229.0833 Dec=+47.2171  matched=10  verified=3252  accept_lo=105.0  best_reject_lo=49.5
+[ 78/1000] 0077.json: SOLVED in 0.1s  RA=0.4635 Dec=-15.5760  matched=10  verified=263  accept_lo=110.8  best_reject_lo=48.6
+[ 79/1000] 0078.json: SOLVED in 0.2s  RA=266.3343 Dec=-67.1421  matched=10  verified=1370  accept_lo=100.6  best_reject_lo=49.0
+[ 80/1000] 0079.json: SOLVED in 0.6s  RA=238.3299 Dec=-22.9259  matched=10  verified=1116  accept_lo=101.8  best_reject_lo=48.7
+[ 81/1000] 0080.json: SOLVED in 9.0s  RA=204.9677 Dec=+3.5071  matched=10  verified=27899  accept_lo=104.1  best_reject_lo=53.2
+[ 82/1000] 0081.json: SOLVED in 1.0s  RA=342.2704 Dec=+17.7241  matched=10  verified=2157  accept_lo=101.0  best_reject_lo=49.7
+[ 83/1000] 0082.json: SOLVED in 7.8s  RA=30.9787 Dec=+23.6044  matched=10  verified=40661  accept_lo=102.3  best_reject_lo=49.3
+[ 84/1000] 0083.json: SOLVED in 0.2s  RA=328.1446 Dec=+21.9501  matched=10  verified=370  accept_lo=100.7  best_reject_lo=46.8
+[ 85/1000] 0084.json: SOLVED in 8.5s  RA=49.2964 Dec=+13.1687  matched=10  verified=25291  accept_lo=103.9  best_reject_lo=49.0
+[ 86/1000] 0085.json: SOLVED in 14.5s  RA=306.7619 Dec=+15.5507  matched=10  verified=32920  accept_lo=102.1  best_reject_lo=49.8
+[ 87/1000] 0086.json: SOLVED in 0.0s  RA=174.2502 Dec=+5.0523  matched=10  verified=173  accept_lo=105.7  best_reject_lo=46.6
+[ 88/1000] 0087.json: SOLVED in 11.1s  RA=180.5288 Dec=-55.6595  matched=10  verified=36563  accept_lo=100.3  best_reject_lo=49.9
+[ 89/1000] 0088.json: SOLVED in 0.1s  RA=153.7974 Dec=-1.2463  matched=10  verified=343  accept_lo=101.6  best_reject_lo=49.8
+[ 90/1000] 0089.json: SOLVED in 0.5s  RA=204.2600 Dec=+13.1191  matched=10  verified=1960  accept_lo=107.9  best_reject_lo=49.5
+[ 91/1000] 0090.json: SOLVED in 9.5s  RA=49.3532 Dec=-65.7518  matched=10  verified=43953  accept_lo=103.3  best_reject_lo=49.8
+[ 92/1000] 0091.json: SOLVED in 1.4s  RA=161.2587 Dec=-53.0141  matched=10  verified=6197  accept_lo=101.2  best_reject_lo=49.6
+[ 93/1000] 0092.json: SOLVED in 2.9s  RA=238.7978 Dec=-55.7355  matched=10  verified=8422  accept_lo=103.1  best_reject_lo=49.9
+[ 94/1000] 0093.json: SOLVED in 3.9s  RA=48.5679 Dec=+17.7938  matched=10  verified=15981  accept_lo=100.6  best_reject_lo=50.1
+[ 95/1000] 0094.json: SOLVED in 0.1s  RA=333.7217 Dec=-18.3197  matched=10  verified=133  accept_lo=102.8  best_reject_lo=48.6
+[ 96/1000] 0095.json: SOLVED in 1.3s  RA=212.0574 Dec=+9.1859  matched=10  verified=4144  accept_lo=101.0  best_reject_lo=50.2
+[ 97/1000] 0096.json: SOLVED in 37.4s  RA=18.6181 Dec=+23.1642  matched=10  verified=142537  accept_lo=103.3  best_reject_lo=49.9
+[ 98/1000] 0097.json: SOLVED in 2.4s  RA=19.9940 Dec=-85.6979  matched=10  verified=11979  accept_lo=100.6  best_reject_lo=50.0
+[ 99/1000] 0098.json: FAILED in 60.4s  verified=255990  best_lo=49.6(4m)  TIMEOUT
+[100/1000] 0099.json: SOLVED in 0.0s  RA=52.6748 Dec=+57.7727  matched=10  verified=133  accept_lo=101.8  best_reject_lo=38.3
+[101/1000] 0100.json: SOLVED in 56.8s  RA=350.7281 Dec=+22.4869  matched=10  verified=144557  accept_lo=104.1  best_reject_lo=49.5
+[102/1000] 0101.json: SOLVED in 3.1s  RA=154.0709 Dec=-40.4533  matched=10  verified=9973  accept_lo=100.4  best_reject_lo=49.6
+[103/1000] 0102.json: SOLVED in 3.3s  RA=91.6386 Dec=+67.6994  matched=10  verified=8615  accept_lo=101.0  best_reject_lo=49.8
+[104/1000] 0103.json: SOLVED in 0.7s  RA=139.8988 Dec=+24.6464  matched=10  verified=2255  accept_lo=105.3  best_reject_lo=49.1
+[105/1000] 0104.json: SOLVED in 0.5s  RA=187.3237 Dec=-13.2382  matched=10  verified=1285  accept_lo=102.1  best_reject_lo=48.9
+[106/1000] 0105.json: SOLVED in 1.5s  RA=72.6990 Dec=-61.1045  matched=10  verified=8186  accept_lo=101.8  best_reject_lo=49.6
+[107/1000] 0106.json: SOLVED in 4.8s  RA=336.8209 Dec=-7.7299  matched=10  verified=22033  accept_lo=100.6  best_reject_lo=49.2
+[108/1000] 0107.json: SOLVED in 0.3s  RA=69.9436 Dec=-45.7083  matched=10  verified=750  accept_lo=102.8  best_reject_lo=49.0
+[109/1000] 0108.json: SOLVED in 1.9s  RA=321.2242 Dec=-12.6481  matched=10  verified=5969  accept_lo=100.0  best_reject_lo=49.4
+[110/1000] 0109.json: SOLVED in 3.7s  RA=317.5075 Dec=-66.0716  matched=10  verified=13002  accept_lo=102.6  best_reject_lo=49.3
+[111/1000] 0110.json: SOLVED in 0.1s  RA=219.0407 Dec=-28.0590  matched=10  verified=367  accept_lo=101.6  best_reject_lo=50.2
+[112/1000] 0111.json: SOLVED in 1.5s  RA=341.0904 Dec=+10.1023  matched=10  verified=4362  accept_lo=102.8  best_reject_lo=49.8
+[113/1000] 0112.json: SOLVED in 39.3s  RA=227.7534 Dec=-48.7043  matched=10  verified=106321  accept_lo=98.3  best_reject_lo=49.7
+[114/1000] 0113.json: SOLVED in 0.0s  RA=94.5117 Dec=-38.2994  matched=10  verified=102  accept_lo=101.4  best_reject_lo=47.9
+[115/1000] 0114.json: SOLVED in 0.5s  RA=221.7608 Dec=-17.2942  matched=10  verified=1585  accept_lo=101.0  best_reject_lo=49.5
+[116/1000] 0115.json: SOLVED in 14.9s  RA=170.6068 Dec=-32.0122  matched=10  verified=58362  accept_lo=101.6  best_reject_lo=49.0
+[117/1000] 0116.json: SOLVED in 1.7s  RA=344.2060 Dec=-28.0858  matched=10  verified=3978  accept_lo=104.4  best_reject_lo=50.0
+[118/1000] 0117.json: SOLVED in 22.5s  RA=18.4153 Dec=+15.8748  matched=10  verified=59655  accept_lo=106.4  best_reject_lo=49.5
+[119/1000] 0118.json: SOLVED in 1.2s  RA=68.7784 Dec=-5.9323  matched=10  verified=5655  accept_lo=103.6  best_reject_lo=49.3
+[120/1000] 0119.json: SOLVED in 2.2s  RA=57.9060 Dec=+35.6416  matched=10  verified=11904  accept_lo=100.4  best_reject_lo=49.6
+[121/1000] 0120.json: SOLVED in 0.0s  RA=96.8956 Dec=+22.3841  matched=10  verified=52  accept_lo=99.4  best_reject_lo=17.2
+[122/1000] 0121.json: SOLVED in 3.2s  RA=68.0460 Dec=+42.2240  matched=10  verified=10621  accept_lo=101.6  best_reject_lo=49.6
+[123/1000] 0122.json: SOLVED in 0.3s  RA=44.1248 Dec=+45.1352  matched=10  verified=1418  accept_lo=101.6  best_reject_lo=50.2
+[124/1000] 0123.json: SOLVED in 0.3s  RA=319.7410 Dec=+11.3447  matched=10  verified=641  accept_lo=101.6  best_reject_lo=48.7
+[125/1000] 0124.json: SOLVED in 0.5s  RA=19.8575 Dec=+22.1739  matched=10  verified=1176  accept_lo=101.8  best_reject_lo=49.3
+[126/1000] 0125.json: SOLVED in 7.6s  RA=0.5567 Dec=+25.3269  matched=10  verified=47275  accept_lo=101.8  best_reject_lo=48.7
+[127/1000] 0126.json: SOLVED in 0.4s  RA=94.8812 Dec=+16.4571  matched=10  verified=2130  accept_lo=100.2  best_reject_lo=49.6
+[128/1000] 0127.json: SOLVED in 1.8s  RA=342.9614 Dec=-82.0414  matched=10  verified=3825  accept_lo=101.4  best_reject_lo=48.9
+[129/1000] 0128.json: SOLVED in 1.3s  RA=231.3474 Dec=+73.8266  matched=10  verified=3078  accept_lo=103.3  best_reject_lo=49.0
+[130/1000] 0129.json: SOLVED in 8.5s  RA=239.4099 Dec=-62.6268  matched=10  verified=30896  accept_lo=103.3  best_reject_lo=50.1
+[131/1000] 0130.json: SOLVED in 0.5s  RA=59.6183 Dec=+3.7535  matched=10  verified=2822  accept_lo=105.7  best_reject_lo=49.5
+[132/1000] 0131.json: SOLVED in 1.6s  RA=281.3120 Dec=-19.2539  matched=10  verified=9588  accept_lo=101.8  best_reject_lo=48.2
+[133/1000] 0132.json: SOLVED in 0.3s  RA=15.3584 Dec=-21.3974  matched=10  verified=1229  accept_lo=112.0  best_reject_lo=49.0
+[134/1000] 0133.json: FAILED in 60.1s  verified=294534  best_lo=48.6(4m)  TIMEOUT
+[135/1000] 0134.json: SOLVED in 0.6s  RA=227.2309 Dec=-40.9101  matched=10  verified=1915  accept_lo=102.6  best_reject_lo=49.2
+[136/1000] 0135.json: SOLVED in 1.1s  RA=290.6439 Dec=+31.4387  matched=10  verified=4386  accept_lo=102.1  best_reject_lo=49.8
+[137/1000] 0136.json: SOLVED in 1.5s  RA=343.9750 Dec=-23.7625  matched=10  verified=4108  accept_lo=107.1  best_reject_lo=49.6
+[138/1000] 0137.json: SOLVED in 4.7s  RA=91.2777 Dec=-8.3039  matched=10  verified=16533  accept_lo=101.8  best_reject_lo=49.5
+[139/1000] 0138.json: SOLVED in 9.6s  RA=28.5452 Dec=-34.4659  matched=10  verified=26971  accept_lo=108.8  best_reject_lo=48.9
+[140/1000] 0139.json: SOLVED in 4.6s  RA=243.7379 Dec=+11.3087  matched=10  verified=17786  accept_lo=99.6  best_reject_lo=49.5
+[141/1000] 0140.json: SOLVED in 0.6s  RA=293.6850 Dec=-28.4393  matched=10  verified=2460  accept_lo=101.0  best_reject_lo=48.9
+[142/1000] 0141.json: SOLVED in 0.0s  RA=179.6249 Dec=+27.4462  matched=10  verified=282  accept_lo=107.9  best_reject_lo=34.6
+[143/1000] 0142.json: SOLVED in 0.1s  RA=239.3259 Dec=+8.8716  matched=10  verified=438  accept_lo=102.8  best_reject_lo=16.9
+[144/1000] 0143.json: SOLVED in 0.0s  RA=292.2068 Dec=+75.2888  matched=10  verified=124  accept_lo=102.6  best_reject_lo=49.2
+[145/1000] 0144.json: SOLVED in 0.1s  RA=40.8097 Dec=-0.1005  matched=10  verified=393  accept_lo=102.8  best_reject_lo=23.9
+[146/1000] 0145.json: SOLVED in 9.1s  RA=299.2591 Dec=+25.1733  matched=10  verified=25005  accept_lo=101.4  best_reject_lo=49.9
+[147/1000] 0146.json: SOLVED in 2.0s  RA=43.3844 Dec=-65.5103  matched=10  verified=6774  accept_lo=103.0  best_reject_lo=50.3
+[148/1000] 0147.json: SOLVED in 0.1s  RA=162.4731 Dec=+34.9552  matched=10  verified=1286  accept_lo=106.7  best_reject_lo=49.1
+[149/1000] 0148.json: SOLVED in 2.8s  RA=50.6260 Dec=-31.2239  matched=10  verified=9026  accept_lo=104.7  best_reject_lo=49.3
+[150/1000] 0149.json: SOLVED in 0.5s  RA=315.0040 Dec=+60.0636  matched=10  verified=1865  accept_lo=101.4  best_reject_lo=49.4
+[151/1000] 0150.json: SOLVED in 1.7s  RA=357.3054 Dec=+19.6039  matched=10  verified=5931  accept_lo=103.1  best_reject_lo=49.4
+[152/1000] 0151.json: FAILED in 66.6s  verified=180777  best_lo=49.0(4m)  TIMEOUT
+[153/1000] 0152.json: SOLVED in 2.9s  RA=247.9429 Dec=-40.8077  matched=10  verified=7154  accept_lo=101.0  best_reject_lo=49.6
+[154/1000] 0153.json: SOLVED in 0.2s  RA=292.3638 Dec=+44.4762  matched=10  verified=806  accept_lo=101.8  best_reject_lo=49.8
+[155/1000] 0154.json: SOLVED in 4.9s  RA=329.4088 Dec=-7.6244  matched=10  verified=20881  accept_lo=101.8  best_reject_lo=48.4
+[156/1000] 0155.json: SOLVED in 0.5s  RA=240.1909 Dec=-35.9420  matched=10  verified=2515  accept_lo=101.6  best_reject_lo=49.9
+[157/1000] 0156.json: SOLVED in 0.6s  RA=2.4490 Dec=-7.0534  matched=10  verified=2056  accept_lo=106.4  best_reject_lo=50.0
+[158/1000] 0157.json: SOLVED in 0.0s  RA=203.6349 Dec=+79.5665  matched=10  verified=51  accept_lo=101.6  best_reject_lo=23.1
+[159/1000] 0158.json: SOLVED in 0.3s  RA=294.2789 Dec=-23.2628  matched=10  verified=1364  accept_lo=102.1  best_reject_lo=49.1
+[160/1000] 0159.json: SOLVED in 1.3s  RA=10.5135 Dec=-29.0182  matched=10  verified=3546  accept_lo=109.7  best_reject_lo=49.4
+[161/1000] 0160.json: SOLVED in 0.5s  RA=349.1896 Dec=-25.7571  matched=10  verified=2279  accept_lo=105.7  best_reject_lo=49.8
+[162/1000] 0161.json: SOLVED in 0.1s  RA=55.3028 Dec=-27.1163  matched=10  verified=950  accept_lo=105.7  best_reject_lo=47.7
+[163/1000] 0162.json: SOLVED in 0.1s  RA=114.9131 Dec=+30.3950  matched=10  verified=476  accept_lo=103.1  best_reject_lo=50.0
+[164/1000] 0163.json: SOLVED in 0.3s  RA=72.6111 Dec=+24.0034  matched=10  verified=737  accept_lo=102.1  best_reject_lo=49.5
+[165/1000] 0164.json: SOLVED in 0.0s  RA=289.2036 Dec=-19.1175  matched=10  verified=21  accept_lo=99.3  best_reject_lo=49.5
+[166/1000] 0165.json: SOLVED in 2.7s  RA=77.2011 Dec=+23.3000  matched=10  verified=10482  accept_lo=100.4  best_reject_lo=48.6
+[167/1000] 0166.json: SOLVED in 1.6s  RA=208.2802 Dec=-37.4543  matched=10  verified=6985  accept_lo=102.8  best_reject_lo=48.9
+[168/1000] 0167.json: SOLVED in 15.2s  RA=224.1686 Dec=+30.2653  matched=10  verified=45797  accept_lo=106.7  best_reject_lo=69.2
+[169/1000] 0168.json: SOLVED in 3.9s  RA=313.3648 Dec=+12.2886  matched=10  verified=16436  accept_lo=100.4  best_reject_lo=50.0
+[170/1000] 0169.json: SOLVED in 2.9s  RA=146.8039 Dec=+48.5586  matched=10  verified=7499  accept_lo=106.7  best_reject_lo=49.4
+[171/1000] 0170.json: SOLVED in 1.2s  RA=271.2833 Dec=-35.8275  matched=10  verified=2635  accept_lo=99.8  best_reject_lo=48.8
+[172/1000] 0171.json: SOLVED in 1.0s  RA=53.7599 Dec=+43.9637  matched=10  verified=3195  accept_lo=102.8  best_reject_lo=49.0
+[173/1000] 0172.json: SOLVED in 0.7s  RA=187.3462 Dec=-36.9532  matched=10  verified=2173  accept_lo=102.6  best_reject_lo=49.9
+[174/1000] 0173.json: SOLVED in 1.3s  RA=326.2969 Dec=+4.0111  matched=10  verified=5784  accept_lo=103.3  best_reject_lo=49.6
+[175/1000] 0174.json: SOLVED in 0.2s  RA=236.5474 Dec=+18.0833  matched=10  verified=556  accept_lo=103.6  best_reject_lo=49.6
+[176/1000] 0175.json: SOLVED in 6.8s  RA=353.9431 Dec=+18.3401  matched=10  verified=21450  accept_lo=101.8  best_reject_lo=49.5
+[177/1000] 0176.json: SOLVED in 0.8s  RA=255.4040 Dec=-0.9153  matched=10  verified=4205  accept_lo=101.6  best_reject_lo=49.2
+[178/1000] 0177.json: SOLVED in 0.8s  RA=155.5394 Dec=-56.5634  matched=10  verified=1945  accept_lo=101.6  best_reject_lo=50.1
+[179/1000] 0178.json: SOLVED in 14.2s  RA=64.0563 Dec=+76.5839  matched=10  verified=38432  accept_lo=101.0  best_reject_lo=50.2
+[180/1000] 0179.json: SOLVED in 0.0s  RA=298.7816 Dec=-10.4063  matched=10  verified=157  accept_lo=99.8  best_reject_lo=50.1
+[181/1000] 0180.json: SOLVED in 0.3s  RA=22.3100 Dec=+14.0563  matched=10  verified=912  accept_lo=107.5  best_reject_lo=48.5
+[182/1000] 0181.json: SOLVED in 2.1s  RA=329.4227 Dec=+40.1277  matched=10  verified=8587  accept_lo=102.3  best_reject_lo=49.4
+[183/1000] 0182.json: SOLVED in 0.5s  RA=78.3522 Dec=+28.0153  matched=10  verified=1780  accept_lo=100.2  best_reject_lo=49.2
+[184/1000] 0183.json: SOLVED in 0.5s  RA=152.3308 Dec=-7.3809  matched=10  verified=1808  accept_lo=99.6  best_reject_lo=48.8
+[185/1000] 0184.json: FAILED in 61.8s  verified=211846  best_lo=48.8(4m)  TIMEOUT
+[186/1000] 0185.json: SOLVED in 0.3s  RA=147.3566 Dec=-77.0456  matched=10  verified=1700  accept_lo=102.3  best_reject_lo=49.5
+[187/1000] 0186.json: SOLVED in 0.0s  RA=287.8651 Dec=+43.0228  matched=10  verified=50  accept_lo=102.3  best_reject_lo=-20.0
+[188/1000] 0187.json: SOLVED in 1.3s  RA=42.3665 Dec=-12.5696  matched=10  verified=2926  accept_lo=106.4  best_reject_lo=49.5
+[189/1000] 0188.json: SOLVED in 3.2s  RA=91.0453 Dec=-57.3904  matched=10  verified=10892  accept_lo=103.3  best_reject_lo=50.0
+[190/1000] 0189.json: SOLVED in 0.3s  RA=322.7188 Dec=-41.3969  matched=10  verified=1117  accept_lo=101.0  best_reject_lo=49.8
+[191/1000] 0190.json: SOLVED in 15.3s  RA=92.1492 Dec=-53.8658  matched=10  verified=82222  accept_lo=100.2  best_reject_lo=58.5
+[192/1000] 0191.json: SOLVED in 2.3s  RA=233.1357 Dec=+29.7754  matched=10  verified=6211  accept_lo=102.8  best_reject_lo=50.1
+[193/1000] 0192.json: SOLVED in 4.5s  RA=40.0882 Dec=-15.4938  matched=10  verified=17432  accept_lo=108.8  best_reject_lo=48.4
+[194/1000] 0193.json: SOLVED in 0.3s  RA=300.0589 Dec=+23.7848  matched=10  verified=1341  accept_lo=102.3  best_reject_lo=49.7
+[195/1000] 0194.json: SOLVED in 0.7s  RA=195.5686 Dec=-19.1940  matched=10  verified=2620  accept_lo=103.1  best_reject_lo=49.2
+[196/1000] 0195.json: FAILED in 63.2s  verified=181512  best_lo=50.2(5m)  TIMEOUT
+[197/1000] 0196.json: SOLVED in 0.2s  RA=339.3429 Dec=-42.7505  matched=10  verified=944  accept_lo=104.7  best_reject_lo=49.1
+[198/1000] 0197.json: SOLVED in 0.0s  RA=134.6889 Dec=-26.4785  matched=10  verified=82  accept_lo=102.8  best_reject_lo=49.6
+[199/1000] 0198.json: SOLVED in 4.1s  RA=173.5091 Dec=+71.4836  matched=10  verified=10436  accept_lo=102.8  best_reject_lo=49.6
+[200/1000] 0199.json: SOLVED in 0.1s  RA=33.5769 Dec=-36.4221  matched=10  verified=360  accept_lo=110.0  best_reject_lo=32.3
+[201/1000] 0200.json: SOLVED in 0.3s  RA=107.0373 Dec=-74.7756  matched=10  verified=1570  accept_lo=100.6  best_reject_lo=49.1
+[202/1000] 0201.json: SOLVED in 1.7s  RA=165.8278 Dec=-0.4838  matched=10  verified=4412  accept_lo=105.3  best_reject_lo=49.2
+[203/1000] 0202.json: SOLVED in 6.9s  RA=69.1868 Dec=-27.1985  matched=10  verified=22597  accept_lo=101.4  best_reject_lo=49.3
+[204/1000] 0203.json: SOLVED in 0.4s  RA=355.1270 Dec=+35.9560  matched=10  verified=1766  accept_lo=102.3  best_reject_lo=48.7
+[205/1000] 0204.json: SOLVED in 29.5s  RA=86.0587 Dec=-25.7807  matched=10  verified=94676  accept_lo=103.1  best_reject_lo=49.9
+[206/1000] 0205.json: SOLVED in 7.8s  RA=230.7766 Dec=-33.7740  matched=10  verified=20337  accept_lo=102.3  best_reject_lo=50.2
+[207/1000] 0206.json: SOLVED in 0.7s  RA=209.5008 Dec=+48.4425  matched=10  verified=7822  accept_lo=109.7  best_reject_lo=49.6
+[208/1000] 0207.json: SOLVED in 0.1s  RA=154.9710 Dec=+33.9582  matched=10  verified=271  accept_lo=104.7  best_reject_lo=50.0
+[209/1000] 0208.json: SOLVED in 0.6s  RA=167.0332 Dec=+27.5528  matched=10  verified=2242  accept_lo=110.2  best_reject_lo=50.0
+[210/1000] 0209.json: SOLVED in 1.2s  RA=347.2559 Dec=-43.6020  matched=10  verified=3946  accept_lo=105.0  best_reject_lo=48.8
+[211/1000] 0210.json: FAILED in 64.5s  verified=250274  best_lo=49.4(4m)  TIMEOUT
+[212/1000] 0211.json: SOLVED in 0.7s  RA=340.5451 Dec=-5.8697  matched=10  verified=1778  accept_lo=103.9  best_reject_lo=49.8
+[213/1000] 0212.json: SOLVED in 1.6s  RA=359.5238 Dec=+13.5169  matched=10  verified=10064  accept_lo=103.3  best_reject_lo=48.9
+[214/1000] 0213.json: SOLVED in 35.4s  RA=1.8368 Dec=-19.1810  matched=10  verified=144361  accept_lo=107.9  best_reject_lo=48.3
+[215/1000] 0214.json: SOLVED in 0.1s  RA=231.4813 Dec=-62.8639  matched=10  verified=236  accept_lo=102.8  best_reject_lo=47.7
+[216/1000] 0215.json: SOLVED in 1.5s  RA=290.8486 Dec=-8.7410  matched=10  verified=4365  accept_lo=99.8  best_reject_lo=48.6
+[217/1000] 0216.json: SOLVED in 0.6s  RA=197.3980 Dec=+24.5471  matched=10  verified=3030  accept_lo=107.9  best_reject_lo=49.1
+[218/1000] 0217.json: SOLVED in 11.2s  RA=298.7068 Dec=+27.0757  matched=10  verified=21728  accept_lo=103.3  best_reject_lo=49.3
+[219/1000] 0218.json: SOLVED in 5.8s  RA=165.7670 Dec=+58.1583  matched=10  verified=19408  accept_lo=107.9  best_reject_lo=50.1
+[220/1000] 0219.json: SOLVED in 0.5s  RA=241.8205 Dec=-17.7189  matched=10  verified=1809  accept_lo=101.0  best_reject_lo=49.7
+[221/1000] 0220.json: SOLVED in 0.4s  RA=110.9525 Dec=-70.3772  matched=10  verified=1015  accept_lo=101.8  best_reject_lo=49.0
+[222/1000] 0221.json: SOLVED in 0.0s  RA=105.9027 Dec=+44.9283  matched=10  verified=123  accept_lo=101.2  best_reject_lo=49.5
+[223/1000] 0222.json: SOLVED in 0.3s  RA=309.2236 Dec=-9.3770  matched=10  verified=1718  accept_lo=101.4  best_reject_lo=49.4
+[224/1000] 0223.json: SOLVED in 2.4s  RA=47.4167 Dec=+65.4613  matched=10  verified=9087  accept_lo=101.2  best_reject_lo=48.9
+[225/1000] 0224.json: FAILED in 61.6s  verified=223043  best_lo=51.7(5m)  TIMEOUT
+[226/1000] 0225.json: SOLVED in 2.8s  RA=310.5403 Dec=-47.9264  matched=10  verified=8629  accept_lo=100.6  best_reject_lo=50.0
+[227/1000] 0226.json: FAILED in 60.9s  verified=262623  best_lo=49.2(4m)  TIMEOUT
+[228/1000] 0227.json: SOLVED in 1.9s  RA=242.0610 Dec=+58.4424  matched=10  verified=4820  accept_lo=101.4  best_reject_lo=49.0
+[229/1000] 0228.json: SOLVED in 3.6s  RA=24.9285 Dec=+47.4415  matched=10  verified=14197  accept_lo=101.2  best_reject_lo=49.7
+[230/1000] 0229.json: SOLVED in 2.6s  RA=49.0585 Dec=-5.5419  matched=10  verified=7027  accept_lo=107.9  best_reject_lo=50.2
+[231/1000] 0230.json: SOLVED in 0.2s  RA=257.5512 Dec=-29.0361  matched=10  verified=1206  accept_lo=102.0  best_reject_lo=48.7
+[232/1000] 0231.json: SOLVED in 0.2s  RA=353.4311 Dec=+14.2029  matched=10  verified=1152  accept_lo=104.4  best_reject_lo=49.9
+[233/1000] 0232.json: SOLVED in 0.2s  RA=123.5207 Dec=+41.8440  matched=10  verified=1693  accept_lo=101.0  best_reject_lo=49.1
+[234/1000] 0233.json: SOLVED in 1.9s  RA=157.0098 Dec=+29.9398  matched=10  verified=7567  accept_lo=105.3  best_reject_lo=48.8
+[235/1000] 0234.json: SOLVED in 0.4s  RA=331.1951 Dec=-11.0982  matched=10  verified=1570  accept_lo=102.1  best_reject_lo=49.7
+[236/1000] 0235.json: SOLVED in 16.3s  RA=275.8851 Dec=+23.6732  matched=10  verified=51759  accept_lo=101.2  best_reject_lo=49.9
+[237/1000] 0236.json: SOLVED in 3.9s  RA=129.6037 Dec=-49.0876  matched=10  verified=11328  accept_lo=102.6  best_reject_lo=49.1
+[238/1000] 0237.json: SOLVED in 5.7s  RA=209.2599 Dec=+41.1623  matched=10  verified=17906  accept_lo=105.0  best_reject_lo=49.2
+[239/1000] 0238.json: SOLVED in 0.2s  RA=334.3983 Dec=+24.2097  matched=10  verified=893  accept_lo=99.4  best_reject_lo=49.0
+[240/1000] 0239.json: SOLVED in 0.1s  RA=204.5993 Dec=+43.1427  matched=10  verified=386  accept_lo=108.3  best_reject_lo=49.6
+[241/1000] 0240.json: SOLVED in 0.5s  RA=7.1644 Dec=+16.2781  matched=10  verified=1526  accept_lo=102.3  best_reject_lo=49.4
+[242/1000] 0241.json: SOLVED in 0.4s  RA=16.1629 Dec=+18.6894  matched=10  verified=3525  accept_lo=103.3  best_reject_lo=49.1
+[243/1000] 0242.json: SOLVED in 5.6s  RA=194.6873 Dec=+79.2642  matched=10  verified=21715  accept_lo=100.4  best_reject_lo=49.4
+[244/1000] 0243.json: SOLVED in 0.3s  RA=266.1739 Dec=+39.9675  matched=10  verified=1218  accept_lo=100.6  best_reject_lo=50.1
+[245/1000] 0244.json: SOLVED in 1.3s  RA=101.6199 Dec=-10.2650  matched=10  verified=3866  accept_lo=99.6  best_reject_lo=49.4
+[246/1000] 0245.json: SOLVED in 0.4s  RA=212.9539 Dec=-10.1203  matched=10  verified=1024  accept_lo=102.8  best_reject_lo=49.5
+[247/1000] 0246.json: SOLVED in 0.0s  RA=29.4301 Dec=+10.1970  matched=10  verified=40  accept_lo=106.4  best_reject_lo=48.2
+[248/1000] 0247.json: SOLVED in 0.5s  RA=61.9613 Dec=+64.5921  matched=10  verified=1926  accept_lo=101.6  best_reject_lo=49.7
+[249/1000] 0248.json: SOLVED in 0.3s  RA=122.9526 Dec=+41.4356  matched=10  verified=1558  accept_lo=100.7  best_reject_lo=50.2
+[250/1000] 0249.json: SOLVED in 0.2s  RA=313.5331 Dec=+24.7448  matched=10  verified=797  accept_lo=101.6  best_reject_lo=49.9
+[251/1000] 0250.json: SOLVED in 1.9s  RA=341.7184 Dec=-17.4896  matched=10  verified=10681  accept_lo=103.6  best_reject_lo=49.5
+[252/1000] 0251.json: SOLVED in 5.1s  RA=49.4171 Dec=-8.3754  matched=10  verified=18261  accept_lo=109.2  best_reject_lo=49.0
+[253/1000] 0252.json: FAILED in 63.3s  verified=296194  best_lo=49.5(4m)  TIMEOUT
+[254/1000] 0253.json: SOLVED in 18.3s  RA=306.9425 Dec=+37.3754  matched=10  verified=65657  accept_lo=103.1  best_reject_lo=49.7
+[255/1000] 0254.json: SOLVED in 5.9s  RA=69.2254 Dec=+61.6905  matched=10  verified=33355  accept_lo=101.4  best_reject_lo=49.9
+[256/1000] 0255.json: SOLVED in 1.7s  RA=176.8542 Dec=-18.2838  matched=10  verified=4335  accept_lo=102.8  best_reject_lo=49.4
+[257/1000] 0256.json: SOLVED in 0.8s  RA=328.3737 Dec=+58.1302  matched=10  verified=1872  accept_lo=100.4  best_reject_lo=49.1
+[258/1000] 0257.json: SOLVED in 1.8s  RA=321.3441 Dec=+17.0495  matched=10  verified=4873  accept_lo=102.1  best_reject_lo=48.8
+[259/1000] 0258.json: SOLVED in 0.2s  RA=340.0477 Dec=+12.3899  matched=10  verified=523  accept_lo=102.1  best_reject_lo=48.5
+[260/1000] 0259.json: SOLVED in 1.7s  RA=146.7575 Dec=-37.6842  matched=10  verified=11001  accept_lo=100.2  best_reject_lo=50.0
+[261/1000] 0260.json: SOLVED in 0.1s  RA=9.1505 Dec=-23.7784  matched=10  verified=901  accept_lo=107.1  best_reject_lo=33.5
+[262/1000] 0261.json: SOLVED in 0.6s  RA=176.8102 Dec=-41.9655  matched=10  verified=1653  accept_lo=100.2  best_reject_lo=49.5
+[263/1000] 0262.json: SOLVED in 0.0s  RA=270.8741 Dec=+49.5440  matched=10  verified=231  accept_lo=101.4  best_reject_lo=16.5
+[264/1000] 0263.json: SOLVED in 0.6s  RA=346.7045 Dec=-13.3017  matched=10  verified=1916  accept_lo=108.3  best_reject_lo=49.4
+[265/1000] 0264.json: SOLVED in 0.3s  RA=62.2552 Dec=+47.7067  matched=10  verified=2303  accept_lo=100.7  best_reject_lo=48.5
+[266/1000] 0265.json: SOLVED in 0.7s  RA=324.9332 Dec=-42.4279  matched=10  verified=3043  accept_lo=102.6  best_reject_lo=49.8
+[267/1000] 0266.json: SOLVED in 3.5s  RA=297.8961 Dec=+2.1542  matched=10  verified=11219  accept_lo=102.0  best_reject_lo=49.1
+[268/1000] 0267.json: SOLVED in 0.3s  RA=240.8762 Dec=+73.8604  matched=10  verified=1963  accept_lo=101.6  best_reject_lo=50.1
+[269/1000] 0268.json: SOLVED in 1.1s  RA=275.6791 Dec=+20.9390  matched=10  verified=4791  accept_lo=102.3  best_reject_lo=49.7
+[270/1000] 0269.json: SOLVED in 4.6s  RA=283.0378 Dec=+56.6118  matched=10  verified=12355  accept_lo=103.6  best_reject_lo=49.4
+[271/1000] 0270.json: SOLVED in 0.9s  RA=31.9153 Dec=-42.5184  matched=10  verified=2692  accept_lo=106.7  best_reject_lo=50.2
+[272/1000] 0271.json: SOLVED in 13.1s  RA=311.8168 Dec=+15.2302  matched=10  verified=35458  accept_lo=100.8  best_reject_lo=48.5
+[273/1000] 0272.json: SOLVED in 3.8s  RA=338.0200 Dec=+24.8724  matched=10  verified=14479  accept_lo=100.6  best_reject_lo=49.4
+[274/1000] 0273.json: FAILED in 60.1s  verified=206609  best_lo=50.1(4m)  TIMEOUT
+[275/1000] 0274.json: SOLVED in 10.4s  RA=72.2217 Dec=-27.5097  matched=10  verified=34354  accept_lo=101.6  best_reject_lo=49.7
+[276/1000] 0275.json: SOLVED in 0.4s  RA=268.4347 Dec=-12.4387  matched=10  verified=1040  accept_lo=101.0  best_reject_lo=48.8
+[277/1000] 0276.json: SOLVED in 1.7s  RA=208.3116 Dec=+11.1846  matched=10  verified=7978  accept_lo=105.0  best_reject_lo=49.9
+[278/1000] 0277.json: SOLVED in 0.3s  RA=317.0629 Dec=+15.0158  matched=10  verified=1961  accept_lo=99.8  best_reject_lo=50.0
+[279/1000] 0278.json: SOLVED in 3.2s  RA=41.9659 Dec=-52.0285  matched=10  verified=10881  accept_lo=108.7  best_reject_lo=49.8
+[280/1000] 0279.json: SOLVED in 4.5s  RA=191.7004 Dec=-10.3248  matched=10  verified=21486  accept_lo=102.3  best_reject_lo=50.2
+[281/1000] 0280.json: SOLVED in 0.8s  RA=322.2152 Dec=-27.5623  matched=10  verified=2238  accept_lo=101.4  best_reject_lo=50.2
+[282/1000] 0281.json: SOLVED in 1.5s  RA=289.9848 Dec=+67.2957  matched=10  verified=4382  accept_lo=100.4  best_reject_lo=49.6
+[283/1000] 0282.json: SOLVED in 2.0s  RA=79.7597 Dec=-58.6842  matched=10  verified=5458  accept_lo=103.0  best_reject_lo=49.6
+[284/1000] 0283.json: SOLVED in 0.5s  RA=203.9045 Dec=-52.6689  matched=10  verified=1770  accept_lo=104.1  best_reject_lo=49.0
+[285/1000] 0284.json: SOLVED in 1.2s  RA=355.0780 Dec=-18.1049  matched=10  verified=3282  accept_lo=105.7  best_reject_lo=48.1
+[286/1000] 0285.json: SOLVED in 0.5s  RA=245.2319 Dec=+29.8661  matched=10  verified=1262  accept_lo=102.6  best_reject_lo=49.2
+[287/1000] 0286.json: SOLVED in 1.6s  RA=7.2688 Dec=+33.0879  matched=10  verified=2857  accept_lo=100.2  best_reject_lo=50.1
+[288/1000] 0287.json: SOLVED in 3.8s  RA=188.1538 Dec=-15.5116  matched=10  verified=10717  accept_lo=102.3  best_reject_lo=48.8
+[289/1000] 0288.json: SOLVED in 3.2s  RA=0.4267 Dec=-47.7881  matched=10  verified=8366  accept_lo=103.3  best_reject_lo=49.1
+[290/1000] 0289.json: SOLVED in 6.3s  RA=342.7241 Dec=-44.9545  matched=10  verified=17096  accept_lo=105.7  best_reject_lo=48.8
+[291/1000] 0290.json: SOLVED in 0.0s  RA=268.4134 Dec=-8.1892  matched=10  verified=87  accept_lo=100.2  best_reject_lo=17.5
+[292/1000] 0291.json: SOLVED in 3.2s  RA=100.4956 Dec=-35.3032  matched=10  verified=9962  accept_lo=101.2  best_reject_lo=49.2
+[293/1000] 0292.json: SOLVED in 0.1s  RA=56.8093 Dec=-46.6711  matched=10  verified=515  accept_lo=105.0  best_reject_lo=49.1
+[294/1000] 0293.json: SOLVED in 1.9s  RA=320.9439 Dec=-65.2966  matched=10  verified=4976  accept_lo=100.6  best_reject_lo=48.7
+[295/1000] 0294.json: FAILED in 60.0s  verified=257899  best_lo=49.2(4m)  TIMEOUT
+[296/1000] 0295.json: SOLVED in 1.6s  RA=96.5433 Dec=-75.6299  matched=10  verified=17936  accept_lo=102.8  best_reject_lo=49.5
+[297/1000] 0296.json: SOLVED in 1.0s  RA=213.3915 Dec=-38.3796  matched=10  verified=2553  accept_lo=102.1  best_reject_lo=49.1
+[298/1000] 0297.json: SOLVED in 10.3s  RA=269.3163 Dec=-40.5567  matched=10  verified=28095  accept_lo=99.3  best_reject_lo=49.0
+[299/1000] 0298.json: SOLVED in 1.1s  RA=97.4221 Dec=-7.6731  matched=10  verified=2470  accept_lo=102.3  best_reject_lo=49.6
+[300/1000] 0299.json: SOLVED in 0.2s  RA=310.4032 Dec=+64.6230  matched=10  verified=423  accept_lo=101.2  best_reject_lo=50.2
+[301/1000] 0300.json: SOLVED in 0.1s  RA=34.2753 Dec=-17.1590  matched=10  verified=456  accept_lo=108.8  best_reject_lo=45.6
+[302/1000] 0301.json: SOLVED in 1.3s  RA=66.1843 Dec=-8.4539  matched=10  verified=3591  accept_lo=102.3  best_reject_lo=49.8
+[303/1000] 0302.json: SOLVED in 1.8s  RA=86.5937 Dec=-11.0255  matched=10  verified=10209  accept_lo=100.4  best_reject_lo=48.9
+[304/1000] 0303.json: SOLVED in 0.2s  RA=127.8918 Dec=+16.5605  matched=10  verified=841  accept_lo=100.2  best_reject_lo=49.4
+[305/1000] 0304.json: SOLVED in 0.5s  RA=172.9773 Dec=+67.5992  matched=10  verified=1427  accept_lo=104.4  best_reject_lo=50.3
+[306/1000] 0305.json: SOLVED in 0.9s  RA=187.8697 Dec=+5.1913  matched=10  verified=1963  accept_lo=108.3  best_reject_lo=50.2
+[307/1000] 0306.json: SOLVED in 0.3s  RA=337.0111 Dec=+56.7100  matched=10  verified=985  accept_lo=101.0  best_reject_lo=50.1
+[308/1000] 0307.json: FAILED in 61.9s  verified=232938  best_lo=49.1(4m)  TIMEOUT
+[309/1000] 0308.json: SOLVED in 0.6s  RA=271.2153 Dec=+23.4569  matched=10  verified=2016  accept_lo=100.4  best_reject_lo=49.5
+[310/1000] 0309.json: SOLVED in 8.2s  RA=325.2308 Dec=-20.8949  matched=10  verified=32257  accept_lo=101.8  best_reject_lo=49.4
+[311/1000] 0310.json: SOLVED in 3.6s  RA=208.0714 Dec=+51.9892  matched=10  verified=13911  accept_lo=109.2  best_reject_lo=48.6
+[312/1000] 0311.json: SOLVED in 0.0s  RA=67.3083 Dec=-30.0692  matched=10  verified=155  accept_lo=101.2  best_reject_lo=49.6
+[313/1000] 0312.json: SOLVED in 1.9s  RA=296.1948 Dec=+31.5357  matched=10  verified=4689  accept_lo=100.9  best_reject_lo=48.9
+[314/1000] 0313.json: SOLVED in 1.1s  RA=269.3696 Dec=+11.2641  matched=10  verified=2914  accept_lo=101.6  best_reject_lo=49.7
+[315/1000] 0314.json: SOLVED in 2.5s  RA=6.4750 Dec=-7.2495  matched=10  verified=11359  accept_lo=107.5  best_reject_lo=49.1
+[316/1000] 0315.json: SOLVED in 3.2s  RA=324.3443 Dec=+37.0174  matched=10  verified=9880  accept_lo=99.3  best_reject_lo=49.2
+[317/1000] 0316.json: SOLVED in 2.6s  RA=178.5276 Dec=+25.0337  matched=10  verified=7113  accept_lo=109.2  best_reject_lo=49.7
+[318/1000] 0317.json: SOLVED in 6.8s  RA=298.3915 Dec=-44.0546  matched=10  verified=26233  accept_lo=101.2  best_reject_lo=49.1
+[319/1000] 0318.json: SOLVED in 10.0s  RA=302.1956 Dec=+8.9851  matched=10  verified=30237  accept_lo=101.2  best_reject_lo=49.3
+[320/1000] 0319.json: FAILED in 60.5s  verified=233226  best_lo=49.2(4m)  TIMEOUT
+[321/1000] 0320.json: SOLVED in 11.7s  RA=50.3364 Dec=+51.7190  matched=10  verified=41394  accept_lo=103.1  best_reject_lo=50.5
+[322/1000] 0321.json: SOLVED in 3.2s  RA=332.0017 Dec=+67.8989  matched=10  verified=14429  accept_lo=101.6  best_reject_lo=49.1
+[323/1000] 0322.json: SOLVED in 10.8s  RA=193.8401 Dec=+56.3156  matched=10  verified=30938  accept_lo=109.7  best_reject_lo=49.5
+[324/1000] 0323.json: SOLVED in 0.1s  RA=153.6214 Dec=+9.5681  matched=10  verified=378  accept_lo=115.7  best_reject_lo=49.5
+[325/1000] 0324.json: SOLVED in 0.0s  RA=244.0509 Dec=+58.7795  matched=10  verified=124  accept_lo=105.7  best_reject_lo=49.2
+[326/1000] 0325.json: SOLVED in 1.1s  RA=309.8229 Dec=+47.5213  matched=10  verified=4382  accept_lo=101.0  best_reject_lo=50.0
+[327/1000] 0326.json: SOLVED in 0.0s  RA=173.1956 Dec=-28.9765  matched=10  verified=88  accept_lo=101.4  best_reject_lo=47.1
+[328/1000] 0327.json: SOLVED in 6.5s  RA=316.7439 Dec=+19.3717  matched=10  verified=16905  accept_lo=101.0  best_reject_lo=49.6
+[329/1000] 0328.json: SOLVED in 0.1s  RA=160.0672 Dec=+31.9697  matched=10  verified=257  accept_lo=108.3  best_reject_lo=48.3
+[330/1000] 0329.json: SOLVED in 1.0s  RA=117.3489 Dec=+30.2137  matched=10  verified=3232  accept_lo=101.2  best_reject_lo=49.6
+[331/1000] 0330.json: SOLVED in 3.1s  RA=287.0593 Dec=+77.0323  matched=10  verified=11530  accept_lo=102.8  best_reject_lo=49.2
+[332/1000] 0331.json: SOLVED in 0.7s  RA=71.1073 Dec=-22.6305  matched=10  verified=3290  accept_lo=102.1  best_reject_lo=49.8
+[333/1000] 0332.json: SOLVED in 0.7s  RA=240.6109 Dec=+43.2954  matched=10  verified=1950  accept_lo=101.8  best_reject_lo=49.5
+[334/1000] 0333.json: SOLVED in 3.3s  RA=309.6951 Dec=-36.5809  matched=10  verified=9859  accept_lo=100.6  best_reject_lo=49.7
+[335/1000] 0334.json: SOLVED in 5.1s  RA=57.7909 Dec=+70.7578  matched=10  verified=14608  accept_lo=100.9  best_reject_lo=49.5
+[336/1000] 0335.json: SOLVED in 2.1s  RA=185.7533 Dec=+76.9612  matched=10  verified=5604  accept_lo=103.1  best_reject_lo=50.0
+[337/1000] 0336.json: SOLVED in 2.6s  RA=118.4837 Dec=-8.6226  matched=10  verified=6512  accept_lo=102.1  best_reject_lo=49.3
+[338/1000] 0337.json: SOLVED in 0.2s  RA=148.6563 Dec=+75.9753  matched=10  verified=1962  accept_lo=102.1  best_reject_lo=48.7
+[339/1000] 0338.json: SOLVED in 0.9s  RA=198.1997 Dec=-0.1675  matched=10  verified=4639  accept_lo=106.4  best_reject_lo=49.3
+[340/1000] 0339.json: SOLVED in 3.4s  RA=265.1613 Dec=+12.1745  matched=10  verified=11370  accept_lo=101.6  best_reject_lo=49.0
+[341/1000] 0340.json: SOLVED in 52.6s  RA=345.2124 Dec=-32.8625  matched=10  verified=149265  accept_lo=107.9  best_reject_lo=50.1
+[342/1000] 0341.json: FAILED in 61.3s  verified=198453  best_lo=49.8(4m)  TIMEOUT
+[343/1000] 0342.json: FAILED in 60.1s  verified=278809  best_lo=49.1(4m)  TIMEOUT
+[344/1000] 0343.json: SOLVED in 0.7s  RA=93.1691 Dec=+47.4623  matched=10  verified=2642  accept_lo=101.0  best_reject_lo=49.6
+[345/1000] 0344.json: SOLVED in 0.1s  RA=329.9217 Dec=+23.7438  matched=10  verified=377  accept_lo=100.8  best_reject_lo=48.2
+[346/1000] 0345.json: SOLVED in 3.4s  RA=352.0494 Dec=-14.2486  matched=10  verified=18774  accept_lo=107.1  best_reject_lo=49.7
+[347/1000] 0346.json: SOLVED in 0.0s  RA=244.6477 Dec=+45.8726  matched=10  verified=128  accept_lo=104.4  best_reject_lo=46.1
+[348/1000] 0347.json: SOLVED in 1.8s  RA=35.1990 Dec=+53.4742  matched=10  verified=3894  accept_lo=105.0  best_reject_lo=49.7
+[349/1000] 0348.json: SOLVED in 0.0s  RA=116.4243 Dec=+15.6991  matched=10  verified=51  accept_lo=100.2  best_reject_lo=-20.0
+[350/1000] 0349.json: SOLVED in 0.8s  RA=243.9800 Dec=-61.5164  matched=10  verified=2309  accept_lo=102.3  best_reject_lo=49.5
+[351/1000] 0350.json: SOLVED in 0.6s  RA=198.1970 Dec=-47.3285  matched=10  verified=2309  accept_lo=101.2  best_reject_lo=49.1
+[352/1000] 0351.json: SOLVED in 38.0s  RA=341.9148 Dec=-19.5944  matched=10  verified=111336  accept_lo=104.6  best_reject_lo=48.9
+[353/1000] 0352.json: SOLVED in 0.7s  RA=209.5457 Dec=-37.1140  matched=10  verified=1330  accept_lo=101.0  best_reject_lo=49.4
+[354/1000] 0353.json: SOLVED in 0.0s  RA=26.8834 Dec=+2.4939  matched=10  verified=35  accept_lo=104.7  best_reject_lo=-0.1
+[355/1000] 0354.json: SOLVED in 1.1s  RA=178.5428 Dec=+67.2853  matched=10  verified=3407  accept_lo=106.0  best_reject_lo=49.8
+[356/1000] 0355.json: SOLVED in 0.7s  RA=260.2620 Dec=-2.7482  matched=10  verified=2477  accept_lo=102.8  best_reject_lo=49.4
+[357/1000] 0356.json: SOLVED in 5.2s  RA=245.5549 Dec=+16.0307  matched=10  verified=35184  accept_lo=101.2  best_reject_lo=49.9
+[358/1000] 0357.json: SOLVED in 0.0s  RA=309.8059 Dec=-9.1884  matched=10  verified=62  accept_lo=101.2  best_reject_lo=46.8
+[359/1000] 0358.json: SOLVED in 4.6s  RA=118.0031 Dec=-3.7529  matched=10  verified=13319  accept_lo=102.5  best_reject_lo=49.5
+[360/1000] 0359.json: SOLVED in 0.0s  RA=234.2279 Dec=-35.5197  matched=10  verified=75  accept_lo=98.9  best_reject_lo=17.4
+[361/1000] 0360.json: SOLVED in 4.2s  RA=42.3519 Dec=-5.1250  matched=10  verified=19202  accept_lo=108.3  best_reject_lo=48.9
+[362/1000] 0361.json: SOLVED in 32.1s  RA=81.4807 Dec=+27.5555  matched=10  verified=117201  accept_lo=101.8  best_reject_lo=49.0
+[363/1000] 0362.json: SOLVED in 1.4s  RA=265.8918 Dec=-26.7843  matched=10  verified=4046  accept_lo=100.8  best_reject_lo=49.4
+[364/1000] 0363.json: SOLVED in 0.0s  RA=169.6857 Dec=+42.9183  matched=10  verified=128  accept_lo=108.8  best_reject_lo=47.6
+[365/1000] 0364.json: FAILED in 60.1s  verified=210761  best_lo=49.5(4m)  TIMEOUT
+[366/1000] 0365.json: SOLVED in 0.5s  RA=187.6683 Dec=-42.0843  matched=10  verified=2532  accept_lo=104.1  best_reject_lo=49.4
+[367/1000] 0366.json: SOLVED in 1.6s  RA=110.6549 Dec=+8.2595  matched=10  verified=7412  accept_lo=102.6  best_reject_lo=49.6
+[368/1000] 0367.json: SOLVED in 0.1s  RA=198.9449 Dec=+31.4301  matched=10  verified=216  accept_lo=109.7  best_reject_lo=50.2
+[369/1000] 0368.json: SOLVED in 0.0s  RA=324.4809 Dec=+30.7478  matched=10  verified=344  accept_lo=100.6  best_reject_lo=48.3
+[370/1000] 0369.json: SOLVED in 2.5s  RA=308.9481 Dec=-31.1671  matched=10  verified=9680  accept_lo=100.9  best_reject_lo=49.1
+[371/1000] 0370.json: SOLVED in 0.5s  RA=86.5319 Dec=+52.7225  matched=10  verified=1590  accept_lo=101.8  best_reject_lo=49.0
+[372/1000] 0371.json: SOLVED in 1.7s  RA=320.5356 Dec=+48.5869  matched=10  verified=3439  accept_lo=102.7  best_reject_lo=49.5
+[373/1000] 0372.json: SOLVED in 1.9s  RA=350.8648 Dec=-51.0666  matched=10  verified=6925  accept_lo=101.8  best_reject_lo=49.6
+[374/1000] 0373.json: SOLVED in 4.8s  RA=340.4295 Dec=-24.4338  matched=10  verified=8883  accept_lo=102.5  best_reject_lo=49.8
+[375/1000] 0374.json: SOLVED in 0.8s  RA=78.6011 Dec=-15.5217  matched=10  verified=2568  accept_lo=101.6  best_reject_lo=49.6
+[376/1000] 0375.json: SOLVED in 0.3s  RA=226.1708 Dec=+11.0236  matched=10  verified=910  accept_lo=102.1  best_reject_lo=50.1
+[377/1000] 0376.json: SOLVED in 2.4s  RA=122.0948 Dec=+73.2448  matched=10  verified=9437  accept_lo=101.6  best_reject_lo=49.3
+[378/1000] 0377.json: SOLVED in 4.1s  RA=348.9112 Dec=-14.0587  matched=10  verified=20205  accept_lo=103.3  best_reject_lo=49.2
+[379/1000] 0378.json: SOLVED in 0.5s  RA=279.9973 Dec=-34.9099  matched=10  verified=2584  accept_lo=102.1  best_reject_lo=49.4
+[380/1000] 0379.json: SOLVED in 1.3s  RA=225.3242 Dec=-62.6640  matched=10  verified=6946  accept_lo=101.2  best_reject_lo=50.0
+[381/1000] 0380.json: FAILED in 63.7s  verified=221933  best_lo=49.6(4m)  TIMEOUT
+[382/1000] 0381.json: SOLVED in 0.7s  RA=310.1673 Dec=-14.8613  matched=10  verified=1394  accept_lo=102.1  best_reject_lo=49.8
+[383/1000] 0382.json: FAILED in 60.7s  verified=219364  best_lo=48.9(4m)  TIMEOUT
+[384/1000] 0383.json: SOLVED in 0.1s  RA=86.9145 Dec=-40.6585  matched=10  verified=503  accept_lo=101.6  best_reject_lo=49.8
+[385/1000] 0384.json: SOLVED in 2.3s  RA=341.4274 Dec=+23.7755  matched=10  verified=6182  accept_lo=102.8  best_reject_lo=49.1
+[386/1000] 0385.json: SOLVED in 0.0s  RA=29.2950 Dec=-59.0044  matched=10  verified=106  accept_lo=103.9  best_reject_lo=48.5
+[387/1000] 0386.json: SOLVED in 0.1s  RA=24.4892 Dec=-25.3135  matched=10  verified=519  accept_lo=107.1  best_reject_lo=48.6
+[388/1000] 0387.json: FAILED in 60.0s  verified=239603  best_lo=49.9(4m)  TIMEOUT
+[389/1000] 0388.json: SOLVED in 1.8s  RA=319.1480 Dec=-31.9412  matched=10  verified=7040  accept_lo=101.6  best_reject_lo=48.6
+[390/1000] 0389.json: SOLVED in 0.4s  RA=168.9619 Dec=-23.0242  matched=10  verified=1035  accept_lo=102.3  best_reject_lo=50.2
+[391/1000] 0390.json: SOLVED in 0.1s  RA=262.6494 Dec=+9.6142  matched=10  verified=528  accept_lo=101.8  best_reject_lo=48.0
+[392/1000] 0391.json: FAILED in 62.7s  verified=270066  best_lo=48.9(4m)  TIMEOUT
+[393/1000] 0392.json: SOLVED in 1.4s  RA=265.5474 Dec=-4.7084  matched=10  verified=7041  accept_lo=100.8  best_reject_lo=49.4
+[394/1000] 0393.json: SOLVED in 0.0s  RA=315.0772 Dec=-41.4138  matched=10  verified=511  accept_lo=102.2  best_reject_lo=48.4
+[395/1000] 0394.json: SOLVED in 4.4s  RA=6.1317 Dec=+13.3153  matched=10  verified=15703  accept_lo=101.6  best_reject_lo=52.0
+[396/1000] 0395.json: SOLVED in 0.0s  RA=134.6684 Dec=+59.1419  matched=10  verified=23  accept_lo=103.1  best_reject_lo=26.0
+[397/1000] 0396.json: SOLVED in 0.8s  RA=201.7341 Dec=-42.8487  matched=10  verified=2727  accept_lo=102.1  best_reject_lo=49.2
+[398/1000] 0397.json: SOLVED in 0.1s  RA=97.1723 Dec=-23.9135  matched=10  verified=508  accept_lo=101.6  best_reject_lo=48.4
+[399/1000] 0398.json: SOLVED in 0.2s  RA=103.0982 Dec=+26.5547  matched=10  verified=465  accept_lo=102.1  best_reject_lo=48.8
+[400/1000] 0399.json: SOLVED in 0.3s  RA=230.8321 Dec=-62.2738  matched=10  verified=1226  accept_lo=102.3  best_reject_lo=48.7
+[401/1000] 0400.json: SOLVED in 1.1s  RA=191.8811 Dec=+18.2966  matched=10  verified=4092  accept_lo=107.5  best_reject_lo=49.5
+[402/1000] 0401.json: SOLVED in 3.8s  RA=206.2879 Dec=+9.6947  matched=10  verified=11048  accept_lo=107.1  best_reject_lo=49.3
+[403/1000] 0402.json: SOLVED in 1.6s  RA=224.1354 Dec=+72.6927  matched=10  verified=5814  accept_lo=101.8  best_reject_lo=49.4
+[404/1000] 0403.json: SOLVED in 4.1s  RA=239.5103 Dec=-21.8524  matched=10  verified=15521  accept_lo=100.6  best_reject_lo=49.1
+[405/1000] 0404.json: SOLVED in 0.3s  RA=137.8015 Dec=-15.9967  matched=10  verified=880  accept_lo=103.3  best_reject_lo=48.4
+[406/1000] 0405.json: SOLVED in 0.0s  RA=157.0374 Dec=+50.0658  matched=10  verified=293  accept_lo=106.7  best_reject_lo=48.2
+[407/1000] 0406.json: SOLVED in 0.4s  RA=24.5935 Dec=+11.5083  matched=10  verified=1016  accept_lo=107.5  best_reject_lo=49.4
+[408/1000] 0407.json: SOLVED in 0.8s  RA=323.8797 Dec=-19.3342  matched=10  verified=3171  accept_lo=100.2  best_reject_lo=48.4
+[409/1000] 0408.json: SOLVED in 0.2s  RA=354.7874 Dec=-75.3591  matched=10  verified=988  accept_lo=102.3  best_reject_lo=49.4
+[410/1000] 0409.json: FAILED in 60.1s  verified=193266  best_lo=49.1(4m)  TIMEOUT
+[411/1000] 0410.json: SOLVED in 3.2s  RA=220.7924 Dec=+14.3691  matched=10  verified=7310  accept_lo=108.3  best_reject_lo=49.0
+[412/1000] 0411.json: SOLVED in 15.0s  RA=234.7094 Dec=+26.3688  matched=10  verified=51875  accept_lo=103.3  best_reject_lo=49.0
+[413/1000] 0412.json: SOLVED in 0.5s  RA=226.1832 Dec=+63.0778  matched=10  verified=1704  accept_lo=105.0  best_reject_lo=49.8
+[414/1000] 0413.json: SOLVED in 1.5s  RA=110.1899 Dec=-72.1518  matched=10  verified=3652  accept_lo=101.2  best_reject_lo=50.1
+[415/1000] 0414.json: SOLVED in 0.0s  RA=142.7796 Dec=-35.0226  matched=10  verified=366  accept_lo=102.1  best_reject_lo=44.9
+[416/1000] 0415.json: SOLVED in 0.0s  RA=315.9748 Dec=-17.3575  matched=10  verified=18  accept_lo=100.0  best_reject_lo=-20.0
+[417/1000] 0416.json: SOLVED in 4.3s  RA=316.6676 Dec=-19.4306  matched=10  verified=14427  accept_lo=102.1  best_reject_lo=49.1
+[418/1000] 0417.json: SOLVED in 5.3s  RA=121.3283 Dec=-29.5709  matched=10  verified=19729  accept_lo=102.5  best_reject_lo=49.2
+[419/1000] 0418.json: SOLVED in 2.1s  RA=73.2275 Dec=+62.8390  matched=10  verified=8023  accept_lo=102.1  best_reject_lo=48.8
+[420/1000] 0419.json: SOLVED in 3.9s  RA=185.8329 Dec=-56.3929  matched=10  verified=14577  accept_lo=101.8  best_reject_lo=52.0
+[421/1000] 0420.json: SOLVED in 13.8s  RA=32.7124 Dec=+32.5063  matched=10  verified=48997  accept_lo=101.0  best_reject_lo=49.9
+[422/1000] 0421.json: SOLVED in 0.0s  RA=17.7149 Dec=-9.8109  matched=10  verified=194  accept_lo=105.7  best_reject_lo=48.9
+[423/1000] 0422.json: SOLVED in 2.2s  RA=206.1984 Dec=+80.7508  matched=10  verified=8570  accept_lo=105.3  best_reject_lo=49.6
+[424/1000] 0423.json: SOLVED in 0.4s  RA=334.9011 Dec=-6.0285  matched=10  verified=2298  accept_lo=105.0  best_reject_lo=50.3
+[425/1000] 0424.json: SOLVED in 0.0s  RA=77.6311 Dec=+40.5767  matched=10  verified=48  accept_lo=101.0  best_reject_lo=17.5
+[426/1000] 0425.json: SOLVED in 0.1s  RA=340.9486 Dec=+72.6220  matched=10  verified=227  accept_lo=102.8  best_reject_lo=49.5
+[427/1000] 0426.json: SOLVED in 1.1s  RA=341.5599 Dec=-53.9949  matched=10  verified=5532  accept_lo=102.8  best_reject_lo=49.1
+[428/1000] 0427.json: SOLVED in 11.6s  RA=358.8531 Dec=-51.4164  matched=10  verified=38214  accept_lo=103.6  best_reject_lo=49.0
+[429/1000] 0428.json: SOLVED in 42.8s  RA=284.8652 Dec=-49.8105  matched=10  verified=175608  accept_lo=104.7  best_reject_lo=48.9
+[430/1000] 0429.json: SOLVED in 0.1s  RA=207.8914 Dec=+27.1492  matched=10  verified=148  accept_lo=109.7  best_reject_lo=34.7
+[431/1000] 0430.json: SOLVED in 5.1s  RA=312.9685 Dec=+38.2795  matched=10  verified=18003  accept_lo=101.0  best_reject_lo=49.1
+[432/1000] 0431.json: SOLVED in 1.0s  RA=76.2477 Dec=+68.4090  matched=10  verified=3625  accept_lo=101.6  best_reject_lo=49.5
+[433/1000] 0432.json: SOLVED in 1.3s  RA=151.2375 Dec=-29.5907  matched=10  verified=4598  accept_lo=101.6  best_reject_lo=49.8
+[434/1000] 0433.json: SOLVED in 6.8s  RA=313.4696 Dec=-50.5171  matched=10  verified=21837  accept_lo=100.7  best_reject_lo=48.8
+[435/1000] 0434.json: SOLVED in 0.1s  RA=136.5472 Dec=+62.7310  matched=10  verified=120  accept_lo=103.6  best_reject_lo=48.3
+[436/1000] 0435.json: SOLVED in 0.1s  RA=74.5321 Dec=+19.0753  matched=10  verified=468  accept_lo=98.7  best_reject_lo=49.3
+[437/1000] 0436.json: SOLVED in 8.6s  RA=30.7035 Dec=+17.9585  matched=10  verified=28559  accept_lo=102.3  best_reject_lo=48.9
+[438/1000] 0437.json: SOLVED in 0.1s  RA=324.3778 Dec=+54.6398  matched=10  verified=178  accept_lo=101.4  best_reject_lo=48.7
+[439/1000] 0438.json: SOLVED in 3.2s  RA=300.9375 Dec=-27.6496  matched=10  verified=10946  accept_lo=102.8  best_reject_lo=49.6
+[440/1000] 0439.json: SOLVED in 0.0s  RA=221.1056 Dec=+4.8044  matched=10  verified=66  accept_lo=105.7  best_reject_lo=4.1
+[441/1000] 0440.json: SOLVED in 5.8s  RA=54.1554 Dec=+49.8759  matched=10  verified=19130  accept_lo=101.6  best_reject_lo=49.6
+[442/1000] 0441.json: SOLVED in 0.7s  RA=114.1432 Dec=-42.2035  matched=10  verified=2710  accept_lo=101.2  best_reject_lo=49.1
+[443/1000] 0442.json: SOLVED in 11.0s  RA=314.2538 Dec=+17.8564  matched=10  verified=33401  accept_lo=102.5  best_reject_lo=49.7
+[444/1000] 0443.json: SOLVED in 6.8s  RA=221.4592 Dec=-37.7850  matched=10  verified=16875  accept_lo=102.1  best_reject_lo=49.2
+[445/1000] 0444.json: SOLVED in 1.5s  RA=7.1009 Dec=-1.8287  matched=10  verified=5967  accept_lo=107.1  best_reject_lo=49.2
+[446/1000] 0445.json: SOLVED in 0.0s  RA=350.9911 Dec=+6.2501  matched=10  verified=13  accept_lo=103.9  best_reject_lo=10.9
+[447/1000] 0446.json: SOLVED in 1.5s  RA=194.3932 Dec=-4.2841  matched=10  verified=5095  accept_lo=105.3  best_reject_lo=50.1
+[448/1000] 0447.json: SOLVED in 43.4s  RA=70.7319 Dec=-30.5949  matched=10  verified=188448  accept_lo=105.3  best_reject_lo=50.4
+[449/1000] 0448.json: SOLVED in 42.4s  RA=172.1201 Dec=+63.2938  matched=10  verified=129520  accept_lo=106.4  best_reject_lo=49.7
+[450/1000] 0449.json: SOLVED in 0.1s  RA=24.3014 Dec=-50.5949  matched=10  verified=690  accept_lo=106.0  best_reject_lo=49.6
+[451/1000] 0450.json: SOLVED in 0.1s  RA=335.9023 Dec=+45.3586  matched=10  verified=1015  accept_lo=101.2  best_reject_lo=49.8
+[452/1000] 0451.json: SOLVED in 2.9s  RA=13.6762 Dec=+21.1977  matched=10  verified=28627  accept_lo=104.1  best_reject_lo=49.8
+[453/1000] 0452.json: SOLVED in 10.0s  RA=115.5807 Dec=+29.8150  matched=10  verified=37201  accept_lo=101.6  best_reject_lo=49.7
+[454/1000] 0453.json: SOLVED in 4.3s  RA=75.9698 Dec=-42.3361  matched=10  verified=15311  accept_lo=100.8  best_reject_lo=49.7
+[455/1000] 0454.json: SOLVED in 0.1s  RA=254.7714 Dec=-81.0517  matched=10  verified=616  accept_lo=99.8  best_reject_lo=48.8
+[456/1000] 0455.json: SOLVED in 6.4s  RA=78.4212 Dec=+76.6325  matched=10  verified=16959  accept_lo=101.8  best_reject_lo=49.9
+[457/1000] 0456.json: SOLVED in 0.4s  RA=148.6417 Dec=-10.4504  matched=10  verified=1442  accept_lo=101.4  best_reject_lo=49.1
+[458/1000] 0457.json: SOLVED in 0.4s  RA=82.9831 Dec=+7.4582  matched=10  verified=837  accept_lo=103.6  best_reject_lo=49.4
+[459/1000] 0458.json: SOLVED in 6.7s  RA=161.0366 Dec=+52.3632  matched=10  verified=15051  accept_lo=105.0  best_reject_lo=49.7
+[460/1000] 0459.json: SOLVED in 3.3s  RA=154.4815 Dec=-28.0632  matched=10  verified=14810  accept_lo=100.2  best_reject_lo=49.8
+[461/1000] 0460.json: SOLVED in 0.3s  RA=50.5554 Dec=+60.7795  matched=10  verified=756  accept_lo=98.4  best_reject_lo=49.5
+[462/1000] 0461.json: SOLVED in 0.5s  RA=195.4980 Dec=-53.5888  matched=10  verified=1358  accept_lo=103.3  best_reject_lo=48.6
+[463/1000] 0462.json: SOLVED in 1.7s  RA=31.3843 Dec=+10.0339  matched=10  verified=5186  accept_lo=105.7  best_reject_lo=48.8
+[464/1000] 0463.json: SOLVED in 0.5s  RA=29.7841 Dec=+52.8958  matched=10  verified=2602  accept_lo=99.8  best_reject_lo=49.2
+[465/1000] 0464.json: SOLVED in 0.8s  RA=56.3616 Dec=-75.3635  matched=10  verified=2327  accept_lo=102.3  best_reject_lo=49.4
+[466/1000] 0465.json: SOLVED in 2.2s  RA=1.5181 Dec=-16.8853  matched=10  verified=8712  accept_lo=107.5  best_reject_lo=48.8
+[467/1000] 0466.json: SOLVED in 0.0s  RA=331.9463 Dec=+27.7441  matched=10  verified=89  accept_lo=100.6  best_reject_lo=16.2
+[468/1000] 0467.json: SOLVED in 4.2s  RA=147.6281 Dec=-31.0258  matched=10  verified=21442  accept_lo=102.8  best_reject_lo=49.7
+[469/1000] 0468.json: SOLVED in 0.0s  RA=313.3770 Dec=-71.5309  matched=10  verified=88  accept_lo=101.4  best_reject_lo=47.0
+[470/1000] 0469.json: SOLVED in 1.9s  RA=288.7039 Dec=+62.0827  matched=10  verified=7913  accept_lo=100.0  best_reject_lo=49.0
+[471/1000] 0470.json: SOLVED in 2.7s  RA=184.7615 Dec=+7.5626  matched=10  verified=9240  accept_lo=107.1  best_reject_lo=49.7
+[472/1000] 0471.json: SOLVED in 14.8s  RA=142.7616 Dec=-84.9199  matched=10  verified=51880  accept_lo=102.6  best_reject_lo=49.3
+[473/1000] 0472.json: SOLVED in 0.6s  RA=148.0335 Dec=+4.6064  matched=10  verified=2521  accept_lo=109.7  best_reject_lo=47.6
+[474/1000] 0473.json: SOLVED in 0.1s  RA=49.0155 Dec=-5.3785  matched=10  verified=423  accept_lo=105.3  best_reject_lo=49.6
+[475/1000] 0474.json: SOLVED in 1.3s  RA=184.0426 Dec=+11.8120  matched=10  verified=5496  accept_lo=106.7  best_reject_lo=65.9
+[476/1000] 0475.json: SOLVED in 1.4s  RA=246.6380 Dec=-76.1084  matched=10  verified=4051  accept_lo=99.6  best_reject_lo=49.2
+[477/1000] 0476.json: SOLVED in 7.3s  RA=118.0553 Dec=-28.4491  matched=10  verified=23446  accept_lo=103.3  best_reject_lo=49.3
+[478/1000] 0477.json: SOLVED in 7.4s  RA=9.0386 Dec=-59.3461  matched=10  verified=25904  accept_lo=105.3  best_reject_lo=50.2
+[479/1000] 0478.json: SOLVED in 0.1s  RA=60.0465 Dec=+12.2772  matched=10  verified=186  accept_lo=101.4  best_reject_lo=49.0
+[480/1000] 0479.json: SOLVED in 7.7s  RA=115.3374 Dec=-22.1212  matched=10  verified=15094  accept_lo=100.8  best_reject_lo=49.2
+[481/1000] 0480.json: SOLVED in 0.2s  RA=150.0574 Dec=+0.3825  matched=10  verified=577  accept_lo=102.8  best_reject_lo=48.9
+[482/1000] 0481.json: SOLVED in 8.1s  RA=124.4211 Dec=+14.9426  matched=10  verified=28038  accept_lo=101.8  best_reject_lo=49.7
+[483/1000] 0482.json: SOLVED in 1.7s  RA=194.2303 Dec=-11.1640  matched=10  verified=3991  accept_lo=103.6  best_reject_lo=49.7
+[484/1000] 0483.json: SOLVED in 0.5s  RA=315.3931 Dec=+3.2861  matched=10  verified=1866  accept_lo=101.2  best_reject_lo=48.8
+[485/1000] 0484.json: SOLVED in 0.5s  RA=61.8613 Dec=+15.7526  matched=10  verified=1643  accept_lo=99.8  best_reject_lo=49.7
+[486/1000] 0485.json: SOLVED in 0.0s  RA=1.1498 Dec=-5.7694  matched=10  verified=47  accept_lo=103.6  best_reject_lo=48.5
+[487/1000] 0486.json: SOLVED in 7.4s  RA=311.2595 Dec=+2.8626  matched=10  verified=23088  accept_lo=103.1  best_reject_lo=48.2
+[488/1000] 0487.json: SOLVED in 1.5s  RA=358.1646 Dec=-19.1078  matched=10  verified=3847  accept_lo=102.8  best_reject_lo=49.8
+[489/1000] 0488.json: SOLVED in 0.1s  RA=174.9471 Dec=-36.3279  matched=10  verified=136  accept_lo=101.0  best_reject_lo=49.6
+[490/1000] 0489.json: SOLVED in 0.7s  RA=115.6181 Dec=-46.9433  matched=10  verified=2339  accept_lo=101.4  best_reject_lo=49.7
+[491/1000] 0490.json: SOLVED in 0.6s  RA=2.7130 Dec=+29.8106  matched=10  verified=1489  accept_lo=103.1  best_reject_lo=49.2
+[492/1000] 0491.json: SOLVED in 0.1s  RA=359.5579 Dec=+34.7850  matched=10  verified=290  accept_lo=102.8  best_reject_lo=47.4
+[493/1000] 0492.json: SOLVED in 11.0s  RA=333.8413 Dec=+12.9887  matched=10  verified=35603  accept_lo=101.8  best_reject_lo=49.5
+[494/1000] 0493.json: SOLVED in 0.0s  RA=334.8871 Dec=-22.7364  matched=10  verified=39  accept_lo=101.8  best_reject_lo=-20.0
+[495/1000] 0494.json: SOLVED in 36.1s  RA=125.3409 Dec=-24.9915  matched=10  verified=117186  accept_lo=103.3  best_reject_lo=50.5
+[496/1000] 0495.json: SOLVED in 21.7s  RA=145.7383 Dec=-14.6041  matched=10  verified=73878  accept_lo=102.3  best_reject_lo=48.8
+[497/1000] 0496.json: SOLVED in 1.2s  RA=3.2178 Dec=+4.5883  matched=10  verified=4752  accept_lo=103.9  best_reject_lo=49.9
+[498/1000] 0497.json: SOLVED in 3.1s  RA=247.3701 Dec=+21.1225  matched=10  verified=10317  accept_lo=102.6  best_reject_lo=49.9
+[499/1000] 0498.json: SOLVED in 19.4s  RA=302.5424 Dec=+47.0696  matched=10  verified=53352  accept_lo=100.7  best_reject_lo=50.2
+[500/1000] 0499.json: SOLVED in 1.2s  RA=192.6859 Dec=-8.0603  matched=10  verified=4179  accept_lo=105.0  best_reject_lo=49.2
+[501/1000] 0500.json: SOLVED in 0.1s  RA=123.1655 Dec=-80.6674  matched=10  verified=219  accept_lo=102.6  best_reject_lo=48.9
+[502/1000] 0501.json: SOLVED in 0.9s  RA=163.6307 Dec=+17.8139  matched=10  verified=8416  accept_lo=110.8  best_reject_lo=49.9
+[503/1000] 0502.json: SOLVED in 4.2s  RA=269.3307 Dec=-15.6023  matched=10  verified=14686  accept_lo=100.8  best_reject_lo=48.9
+[504/1000] 0503.json: SOLVED in 0.0s  RA=65.9827 Dec=+17.9659  matched=10  verified=135  accept_lo=99.4  best_reject_lo=-6.2
+[505/1000] 0504.json: SOLVED in 0.1s  RA=182.9400 Dec=+38.2248  matched=10  verified=1121  accept_lo=110.2  best_reject_lo=48.8
+[506/1000] 0505.json: SOLVED in 1.1s  RA=192.3262 Dec=+34.0980  matched=10  verified=3601  accept_lo=108.8  best_reject_lo=50.2
+[507/1000] 0506.json: SOLVED in 2.0s  RA=261.3351 Dec=+47.5681  matched=10  verified=8931  accept_lo=101.0  best_reject_lo=49.8
+[508/1000] 0507.json: SOLVED in 1.7s  RA=258.5287 Dec=+55.6438  matched=10  verified=4608  accept_lo=103.9  best_reject_lo=49.6
+[509/1000] 0508.json: SOLVED in 0.9s  RA=130.8561 Dec=-54.3925  matched=10  verified=4011  accept_lo=101.6  best_reject_lo=49.6
+[510/1000] 0509.json: SOLVED in 2.7s  RA=348.8654 Dec=+15.2336  matched=10  verified=11767  accept_lo=100.0  best_reject_lo=49.5
+[511/1000] 0510.json: SOLVED in 0.4s  RA=23.9205 Dec=-29.8246  matched=10  verified=6202  accept_lo=103.0  best_reject_lo=50.3
+[512/1000] 0511.json: SOLVED in 0.0s  RA=54.9587 Dec=-3.5929  matched=10  verified=90  accept_lo=107.9  best_reject_lo=30.3
+[513/1000] 0512.json: SOLVED in 1.2s  RA=88.9385 Dec=-60.6764  matched=10  verified=4876  accept_lo=100.8  best_reject_lo=49.3
+[514/1000] 0513.json: SOLVED in 6.7s  RA=4.5457 Dec=+77.7782  matched=10  verified=28511  accept_lo=100.4  best_reject_lo=49.7
+[515/1000] 0514.json: SOLVED in 14.1s  RA=289.6847 Dec=+67.9954  matched=10  verified=39458  accept_lo=101.6  best_reject_lo=49.2
+[516/1000] 0515.json: SOLVED in 2.2s  RA=256.8261 Dec=+53.0537  matched=10  verified=6571  accept_lo=100.8  best_reject_lo=49.7
+[517/1000] 0516.json: SOLVED in 0.3s  RA=58.7786 Dec=-28.7665  matched=10  verified=1167  accept_lo=105.3  best_reject_lo=49.7
+[518/1000] 0517.json: SOLVED in 11.2s  RA=18.9051 Dec=+40.0567  matched=10  verified=32866  accept_lo=104.1  best_reject_lo=50.2
+[519/1000] 0518.json: SOLVED in 0.5s  RA=103.1080 Dec=+46.9661  matched=10  verified=1599  accept_lo=100.4  best_reject_lo=49.7
+[520/1000] 0519.json: SOLVED in 0.1s  RA=46.4426 Dec=-77.5253  matched=10  verified=712  accept_lo=101.8  best_reject_lo=50.1
+[521/1000] 0520.json: SOLVED in 0.4s  RA=112.5161 Dec=+34.7821  matched=10  verified=2037  accept_lo=102.3  best_reject_lo=49.7
+[522/1000] 0521.json: SOLVED in 0.6s  RA=217.0211 Dec=-1.9764  matched=10  verified=2219  accept_lo=103.1  best_reject_lo=49.9
+[523/1000] 0522.json: SOLVED in 13.6s  RA=89.3147 Dec=+18.3090  matched=10  verified=45330  accept_lo=101.4  best_reject_lo=49.6
+[524/1000] 0523.json: SOLVED in 1.6s  RA=120.5776 Dec=+22.4101  matched=10  verified=7662  accept_lo=101.2  best_reject_lo=49.1
+[525/1000] 0524.json: SOLVED in 0.6s  RA=54.1150 Dec=-5.5659  matched=10  verified=3440  accept_lo=104.1  best_reject_lo=48.9
+[526/1000] 0525.json: SOLVED in 0.9s  RA=213.3450 Dec=-51.2645  matched=10  verified=3465  accept_lo=102.8  best_reject_lo=50.3
+[527/1000] 0526.json: SOLVED in 1.2s  RA=117.5671 Dec=-24.1266  matched=10  verified=4430  accept_lo=103.0  best_reject_lo=52.2
+[528/1000] 0527.json: FAILED in 60.1s  verified=194247  best_lo=49.5(4m)  TIMEOUT
+[529/1000] 0528.json: SOLVED in 2.5s  RA=332.2276 Dec=+16.4233  matched=10  verified=10083  accept_lo=102.3  best_reject_lo=49.4
+[530/1000] 0529.json: SOLVED in 0.3s  RA=244.3907 Dec=+27.4220  matched=10  verified=1414  accept_lo=100.8  best_reject_lo=48.4
+[531/1000] 0530.json: SOLVED in 4.5s  RA=135.6896 Dec=-54.3463  matched=10  verified=17692  accept_lo=103.6  best_reject_lo=49.4
+[532/1000] 0531.json: SOLVED in 1.9s  RA=24.5604 Dec=+35.5382  matched=10  verified=9562  accept_lo=101.4  best_reject_lo=48.2
+[533/1000] 0532.json: SOLVED in 1.9s  RA=324.0243 Dec=-23.8609  matched=10  verified=6158  accept_lo=101.4  best_reject_lo=50.0
+[534/1000] 0533.json: SOLVED in 0.5s  RA=322.6025 Dec=+17.4938  matched=10  verified=1400  accept_lo=103.3  best_reject_lo=50.0
+[535/1000] 0534.json: SOLVED in 1.1s  RA=239.6930 Dec=+19.2434  matched=10  verified=3116  accept_lo=101.8  best_reject_lo=48.8
+[536/1000] 0535.json: SOLVED in 8.4s  RA=295.0606 Dec=-25.0269  matched=10  verified=28416  accept_lo=101.4  best_reject_lo=49.8
+[537/1000] 0536.json: SOLVED in 0.1s  RA=271.1850 Dec=+9.6757  matched=10  verified=280  accept_lo=100.8  best_reject_lo=15.9
+[538/1000] 0537.json: SOLVED in 25.4s  RA=56.1130 Dec=+29.6276  matched=10  verified=71561  accept_lo=101.8  best_reject_lo=49.9
+[539/1000] 0538.json: SOLVED in 0.2s  RA=97.1961 Dec=+8.0026  matched=10  verified=1062  accept_lo=101.4  best_reject_lo=47.9
+[540/1000] 0539.json: SOLVED in 0.0s  RA=346.4604 Dec=+12.2216  matched=10  verified=41  accept_lo=102.6  best_reject_lo=49.9
+[541/1000] 0540.json: SOLVED in 2.6s  RA=104.5277 Dec=+14.3579  matched=10  verified=8149  accept_lo=101.6  best_reject_lo=49.3
+[542/1000] 0541.json: FAILED in 60.1s  verified=176584  best_lo=48.9(4m)  TIMEOUT
+[543/1000] 0542.json: SOLVED in 2.4s  RA=281.2752 Dec=-19.9358  matched=10  verified=8546  accept_lo=102.1  best_reject_lo=49.0
+[544/1000] 0543.json: SOLVED in 0.1s  RA=120.8194 Dec=+17.9252  matched=10  verified=488  accept_lo=101.2  best_reject_lo=48.8
+[545/1000] 0544.json: SOLVED in 0.0s  RA=101.5419 Dec=+22.5984  matched=10  verified=98  accept_lo=102.8  best_reject_lo=47.1
+[546/1000] 0545.json: SOLVED in 1.3s  RA=233.6538 Dec=+4.0090  matched=10  verified=3611  accept_lo=102.1  best_reject_lo=49.7
+[547/1000] 0546.json: SOLVED in 0.0s  RA=45.5805 Dec=-20.5252  matched=10  verified=65  accept_lo=106.7  best_reject_lo=47.1
+[548/1000] 0547.json: SOLVED in 0.2s  RA=218.0059 Dec=-57.4872  matched=10  verified=1062  accept_lo=100.4  best_reject_lo=49.9
+[549/1000] 0548.json: SOLVED in 0.9s  RA=274.2541 Dec=+8.0611  matched=10  verified=3308  accept_lo=100.6  best_reject_lo=49.3
+[550/1000] 0549.json: SOLVED in 1.8s  RA=302.1838 Dec=+8.2444  matched=10  verified=6599  accept_lo=101.8  best_reject_lo=49.3
+[551/1000] 0550.json: SOLVED in 0.4s  RA=76.3208 Dec=-35.2068  matched=10  verified=1128  accept_lo=101.6  best_reject_lo=48.2
+[552/1000] 0551.json: SOLVED in 0.0s  RA=127.7585 Dec=-55.1923  matched=10  verified=29  accept_lo=103.8  best_reject_lo=50.3
+[553/1000] 0552.json: SOLVED in 0.8s  RA=225.2737 Dec=+37.1903  matched=10  verified=2180  accept_lo=105.3  best_reject_lo=48.4
+[554/1000] 0553.json: SOLVED in 0.8s  RA=73.2018 Dec=+60.1684  matched=10  verified=2789  accept_lo=102.1  best_reject_lo=48.7
+[555/1000] 0554.json: SOLVED in 0.0s  RA=190.4461 Dec=+15.6189  matched=10  verified=88  accept_lo=110.2  best_reject_lo=49.7
+[556/1000] 0555.json: FAILED in 68.0s  verified=228494  best_lo=48.9(4m)  TIMEOUT
+[557/1000] 0556.json: SOLVED in 1.5s  RA=290.1879 Dec=-66.0490  matched=10  verified=4780  accept_lo=101.4  best_reject_lo=49.4
+[558/1000] 0557.json: SOLVED in 20.9s  RA=89.2828 Dec=-47.1034  matched=10  verified=84725  accept_lo=100.0  best_reject_lo=49.9
+[559/1000] 0558.json: SOLVED in 1.4s  RA=208.8260 Dec=-27.0012  matched=10  verified=5111  accept_lo=100.4  best_reject_lo=50.3
+[560/1000] 0559.json: SOLVED in 1.5s  RA=135.2242 Dec=+73.6720  matched=10  verified=3746  accept_lo=103.1  best_reject_lo=49.1
+[561/1000] 0560.json: SOLVED in 1.1s  RA=133.2804 Dec=+26.9473  matched=10  verified=5992  accept_lo=101.8  best_reject_lo=49.8
+[562/1000] 0561.json: SOLVED in 0.0s  RA=26.2180 Dec=-50.1303  matched=10  verified=129  accept_lo=105.3  best_reject_lo=16.3
+[563/1000] 0562.json: SOLVED in 19.5s  RA=93.9742 Dec=+68.6208  matched=10  verified=58934  accept_lo=103.8  best_reject_lo=49.2
+[564/1000] 0563.json: SOLVED in 9.4s  RA=164.6917 Dec=+22.9708  matched=10  verified=36121  accept_lo=112.0  best_reject_lo=50.0
+[565/1000] 0564.json: SOLVED in 5.7s  RA=120.8031 Dec=+3.7944  matched=10  verified=18325  accept_lo=101.8  best_reject_lo=49.7
+[566/1000] 0565.json: SOLVED in 0.1s  RA=136.4046 Dec=+36.5042  matched=10  verified=157  accept_lo=106.0  best_reject_lo=45.1
+[567/1000] 0566.json: SOLVED in 0.4s  RA=342.9904 Dec=+33.0553  matched=10  verified=2680  accept_lo=101.2  best_reject_lo=48.8
+[568/1000] 0567.json: SOLVED in 3.4s  RA=51.7803 Dec=+37.1311  matched=10  verified=13477  accept_lo=101.8  best_reject_lo=49.5
+[569/1000] 0568.json: SOLVED in 0.9s  RA=295.8894 Dec=-4.2335  matched=10  verified=2838  accept_lo=101.4  best_reject_lo=48.3
+[570/1000] 0569.json: SOLVED in 1.2s  RA=344.4535 Dec=-46.0588  matched=10  verified=4490  accept_lo=103.1  best_reject_lo=49.4
+[571/1000] 0570.json: SOLVED in 1.3s  RA=74.6847 Dec=-86.3136  matched=10  verified=4803  accept_lo=101.0  best_reject_lo=48.9
+[572/1000] 0571.json: SOLVED in 4.9s  RA=179.1813 Dec=-28.3299  matched=10  verified=16955  accept_lo=101.4  best_reject_lo=49.6
+[573/1000] 0572.json: SOLVED in 0.1s  RA=179.1681 Dec=+12.6950  matched=10  verified=496  accept_lo=113.3  best_reject_lo=48.8
+[574/1000] 0573.json: SOLVED in 3.1s  RA=195.0106 Dec=+49.1194  matched=10  verified=9852  accept_lo=108.8  best_reject_lo=49.2
+[575/1000] 0574.json: SOLVED in 0.1s  RA=41.2804 Dec=-31.6359  matched=10  verified=484  accept_lo=106.4  best_reject_lo=47.8
+[576/1000] 0575.json: SOLVED in 4.5s  RA=180.7618 Dec=+25.4667  matched=10  verified=9440  accept_lo=106.3  best_reject_lo=48.8
+[577/1000] 0576.json: SOLVED in 0.1s  RA=129.3861 Dec=-35.6089  matched=10  verified=589  accept_lo=103.3  best_reject_lo=49.5
+[578/1000] 0577.json: SOLVED in 0.1s  RA=218.6087 Dec=+64.3007  matched=10  verified=610  accept_lo=103.9  best_reject_lo=28.5
+[579/1000] 0578.json: SOLVED in 3.0s  RA=172.4336 Dec=-42.5988  matched=10  verified=9997  accept_lo=101.6  best_reject_lo=49.6
+[580/1000] 0579.json: SOLVED in 1.7s  RA=68.1816 Dec=+15.8677  matched=10  verified=4498  accept_lo=100.2  best_reject_lo=49.4
+[581/1000] 0580.json: SOLVED in 33.3s  RA=295.4403 Dec=+65.4440  matched=10  verified=96207  accept_lo=101.8  best_reject_lo=49.5
+[582/1000] 0581.json: SOLVED in 0.0s  RA=289.7095 Dec=+32.2624  matched=10  verified=84  accept_lo=101.6  best_reject_lo=-6.8
+[583/1000] 0582.json: SOLVED in 0.7s  RA=38.1142 Dec=+6.3174  matched=10  verified=34116  accept_lo=79.3  best_reject_lo=49.8
+[584/1000] 0583.json: SOLVED in 3.2s  RA=188.9381 Dec=+24.8946  matched=10  verified=17102  accept_lo=108.8  best_reject_lo=49.2
+[585/1000] 0584.json: SOLVED in 1.3s  RA=63.2259 Dec=+76.7590  matched=10  verified=5367  accept_lo=101.8  best_reject_lo=49.8
+[586/1000] 0585.json: SOLVED in 2.0s  RA=174.8661 Dec=-60.7478  matched=10  verified=6107  accept_lo=101.4  best_reject_lo=49.1
+[587/1000] 0586.json: SOLVED in 0.5s  RA=254.7688 Dec=-2.0930  matched=10  verified=2258  accept_lo=100.4  best_reject_lo=49.6
+[588/1000] 0587.json: SOLVED in 0.2s  RA=147.7284 Dec=-80.9552  matched=10  verified=512  accept_lo=103.9  best_reject_lo=50.0
+[589/1000] 0588.json: SOLVED in 0.3s  RA=277.3797 Dec=-15.7369  matched=10  verified=890  accept_lo=101.6  best_reject_lo=49.4
+[590/1000] 0589.json: SOLVED in 3.4s  RA=357.0461 Dec=-57.3439  matched=10  verified=10262  accept_lo=104.0  best_reject_lo=49.8
+[591/1000] 0590.json: SOLVED in 1.3s  RA=232.6823 Dec=+27.2114  matched=10  verified=5664  accept_lo=103.9  best_reject_lo=49.4
+[592/1000] 0591.json: SOLVED in 0.5s  RA=192.5282 Dec=+64.0311  matched=10  verified=1204  accept_lo=105.3  best_reject_lo=49.2
+[593/1000] 0592.json: SOLVED in 6.2s  RA=134.3018 Dec=-70.1703  matched=10  verified=21340  accept_lo=102.1  best_reject_lo=51.8
+[594/1000] 0593.json: SOLVED in 0.4s  RA=49.4448 Dec=+56.2931  matched=10  verified=1540  accept_lo=101.6  best_reject_lo=49.5
+[595/1000] 0594.json: SOLVED in 0.2s  RA=171.2723 Dec=-56.7695  matched=10  verified=1014  accept_lo=101.6  best_reject_lo=49.2
+[596/1000] 0595.json: SOLVED in 0.2s  RA=44.7560 Dec=+2.9293  matched=10  verified=731  accept_lo=101.8  best_reject_lo=49.4
+[597/1000] 0596.json: SOLVED in 47.2s  RA=353.9974 Dec=+39.1745  matched=10  verified=471309  accept_lo=102.3  best_reject_lo=49.5
+[598/1000] 0597.json: SOLVED in 1.0s  RA=93.3730 Dec=+59.3948  matched=10  verified=2621  accept_lo=103.3  best_reject_lo=49.8
+[599/1000] 0598.json: SOLVED in 1.4s  RA=225.0254 Dec=-35.1805  matched=10  verified=67116  accept_lo=101.4  best_reject_lo=49.9
+[600/1000] 0599.json: SOLVED in 5.2s  RA=93.6821 Dec=-60.9950  matched=10  verified=19518  accept_lo=101.6  best_reject_lo=49.3
+[601/1000] 0600.json: FAILED in 66.5s  verified=258849  best_lo=49.6(4m)  TIMEOUT
+[602/1000] 0601.json: SOLVED in 0.8s  RA=289.7555 Dec=+48.2512  matched=10  verified=2055  accept_lo=102.3  best_reject_lo=50.1
+[603/1000] 0602.json: SOLVED in 0.5s  RA=92.2777 Dec=+1.2516  matched=10  verified=1789  accept_lo=101.8  best_reject_lo=49.8
+[604/1000] 0603.json: SOLVED in 0.6s  RA=190.4825 Dec=+49.4809  matched=10  verified=3149  accept_lo=113.3  best_reject_lo=49.4
+[605/1000] 0604.json: SOLVED in 0.8s  RA=293.7740 Dec=-48.4467  matched=10  verified=2186  accept_lo=99.1  best_reject_lo=49.5
+[606/1000] 0605.json: SOLVED in 0.4s  RA=295.6659 Dec=-69.4371  matched=10  verified=1292  accept_lo=100.2  best_reject_lo=49.0
+[607/1000] 0606.json: SOLVED in 0.2s  RA=345.7570 Dec=+16.3193  matched=10  verified=1313  accept_lo=102.1  best_reject_lo=47.0
+[608/1000] 0607.json: SOLVED in 0.6s  RA=103.0129 Dec=-12.7922  matched=10  verified=2121  accept_lo=101.8  best_reject_lo=50.1
+[609/1000] 0608.json: SOLVED in 0.0s  RA=245.8064 Dec=-11.5176  matched=10  verified=122  accept_lo=101.0  best_reject_lo=16.5
+[610/1000] 0609.json: SOLVED in 1.1s  RA=330.3623 Dec=-46.1483  matched=10  verified=3188  accept_lo=102.1  best_reject_lo=49.8
+[611/1000] 0610.json: SOLVED in 0.8s  RA=110.7527 Dec=+43.3142  matched=10  verified=2948  accept_lo=101.8  best_reject_lo=49.5
+[612/1000] 0611.json: SOLVED in 2.0s  RA=316.5375 Dec=-27.9641  matched=10  verified=10556  accept_lo=101.6  best_reject_lo=49.9
+[613/1000] 0612.json: SOLVED in 0.5s  RA=173.9890 Dec=+43.4551  matched=10  verified=1883  accept_lo=111.6  best_reject_lo=49.0
+[614/1000] 0613.json: SOLVED in 5.2s  RA=354.4941 Dec=-58.2849  matched=10  verified=17380  accept_lo=95.8  best_reject_lo=49.7
+[615/1000] 0614.json: SOLVED in 2.5s  RA=356.0983 Dec=-28.7543  matched=10  verified=11957  accept_lo=105.7  best_reject_lo=49.2
+[616/1000] 0615.json: SOLVED in 1.3s  RA=322.9737 Dec=+66.4962  matched=10  verified=9948  accept_lo=101.0  best_reject_lo=48.9
+[617/1000] 0616.json: SOLVED in 0.0s  RA=309.8854 Dec=-15.9879  matched=10  verified=189  accept_lo=100.2  best_reject_lo=48.2
+[618/1000] 0617.json: SOLVED in 0.2s  RA=145.1248 Dec=+23.3474  matched=10  verified=672  accept_lo=106.7  best_reject_lo=48.8
+[619/1000] 0618.json: SOLVED in 0.7s  RA=253.9430 Dec=+45.6310  matched=10  verified=2332  accept_lo=103.1  best_reject_lo=49.4
+[620/1000] 0619.json: SOLVED in 0.1s  RA=201.7164 Dec=+51.7794  matched=10  verified=312  accept_lo=105.3  best_reject_lo=34.9
+[621/1000] 0620.json: SOLVED in 0.8s  RA=16.2716 Dec=-20.8733  matched=10  verified=2170  accept_lo=108.8  best_reject_lo=48.5
+[622/1000] 0621.json: SOLVED in 6.5s  RA=160.2750 Dec=-34.2698  matched=10  verified=32621  accept_lo=100.8  best_reject_lo=49.1
+[623/1000] 0622.json: SOLVED in 1.1s  RA=113.6310 Dec=-19.2188  matched=10  verified=5275  accept_lo=101.2  best_reject_lo=48.9
+[624/1000] 0623.json: SOLVED in 0.7s  RA=69.8986 Dec=-16.8406  matched=10  verified=1810  accept_lo=101.8  best_reject_lo=50.2
+[625/1000] 0624.json: SOLVED in 24.2s  RA=217.8583 Dec=+8.5031  matched=10  verified=69949  accept_lo=103.6  best_reject_lo=49.7
+[626/1000] 0625.json: SOLVED in 0.0s  RA=120.0397 Dec=-38.8445  matched=10  verified=436  accept_lo=100.5  best_reject_lo=-8.7
+[627/1000] 0626.json: SOLVED in 3.1s  RA=49.8154 Dec=-74.3678  matched=10  verified=12127  accept_lo=101.0  best_reject_lo=49.5
+[628/1000] 0627.json: SOLVED in 16.1s  RA=34.3515 Dec=-38.9624  matched=10  verified=52172  accept_lo=111.4  best_reject_lo=48.9
+[629/1000] 0628.json: SOLVED in 3.4s  RA=69.5966 Dec=+67.4004  matched=10  verified=10599  accept_lo=100.8  best_reject_lo=49.8
+[630/1000] 0629.json: SOLVED in 1.2s  RA=69.1949 Dec=+12.2935  matched=10  verified=1241  accept_lo=102.1  best_reject_lo=49.3
+[631/1000] 0630.json: SOLVED in 0.9s  RA=324.8267 Dec=+26.6657  matched=10  verified=4908  accept_lo=101.0  best_reject_lo=49.2
+[632/1000] 0631.json: SOLVED in 0.3s  RA=133.0706 Dec=+14.2428  matched=10  verified=1485  accept_lo=103.6  best_reject_lo=48.2
+[633/1000] 0632.json: SOLVED in 0.3s  RA=63.2011 Dec=-24.3755  matched=10  verified=1083  accept_lo=103.1  best_reject_lo=49.9
+[634/1000] 0633.json: SOLVED in 6.3s  RA=41.9785 Dec=-81.2782  matched=10  verified=15460  accept_lo=102.6  best_reject_lo=50.3
+[635/1000] 0634.json: SOLVED in 0.1s  RA=293.3164 Dec=-47.3428  matched=10  verified=176  accept_lo=101.4  best_reject_lo=50.0
+[636/1000] 0635.json: SOLVED in 1.1s  RA=240.5755 Dec=-13.6476  matched=10  verified=4892  accept_lo=101.4  best_reject_lo=50.0
+[637/1000] 0636.json: SOLVED in 1.4s  RA=324.2481 Dec=+46.2737  matched=10  verified=3366  accept_lo=103.9  best_reject_lo=49.3
+[638/1000] 0637.json: SOLVED in 0.6s  RA=123.8673 Dec=+8.0368  matched=10  verified=2497  accept_lo=101.0  best_reject_lo=49.8
+[639/1000] 0638.json: SOLVED in 2.4s  RA=307.7111 Dec=+5.6889  matched=10  verified=7453  accept_lo=101.4  best_reject_lo=49.9
+[640/1000] 0639.json: SOLVED in 11.2s  RA=33.8436 Dec=-16.5135  matched=10  verified=39230  accept_lo=105.3  best_reject_lo=49.0
+[641/1000] 0640.json: SOLVED in 0.1s  RA=64.3337 Dec=-44.5092  matched=10  verified=65  accept_lo=103.6  best_reject_lo=48.5
+[642/1000] 0641.json: SOLVED in 0.5s  RA=217.7775 Dec=+20.7443  matched=10  verified=3432  accept_lo=103.6  best_reject_lo=49.1
+[643/1000] 0642.json: SOLVED in 0.3s  RA=328.8607 Dec=+74.0460  matched=10  verified=1608  accept_lo=101.8  best_reject_lo=50.1
+[644/1000] 0643.json: SOLVED in 8.2s  RA=20.6638 Dec=+5.7180  matched=10  verified=29603  accept_lo=106.0  best_reject_lo=49.7
+[645/1000] 0644.json: SOLVED in 0.0s  RA=229.5504 Dec=-77.7619  matched=10  verified=44  accept_lo=101.2  best_reject_lo=49.2
+[646/1000] 0645.json: SOLVED in 1.3s  RA=311.6823 Dec=-8.0338  matched=10  verified=4724  accept_lo=101.4  best_reject_lo=48.9
+[647/1000] 0646.json: SOLVED in 1.4s  RA=217.1577 Dec=+31.5489  matched=10  verified=10076  accept_lo=107.5  best_reject_lo=50.0
+[648/1000] 0647.json: SOLVED in 0.1s  RA=176.8518 Dec=-53.5852  matched=10  verified=281  accept_lo=101.0  best_reject_lo=44.3
+[649/1000] 0648.json: SOLVED in 2.1s  RA=39.6483 Dec=-47.0245  matched=10  verified=9633  accept_lo=105.7  best_reject_lo=49.8
+[650/1000] 0649.json: SOLVED in 0.1s  RA=159.1959 Dec=+5.7222  matched=10  verified=660  accept_lo=106.7  best_reject_lo=50.3
+[651/1000] 0650.json: SOLVED in 0.6s  RA=349.7602 Dec=+48.7035  matched=10  verified=1735  accept_lo=96.7  best_reject_lo=49.6
+[652/1000] 0651.json: SOLVED in 0.1s  RA=332.0087 Dec=+14.9777  matched=10  verified=211  accept_lo=101.8  best_reject_lo=48.6
+[653/1000] 0652.json: SOLVED in 1.9s  RA=100.5052 Dec=-39.4033  matched=10  verified=5355  accept_lo=102.5  best_reject_lo=49.7
+[654/1000] 0653.json: SOLVED in 2.0s  RA=107.1199 Dec=-43.5198  matched=10  verified=6110  accept_lo=102.3  best_reject_lo=49.5
+[655/1000] 0654.json: SOLVED in 2.1s  RA=138.5535 Dec=+15.7951  matched=10  verified=6474  accept_lo=105.0  best_reject_lo=49.7
+[656/1000] 0655.json: SOLVED in 0.2s  RA=37.7822 Dec=+40.0032  matched=10  verified=619  accept_lo=100.2  best_reject_lo=47.5
+[657/1000] 0656.json: SOLVED in 0.9s  RA=176.4722 Dec=+11.8371  matched=10  verified=3042  accept_lo=112.0  best_reject_lo=49.6
+[658/1000] 0657.json: SOLVED in 0.1s  RA=350.6361 Dec=-70.3727  matched=10  verified=128  accept_lo=102.3  best_reject_lo=48.9
+[659/1000] 0658.json: SOLVED in 0.9s  RA=196.4708 Dec=+42.8274  matched=10  verified=3009  accept_lo=107.5  best_reject_lo=49.6
+[660/1000] 0659.json: SOLVED in 1.3s  RA=133.9299 Dec=-9.8609  matched=10  verified=2953  accept_lo=101.2  best_reject_lo=49.4
+[661/1000] 0660.json: SOLVED in 0.2s  RA=150.5566 Dec=-84.1959  matched=10  verified=2247  accept_lo=101.6  best_reject_lo=50.2
+[662/1000] 0661.json: SOLVED in 4.4s  RA=26.0391 Dec=-15.8354  matched=10  verified=16516  accept_lo=109.4  best_reject_lo=50.2
+[663/1000] 0662.json: SOLVED in 4.0s  RA=318.1338 Dec=+72.1189  matched=10  verified=9073  accept_lo=101.8  best_reject_lo=49.6
+[664/1000] 0663.json: SOLVED in 1.9s  RA=2.1549 Dec=+9.2220  matched=10  verified=6798  accept_lo=109.2  best_reject_lo=48.9
+[665/1000] 0664.json: SOLVED in 0.2s  RA=316.2275 Dec=-65.4422  matched=10  verified=594  accept_lo=100.2  best_reject_lo=49.6
+[666/1000] 0665.json: SOLVED in 2.9s  RA=295.8010 Dec=+56.9769  matched=10  verified=16586  accept_lo=101.0  best_reject_lo=49.4
+[667/1000] 0666.json: SOLVED in 0.1s  RA=181.7403 Dec=+7.4714  matched=10  verified=357  accept_lo=110.2  best_reject_lo=49.7
+[668/1000] 0667.json: SOLVED in 0.0s  RA=76.7774 Dec=-8.6128  matched=10  verified=77  accept_lo=101.4  best_reject_lo=49.3
+[669/1000] 0668.json: SOLVED in 21.0s  RA=117.4996 Dec=-17.3130  matched=10  verified=104317  accept_lo=100.4  best_reject_lo=50.2
+[670/1000] 0669.json: SOLVED in 11.9s  RA=20.2197 Dec=+71.7718  matched=10  verified=42064  accept_lo=102.3  best_reject_lo=49.0
+[671/1000] 0670.json: SOLVED in 25.8s  RA=128.9778 Dec=+72.7915  matched=10  verified=83382  accept_lo=102.1  best_reject_lo=49.5
+[672/1000] 0671.json: SOLVED in 0.0s  RA=68.9223 Dec=-7.4733  matched=10  verified=26  accept_lo=101.4  best_reject_lo=-20.0
+[673/1000] 0672.json: SOLVED in 0.2s  RA=59.0134 Dec=-34.6568  matched=10  verified=1222  accept_lo=110.2  best_reject_lo=29.9
+[674/1000] 0673.json: SOLVED in 2.5s  RA=291.6272 Dec=-58.3133  matched=10  verified=12608  accept_lo=102.8  best_reject_lo=49.7
+[675/1000] 0674.json: SOLVED in 0.1s  RA=60.7572 Dec=+60.3552  matched=10  verified=529  accept_lo=102.3  best_reject_lo=46.2
+[676/1000] 0675.json: SOLVED in 2.8s  RA=5.0347 Dec=+77.5646  matched=10  verified=8711  accept_lo=100.4  best_reject_lo=50.1
+[677/1000] 0676.json: SOLVED in 17.6s  RA=203.9182 Dec=-57.9536  matched=10  verified=56723  accept_lo=102.8  best_reject_lo=49.6
+[678/1000] 0677.json: SOLVED in 0.0s  RA=326.4557 Dec=+32.5575  matched=10  verified=70  accept_lo=101.0  best_reject_lo=48.3
+[679/1000] 0678.json: SOLVED in 0.0s  RA=196.3093 Dec=+53.1830  matched=10  verified=287  accept_lo=107.9  best_reject_lo=48.5
+[680/1000] 0679.json: SOLVED in 0.1s  RA=56.2675 Dec=-25.2460  matched=10  verified=198  accept_lo=101.8  best_reject_lo=49.5
+[681/1000] 0680.json: SOLVED in 0.5s  RA=83.3849 Dec=+26.4083  matched=10  verified=3218  accept_lo=102.1  best_reject_lo=49.6
+[682/1000] 0681.json: SOLVED in 0.7s  RA=209.2965 Dec=+12.4704  matched=10  verified=2488  accept_lo=106.4  best_reject_lo=50.0
+[683/1000] 0682.json: SOLVED in 0.0s  RA=93.0349 Dec=+38.9045  matched=10  verified=72  accept_lo=101.2  best_reject_lo=14.3
+[684/1000] 0683.json: SOLVED in 35.7s  RA=105.4195 Dec=-38.1126  matched=10  verified=115696  accept_lo=100.8  best_reject_lo=49.6
+[685/1000] 0684.json: SOLVED in 4.2s  RA=175.8648 Dec=+2.7711  matched=10  verified=11465  accept_lo=108.3  best_reject_lo=49.9
+[686/1000] 0685.json: FAILED in 60.3s  verified=290575  best_lo=53.1(5m)  TIMEOUT
+[687/1000] 0686.json: SOLVED in 2.0s  RA=279.7734 Dec=-69.2577  matched=10  verified=5074  accept_lo=101.4  best_reject_lo=49.4
+[688/1000] 0687.json: SOLVED in 19.1s  RA=37.1839 Dec=+38.9244  matched=10  verified=56696  accept_lo=101.6  best_reject_lo=49.1
+[689/1000] 0688.json: SOLVED in 2.7s  RA=181.8199 Dec=-58.1886  matched=10  verified=12036  accept_lo=101.6  best_reject_lo=49.2
+[690/1000] 0689.json: SOLVED in 0.2s  RA=262.3566 Dec=+46.0911  matched=10  verified=501  accept_lo=101.2  best_reject_lo=48.5
+[691/1000] 0690.json: SOLVED in 0.1s  RA=76.6773 Dec=-44.5609  matched=10  verified=161  accept_lo=103.6  best_reject_lo=46.7
+[692/1000] 0691.json: SOLVED in 0.5s  RA=113.4953 Dec=+14.6929  matched=10  verified=4126  accept_lo=102.6  best_reject_lo=47.9
+[693/1000] 0692.json: SOLVED in 2.1s  RA=25.2910 Dec=+37.3344  matched=10  verified=10514  accept_lo=100.4  best_reject_lo=49.6
+[694/1000] 0693.json: SOLVED in 0.3s  RA=301.5105 Dec=+28.8932  matched=10  verified=911  accept_lo=101.2  best_reject_lo=49.0
+[695/1000] 0694.json: FAILED in 68.0s  verified=271467  best_lo=49.2(4m)  TIMEOUT
+[696/1000] 0695.json: SOLVED in 0.0s  RA=263.2219 Dec=+8.5176  matched=10  verified=153  accept_lo=103.3  best_reject_lo=15.3
+[697/1000] 0696.json: SOLVED in 0.6s  RA=76.3767 Dec=+12.2663  matched=10  verified=1857  accept_lo=101.8  best_reject_lo=49.1
+[698/1000] 0697.json: SOLVED in 5.3s  RA=76.6478 Dec=-42.7974  matched=10  verified=24546  accept_lo=102.8  best_reject_lo=52.8
+[699/1000] 0698.json: SOLVED in 0.2s  RA=208.0807 Dec=-47.6080  matched=10  verified=280  accept_lo=99.8  best_reject_lo=49.3
+[700/1000] 0699.json: FAILED in 60.2s  verified=225229  best_lo=50.3(4m)  TIMEOUT
+[701/1000] 0700.json: SOLVED in 0.2s  RA=10.9143 Dec=-22.6951  matched=10  verified=537  accept_lo=109.2  best_reject_lo=50.2
+[702/1000] 0701.json: SOLVED in 2.7s  RA=51.3512 Dec=+4.8780  matched=10  verified=8176  accept_lo=103.6  best_reject_lo=48.7
+[703/1000] 0702.json: SOLVED in 1.5s  RA=98.0990 Dec=+64.4571  matched=10  verified=4161  accept_lo=101.4  best_reject_lo=50.1
+[704/1000] 0703.json: SOLVED in 0.4s  RA=63.1662 Dec=-29.1087  matched=10  verified=1385  accept_lo=102.3  best_reject_lo=49.5
+[705/1000] 0704.json: FAILED in 74.3s  verified=325582  best_lo=49.5(4m)  TIMEOUT
+[706/1000] 0705.json: SOLVED in 0.7s  RA=229.9954 Dec=-73.4853  matched=10  verified=2008  accept_lo=102.6  best_reject_lo=48.2
+[707/1000] 0706.json: SOLVED in 10.1s  RA=30.6157 Dec=-14.6086  matched=10  verified=34637  accept_lo=110.2  best_reject_lo=49.3
+[708/1000] 0707.json: SOLVED in 0.1s  RA=226.3908 Dec=+49.7813  matched=10  verified=266  accept_lo=103.6  best_reject_lo=49.2
+[709/1000] 0708.json: SOLVED in 7.3s  RA=320.0989 Dec=+7.7943  matched=10  verified=23118  accept_lo=101.8  best_reject_lo=49.6
+[710/1000] 0709.json: SOLVED in 2.8s  RA=180.4973 Dec=+16.6870  matched=10  verified=6501  accept_lo=106.4  best_reject_lo=49.4
+[711/1000] 0710.json: SOLVED in 0.6s  RA=148.8674 Dec=-14.0835  matched=10  verified=1956  accept_lo=101.2  best_reject_lo=49.6
+[712/1000] 0711.json: SOLVED in 0.1s  RA=172.3796 Dec=+35.0302  matched=10  verified=193  accept_lo=109.2  best_reject_lo=48.7
+[713/1000] 0712.json: SOLVED in 0.0s  RA=84.3441 Dec=-27.5738  matched=10  verified=148  accept_lo=99.7  best_reject_lo=13.6
+[714/1000] 0713.json: SOLVED in 57.4s  RA=327.1366 Dec=+52.9850  matched=10  verified=185241  accept_lo=101.6  best_reject_lo=49.5
+[715/1000] 0714.json: SOLVED in 0.3s  RA=10.0646 Dec=+58.7813  matched=10  verified=791  accept_lo=100.8  best_reject_lo=50.1
+[716/1000] 0715.json: SOLVED in 0.1s  RA=149.3011 Dec=-4.3144  matched=10  verified=463  accept_lo=101.2  best_reject_lo=49.3
+[717/1000] 0716.json: SOLVED in 0.9s  RA=344.1332 Dec=-22.5324  matched=10  verified=3073  accept_lo=104.7  best_reject_lo=49.6
+[718/1000] 0717.json: SOLVED in 0.0s  RA=203.0181 Dec=-76.5302  matched=10  verified=168  accept_lo=101.5  best_reject_lo=49.8
+[719/1000] 0718.json: SOLVED in 1.1s  RA=243.7485 Dec=+10.1386  matched=10  verified=4337  accept_lo=102.6  best_reject_lo=49.8
+[720/1000] 0719.json: SOLVED in 0.1s  RA=161.3646 Dec=-25.9213  matched=10  verified=265  accept_lo=98.9  best_reject_lo=48.3
+[721/1000] 0720.json: SOLVED in 0.8s  RA=76.9435 Dec=+19.5052  matched=10  verified=2361  accept_lo=102.1  best_reject_lo=48.8
+[722/1000] 0721.json: SOLVED in 0.2s  RA=47.8159 Dec=+69.2762  matched=10  verified=1111  accept_lo=101.6  best_reject_lo=15.2
+[723/1000] 0722.json: SOLVED in 15.1s  RA=166.3329 Dec=+15.9058  matched=10  verified=45232  accept_lo=107.9  best_reject_lo=49.3
+[724/1000] 0723.json: SOLVED in 3.5s  RA=103.0721 Dec=-11.0064  matched=10  verified=9119  accept_lo=101.4  best_reject_lo=49.9
+[725/1000] 0724.json: SOLVED in 16.1s  RA=68.4220 Dec=-25.9041  matched=10  verified=45865  accept_lo=102.6  best_reject_lo=49.5
+[726/1000] 0725.json: SOLVED in 4.0s  RA=93.4602 Dec=-62.3052  matched=10  verified=8910  accept_lo=99.2  best_reject_lo=49.3
+[727/1000] 0726.json: SOLVED in 4.4s  RA=322.4254 Dec=+43.6226  matched=10  verified=15808  accept_lo=100.4  best_reject_lo=49.5
+[728/1000] 0727.json: SOLVED in 0.1s  RA=58.0259 Dec=+11.1103  matched=10  verified=671  accept_lo=101.0  best_reject_lo=49.3
+[729/1000] 0728.json: SOLVED in 0.1s  RA=81.4555 Dec=+38.6882  matched=10  verified=491  accept_lo=100.6  best_reject_lo=48.7
+[730/1000] 0729.json: SOLVED in 2.7s  RA=359.4584 Dec=-43.1067  matched=10  verified=7076  accept_lo=105.3  best_reject_lo=49.9
+[731/1000] 0730.json: SOLVED in 2.6s  RA=255.1674 Dec=+13.2432  matched=10  verified=7739  accept_lo=101.2  best_reject_lo=49.6
+[732/1000] 0731.json: SOLVED in 4.0s  RA=168.5359 Dec=+53.3131  matched=10  verified=9588  accept_lo=107.5  best_reject_lo=49.3
+[733/1000] 0732.json: SOLVED in 0.5s  RA=13.0901 Dec=-52.9882  matched=10  verified=1008  accept_lo=107.5  best_reject_lo=48.6
+[734/1000] 0733.json: SOLVED in 2.2s  RA=157.4581 Dec=+33.0478  matched=10  verified=4818  accept_lo=108.8  best_reject_lo=49.2
+[735/1000] 0734.json: SOLVED in 15.8s  RA=83.2664 Dec=-74.5906  matched=10  verified=47106  accept_lo=102.1  best_reject_lo=49.5
+[736/1000] 0735.json: SOLVED in 0.8s  RA=136.5705 Dec=-7.2871  matched=10  verified=2605  accept_lo=102.3  best_reject_lo=49.4
+[737/1000] 0736.json: SOLVED in 0.4s  RA=163.0166 Dec=-3.3219  matched=10  verified=965  accept_lo=109.2  best_reject_lo=50.3
+[738/1000] 0737.json: SOLVED in 0.7s  RA=142.8078 Dec=-47.7483  matched=10  verified=2401  accept_lo=101.2  best_reject_lo=49.6
+[739/1000] 0738.json: SOLVED in 0.2s  RA=123.7287 Dec=-66.3132  matched=10  verified=2163  accept_lo=101.0  best_reject_lo=16.5
+[740/1000] 0739.json: SOLVED in 0.5s  RA=174.0544 Dec=-40.4100  matched=10  verified=2236  accept_lo=101.8  best_reject_lo=49.0
+[741/1000] 0740.json: SOLVED in 0.0s  RA=123.0111 Dec=+57.2181  matched=10  verified=26  accept_lo=101.2  best_reject_lo=-4.1
+[742/1000] 0741.json: FAILED in 60.5s  verified=166946  best_lo=49.0(4m)  TIMEOUT
+[743/1000] 0742.json: SOLVED in 6.3s  RA=152.2196 Dec=+40.0515  matched=10  verified=23019  accept_lo=106.7  best_reject_lo=49.0
+[744/1000] 0743.json: SOLVED in 3.1s  RA=139.8974 Dec=-52.2364  matched=10  verified=10099  accept_lo=101.2  best_reject_lo=48.9
+[745/1000] 0744.json: SOLVED in 0.3s  RA=194.3266 Dec=+48.0737  matched=10  verified=1145  accept_lo=107.9  best_reject_lo=50.1
+[746/1000] 0745.json: SOLVED in 0.3s  RA=15.3089 Dec=-67.3127  matched=10  verified=1142  accept_lo=101.6  best_reject_lo=50.1
+[747/1000] 0746.json: FAILED in 60.0s  verified=182961  best_lo=49.3(4m)  TIMEOUT
+[748/1000] 0747.json: SOLVED in 0.6s  RA=355.6373 Dec=-14.2826  matched=10  verified=3374  accept_lo=110.2  best_reject_lo=49.5
+[749/1000] 0748.json: SOLVED in 2.2s  RA=61.9518 Dec=-50.9916  matched=10  verified=5930  accept_lo=103.9  best_reject_lo=49.2
+[750/1000] 0749.json: SOLVED in 4.6s  RA=119.4818 Dec=-31.4568  matched=10  verified=13877  accept_lo=101.0  best_reject_lo=49.6
+[751/1000] 0750.json: SOLVED in 3.5s  RA=192.2535 Dec=-9.8014  matched=10  verified=11550  accept_lo=106.0  best_reject_lo=49.2
+[752/1000] 0751.json: SOLVED in 4.1s  RA=338.1987 Dec=+71.1496  matched=10  verified=14927  accept_lo=99.8  best_reject_lo=49.6
+[753/1000] 0752.json: SOLVED in 1.2s  RA=3.0805 Dec=-12.6872  matched=10  verified=5688  accept_lo=104.4  best_reject_lo=49.3
+[754/1000] 0753.json: SOLVED in 3.0s  RA=0.6999 Dec=+27.9911  matched=10  verified=12834  accept_lo=101.0  best_reject_lo=49.2
+[755/1000] 0754.json: SOLVED in 0.3s  RA=110.5835 Dec=-49.4516  matched=10  verified=509  accept_lo=101.6  best_reject_lo=49.5
+[756/1000] 0755.json: SOLVED in 1.5s  RA=23.8129 Dec=+32.2186  matched=10  verified=8511  accept_lo=99.6  best_reject_lo=49.4
+[757/1000] 0756.json: SOLVED in 0.0s  RA=326.6669 Dec=-43.0792  matched=10  verified=26  accept_lo=101.2  best_reject_lo=-10.9
+[758/1000] 0757.json: SOLVED in 2.0s  RA=331.3120 Dec=+79.7581  matched=10  verified=4968  accept_lo=102.8  best_reject_lo=49.9
+[759/1000] 0758.json: SOLVED in 10.9s  RA=323.5141 Dec=-2.8292  matched=10  verified=36536  accept_lo=102.3  best_reject_lo=48.7
+[760/1000] 0759.json: SOLVED in 1.8s  RA=200.7315 Dec=+53.8261  matched=10  verified=6793  accept_lo=111.4  best_reject_lo=49.2
+[761/1000] 0760.json: SOLVED in 30.1s  RA=342.1148 Dec=+48.0567  matched=10  verified=88607  accept_lo=100.8  best_reject_lo=49.3
+[762/1000] 0761.json: SOLVED in 0.0s  RA=223.4801 Dec=-53.8140  matched=10  verified=128  accept_lo=99.8  best_reject_lo=16.1
+[763/1000] 0762.json: SOLVED in 0.2s  RA=303.0764 Dec=-9.6933  matched=10  verified=781  accept_lo=102.3  best_reject_lo=48.0
+[764/1000] 0763.json: SOLVED in 7.5s  RA=181.5385 Dec=+38.3755  matched=10  verified=29982  accept_lo=109.2  best_reject_lo=49.3
+[765/1000] 0764.json: SOLVED in 2.6s  RA=246.3998 Dec=+46.7102  matched=10  verified=9803  accept_lo=100.6  best_reject_lo=49.8
+[766/1000] 0765.json: SOLVED in 0.9s  RA=165.3184 Dec=+20.4593  matched=10  verified=3143  accept_lo=108.8  best_reject_lo=48.9
+[767/1000] 0766.json: SOLVED in 0.3s  RA=150.6865 Dec=+0.5007  matched=10  verified=758  accept_lo=102.1  best_reject_lo=48.6
+[768/1000] 0767.json: SOLVED in 0.0s  RA=318.4988 Dec=+55.9226  matched=10  verified=57  accept_lo=101.8  best_reject_lo=16.3
+[769/1000] 0768.json: SOLVED in 0.8s  RA=141.2145 Dec=-73.8652  matched=10  verified=2871  accept_lo=100.8  best_reject_lo=49.0
+[770/1000] 0769.json: SOLVED in 2.1s  RA=267.8600 Dec=+2.7067  matched=10  verified=9118  accept_lo=100.7  best_reject_lo=49.3
+[771/1000] 0770.json: SOLVED in 2.2s  RA=92.7942 Dec=+41.3232  matched=10  verified=6683  accept_lo=100.9  best_reject_lo=50.0
+[772/1000] 0771.json: SOLVED in 2.7s  RA=242.3342 Dec=-2.0726  matched=10  verified=6729  accept_lo=102.3  best_reject_lo=49.8
+[773/1000] 0772.json: SOLVED in 0.1s  RA=184.4763 Dec=+35.3008  matched=10  verified=414  accept_lo=112.6  best_reject_lo=49.1
+[774/1000] 0773.json: SOLVED in 36.2s  RA=238.9891 Dec=-16.1126  matched=10  verified=127033  accept_lo=104.1  best_reject_lo=49.4
+[775/1000] 0774.json: SOLVED in 2.9s  RA=133.5260 Dec=-3.7799  matched=10  verified=8369  accept_lo=101.8  best_reject_lo=50.1
+[776/1000] 0775.json: SOLVED in 0.8s  RA=30.0124 Dec=-10.8228  matched=10  verified=2822  accept_lo=107.9  best_reject_lo=49.1
+[777/1000] 0776.json: SOLVED in 6.5s  RA=187.5100 Dec=-49.3888  matched=10  verified=25934  accept_lo=102.3  best_reject_lo=49.6
+[778/1000] 0777.json: SOLVED in 0.1s  RA=11.9342 Dec=-8.0561  matched=10  verified=339  accept_lo=107.5  best_reject_lo=48.5
+[779/1000] 0778.json: SOLVED in 0.3s  RA=327.1126 Dec=-46.9266  matched=10  verified=1327  accept_lo=102.6  best_reject_lo=47.4
+[780/1000] 0779.json: SOLVED in 1.3s  RA=326.0362 Dec=+17.6578  matched=10  verified=4031  accept_lo=101.8  best_reject_lo=48.9
+[781/1000] 0780.json: SOLVED in 1.4s  RA=147.6921 Dec=+9.3783  matched=10  verified=4914  accept_lo=109.2  best_reject_lo=50.3
+[782/1000] 0781.json: SOLVED in 1.3s  RA=338.5153 Dec=-0.2913  matched=10  verified=3474  accept_lo=101.2  best_reject_lo=50.0
+[783/1000] 0782.json: SOLVED in 0.2s  RA=202.0502 Dec=+20.2209  matched=10  verified=1003  accept_lo=108.8  best_reject_lo=49.4
+[784/1000] 0783.json: SOLVED in 1.2s  RA=173.1548 Dec=+47.4689  matched=10  verified=6492  accept_lo=106.4  best_reject_lo=49.8
+[785/1000] 0784.json: SOLVED in 2.2s  RA=155.5426 Dec=-36.6175  matched=10  verified=5117  accept_lo=101.2  best_reject_lo=49.6
+[786/1000] 0785.json: SOLVED in 4.9s  RA=306.2037 Dec=-50.0728  matched=10  verified=23123  accept_lo=105.0  best_reject_lo=50.0
+[787/1000] 0786.json: SOLVED in 2.5s  RA=157.9447 Dec=+24.3985  matched=10  verified=7662  accept_lo=106.4  best_reject_lo=49.6
+[788/1000] 0787.json: SOLVED in 0.1s  RA=155.3951 Dec=-2.6835  matched=10  verified=346  accept_lo=105.0  best_reject_lo=48.8
+[789/1000] 0788.json: SOLVED in 0.1s  RA=185.4143 Dec=-8.9099  matched=10  verified=100  accept_lo=105.0  best_reject_lo=50.1
+[790/1000] 0789.json: SOLVED in 0.1s  RA=357.2920 Dec=-30.6402  matched=10  verified=210  accept_lo=110.8  best_reject_lo=28.8
+[791/1000] 0790.json: SOLVED in 0.3s  RA=133.2371 Dec=-40.9233  matched=10  verified=702  accept_lo=102.1  best_reject_lo=49.7
+[792/1000] 0791.json: SOLVED in 4.8s  RA=334.0778 Dec=-15.0828  matched=10  verified=17864  accept_lo=101.8  best_reject_lo=49.2
+[793/1000] 0792.json: SOLVED in 0.3s  RA=171.8494 Dec=-12.5871  matched=10  verified=790  accept_lo=103.3  best_reject_lo=49.4
+[794/1000] 0793.json: SOLVED in 10.8s  RA=108.8718 Dec=-88.6813  matched=10  verified=36410  accept_lo=103.6  best_reject_lo=49.3
+[795/1000] 0794.json: SOLVED in 11.6s  RA=121.1271 Dec=+8.9198  matched=10  verified=35003  accept_lo=101.6  best_reject_lo=49.6
+[796/1000] 0795.json: SOLVED in 0.0s  RA=237.5912 Dec=-17.5848  matched=10  verified=22  accept_lo=101.6  best_reject_lo=-20.0
+[797/1000] 0796.json: SOLVED in 0.1s  RA=207.1024 Dec=-4.2672  matched=10  verified=377  accept_lo=103.1  best_reject_lo=49.5
+[798/1000] 0797.json: SOLVED in 0.7s  RA=303.7562 Dec=+10.3420  matched=10  verified=2603  accept_lo=103.6  best_reject_lo=49.0
+[799/1000] 0798.json: SOLVED in 4.6s  RA=194.1082 Dec=-45.0967  matched=10  verified=15803  accept_lo=101.4  best_reject_lo=49.6
+[800/1000] 0799.json: FAILED in 65.9s  verified=204231  best_lo=49.6(4m)  TIMEOUT
+[801/1000] 0800.json: SOLVED in 0.1s  RA=127.6131 Dec=+32.1027  matched=10  verified=223  accept_lo=103.9  best_reject_lo=47.2
+[802/1000] 0801.json: SOLVED in 1.9s  RA=353.1072 Dec=-5.2897  matched=10  verified=6562  accept_lo=104.7  best_reject_lo=50.3
+[803/1000] 0802.json: SOLVED in 0.6s  RA=217.5361 Dec=-37.2507  matched=10  verified=2013  accept_lo=102.8  best_reject_lo=49.0
+[804/1000] 0803.json: SOLVED in 1.0s  RA=235.7502 Dec=-27.5800  matched=10  verified=2175  accept_lo=103.8  best_reject_lo=49.3
+[805/1000] 0804.json: SOLVED in 0.9s  RA=154.0781 Dec=+49.1126  matched=10  verified=3628  accept_lo=107.5  best_reject_lo=50.0
+[806/1000] 0805.json: SOLVED in 1.3s  RA=27.1009 Dec=-3.6563  matched=10  verified=4881  accept_lo=110.8  best_reject_lo=49.6
+[807/1000] 0806.json: SOLVED in 0.1s  RA=26.8524 Dec=-21.9246  matched=10  verified=158  accept_lo=108.8  best_reject_lo=48.1
+[808/1000] 0807.json: SOLVED in 15.4s  RA=43.2331 Dec=-75.9997  matched=10  verified=49845  accept_lo=102.8  best_reject_lo=49.6
+[809/1000] 0808.json: SOLVED in 3.7s  RA=70.0478 Dec=-16.9487  matched=10  verified=15804  accept_lo=102.3  best_reject_lo=49.4
+[810/1000] 0809.json: SOLVED in 1.1s  RA=42.1872 Dec=+72.7287  matched=10  verified=2647  accept_lo=103.9  best_reject_lo=49.3
+[811/1000] 0810.json: SOLVED in 38.9s  RA=260.2107 Dec=+62.6121  matched=10  verified=107124  accept_lo=102.1  best_reject_lo=49.5
+[812/1000] 0811.json: SOLVED in 0.1s  RA=197.9317 Dec=+29.3149  matched=10  verified=533  accept_lo=110.2  best_reject_lo=49.2
+[813/1000] 0812.json: SOLVED in 1.3s  RA=250.0989 Dec=-5.5649  matched=10  verified=3632  accept_lo=101.2  best_reject_lo=49.2
+[814/1000] 0813.json: SOLVED in 0.2s  RA=253.4875 Dec=+28.9827  matched=10  verified=746  accept_lo=101.8  best_reject_lo=48.2
+[815/1000] 0814.json: SOLVED in 1.1s  RA=151.8444 Dec=-0.2098  matched=10  verified=2969  accept_lo=105.0  best_reject_lo=48.9
+[816/1000] 0815.json: SOLVED in 0.8s  RA=159.7569 Dec=+49.7372  matched=10  verified=2031  accept_lo=107.5  best_reject_lo=49.3
+[817/1000] 0816.json: SOLVED in 0.6s  RA=84.5954 Dec=-6.0659  matched=10  verified=4688  accept_lo=103.1  best_reject_lo=49.5
+[818/1000] 0817.json: SOLVED in 0.2s  RA=168.9247 Dec=-13.2754  matched=10  verified=830  accept_lo=102.1  best_reject_lo=48.8
+[819/1000] 0818.json: SOLVED in 1.4s  RA=269.5278 Dec=+43.7129  matched=10  verified=3861  accept_lo=101.8  best_reject_lo=49.9
+[820/1000] 0819.json: SOLVED in 1.6s  RA=246.5438 Dec=-19.0402  matched=10  verified=3966  accept_lo=102.1  best_reject_lo=49.4
+[821/1000] 0820.json: SOLVED in 0.2s  RA=262.6054 Dec=+56.5854  matched=10  verified=470  accept_lo=102.3  best_reject_lo=49.0
+[822/1000] 0821.json: SOLVED in 0.2s  RA=45.3290 Dec=-42.2316  matched=10  verified=1281  accept_lo=107.1  best_reject_lo=33.6
+[823/1000] 0822.json: SOLVED in 12.8s  RA=68.0581 Dec=-60.9009  matched=10  verified=30418  accept_lo=101.8  best_reject_lo=50.2
+[824/1000] 0823.json: SOLVED in 0.2s  RA=107.2991 Dec=+70.3813  matched=10  verified=848  accept_lo=101.8  best_reject_lo=48.6
+[825/1000] 0824.json: SOLVED in 2.1s  RA=142.9764 Dec=-42.7336  matched=10  verified=8291  accept_lo=101.2  best_reject_lo=49.5
+[826/1000] 0825.json: SOLVED in 6.2s  RA=156.0624 Dec=-46.9225  matched=10  verified=21967  accept_lo=102.5  best_reject_lo=49.9
+[827/1000] 0826.json: SOLVED in 0.9s  RA=355.6961 Dec=+84.3659  matched=10  verified=2377  accept_lo=102.6  best_reject_lo=49.3
+[828/1000] 0827.json: SOLVED in 6.4s  RA=13.8025 Dec=-34.0580  matched=10  verified=19183  accept_lo=104.7  best_reject_lo=49.0
+[829/1000] 0828.json: SOLVED in 0.5s  RA=289.0379 Dec=-6.9444  matched=10  verified=2032  accept_lo=102.8  best_reject_lo=49.9
+[830/1000] 0829.json: SOLVED in 0.0s  RA=204.5062 Dec=-45.5213  matched=10  verified=71  accept_lo=100.4  best_reject_lo=-8.0
+[831/1000] 0830.json: SOLVED in 0.9s  RA=359.7350 Dec=+0.6382  matched=10  verified=3780  accept_lo=108.3  best_reject_lo=49.2
+[832/1000] 0831.json: SOLVED in 6.1s  RA=84.9213 Dec=+2.9856  matched=10  verified=11584  accept_lo=102.1  best_reject_lo=50.1
+[833/1000] 0832.json: SOLVED in 0.8s  RA=57.8805 Dec=-85.8534  matched=10  verified=3335  accept_lo=101.8  best_reject_lo=48.9
+[834/1000] 0833.json: SOLVED in 0.5s  RA=286.5787 Dec=+78.9078  matched=10  verified=1347  accept_lo=101.0  best_reject_lo=49.4
+[835/1000] 0834.json: SOLVED in 6.6s  RA=150.9942 Dec=+57.2924  matched=10  verified=17707  accept_lo=104.7  best_reject_lo=50.1
+[836/1000] 0835.json: SOLVED in 0.0s  RA=104.5258 Dec=-53.9995  matched=10  verified=152  accept_lo=102.8  best_reject_lo=16.4
+[837/1000] 0836.json: SOLVED in 4.4s  RA=297.5691 Dec=+58.7581  matched=10  verified=12417  accept_lo=101.8  best_reject_lo=49.1
+[838/1000] 0837.json: SOLVED in 1.4s  RA=302.8047 Dec=-12.2379  matched=10  verified=7256  accept_lo=99.8  best_reject_lo=48.7
+[839/1000] 0838.json: SOLVED in 6.3s  RA=149.7801 Dec=-11.8311  matched=10  verified=16099  accept_lo=101.2  best_reject_lo=49.5
+[840/1000] 0839.json: SOLVED in 0.4s  RA=64.5893 Dec=-35.3198  matched=10  verified=853  accept_lo=104.7  best_reject_lo=48.4
+[841/1000] 0840.json: SOLVED in 14.3s  RA=346.9634 Dec=+29.9781  matched=10  verified=63405  accept_lo=102.3  best_reject_lo=49.4
+[842/1000] 0841.json: SOLVED in 0.8s  RA=270.4919 Dec=+14.1493  matched=10  verified=2676  accept_lo=101.2  best_reject_lo=49.6
+[843/1000] 0842.json: SOLVED in 2.0s  RA=122.6014 Dec=-55.6643  matched=10  verified=5174  accept_lo=102.3  best_reject_lo=48.9
+[844/1000] 0843.json: SOLVED in 0.9s  RA=21.7970 Dec=+67.2863  matched=10  verified=2716  accept_lo=101.4  best_reject_lo=49.8
+[845/1000] 0844.json: SOLVED in 7.8s  RA=329.1624 Dec=+48.7537  matched=10  verified=27502  accept_lo=100.0  best_reject_lo=48.7
+[846/1000] 0845.json: SOLVED in 2.8s  RA=142.6533 Dec=+3.1670  matched=10  verified=11507  accept_lo=107.1  best_reject_lo=49.0
+[847/1000] 0846.json: SOLVED in 2.5s  RA=356.0042 Dec=+25.1402  matched=10  verified=8472  accept_lo=100.4  best_reject_lo=50.2
+[848/1000] 0847.json: SOLVED in 0.3s  RA=104.4181 Dec=-25.8767  matched=10  verified=1422  accept_lo=101.4  best_reject_lo=49.5
+[849/1000] 0848.json: SOLVED in 0.4s  RA=22.7537 Dec=+2.8148  matched=10  verified=1260  accept_lo=103.9  best_reject_lo=49.8
+[850/1000] 0849.json: SOLVED in 4.4s  RA=175.0593 Dec=+6.0529  matched=10  verified=17310  accept_lo=104.7  best_reject_lo=48.9
+[851/1000] 0850.json: SOLVED in 0.3s  RA=184.0461 Dec=+65.2185  matched=10  verified=1572  accept_lo=104.7  best_reject_lo=49.9
+[852/1000] 0851.json: SOLVED in 4.1s  RA=272.1726 Dec=-47.6821  matched=10  verified=18260  accept_lo=100.2  best_reject_lo=49.1
+[853/1000] 0852.json: SOLVED in 0.2s  RA=282.1076 Dec=-35.0256  matched=10  verified=479  accept_lo=102.3  best_reject_lo=49.2
+[854/1000] 0853.json: SOLVED in 0.1s  RA=177.5207 Dec=-60.8342  matched=10  verified=287  accept_lo=102.3  best_reject_lo=47.8
+[855/1000] 0854.json: SOLVED in 2.5s  RA=15.9784 Dec=+16.1025  matched=10  verified=10439  accept_lo=102.1  best_reject_lo=49.0
+[856/1000] 0855.json: SOLVED in 0.0s  RA=41.1818 Dec=-42.1787  matched=10  verified=158  accept_lo=105.7  best_reject_lo=29.9
+[857/1000] 0856.json: SOLVED in 0.2s  RA=326.6514 Dec=+30.5221  matched=10  verified=581  accept_lo=98.9  best_reject_lo=50.0
+[858/1000] 0857.json: FAILED in 60.9s  verified=171423  best_lo=49.9(4m)  TIMEOUT
+[859/1000] 0858.json: SOLVED in 0.0s  RA=315.7686 Dec=-1.1785  matched=10  verified=29  accept_lo=101.2  best_reject_lo=49.9
+[860/1000] 0859.json: SOLVED in 7.7s  RA=180.9731 Dec=-1.5760  matched=10  verified=20921  accept_lo=107.1  best_reject_lo=49.6
+[861/1000] 0860.json: SOLVED in 3.8s  RA=231.6860 Dec=-10.6658  matched=10  verified=9070  accept_lo=101.0  best_reject_lo=50.1
+[862/1000] 0861.json: SOLVED in 6.2s  RA=70.5186 Dec=-64.6140  matched=10  verified=25609  accept_lo=101.0  best_reject_lo=56.6
+[863/1000] 0862.json: SOLVED in 0.2s  RA=241.4758 Dec=-66.0875  matched=10  verified=2494  accept_lo=104.1  best_reject_lo=49.8
+[864/1000] 0863.json: SOLVED in 0.2s  RA=347.1818 Dec=+17.8347  matched=10  verified=684  accept_lo=101.4  best_reject_lo=48.9
+[865/1000] 0864.json: SOLVED in 0.5s  RA=306.4022 Dec=-14.7817  matched=10  verified=1935  accept_lo=101.6  best_reject_lo=48.8
+[866/1000] 0865.json: SOLVED in 1.2s  RA=217.8112 Dec=+7.8970  matched=10  verified=6641  accept_lo=105.7  best_reject_lo=48.6
+[867/1000] 0866.json: SOLVED in 1.1s  RA=280.9412 Dec=+15.2391  matched=10  verified=4194  accept_lo=102.8  best_reject_lo=49.4
+[868/1000] 0867.json: SOLVED in 1.0s  RA=151.0778 Dec=+53.2948  matched=10  verified=3788  accept_lo=105.0  best_reject_lo=49.6
+[869/1000] 0868.json: SOLVED in 0.1s  RA=106.6714 Dec=+40.4595  matched=10  verified=371  accept_lo=100.4  best_reject_lo=14.9
+[870/1000] 0869.json: SOLVED in 0.7s  RA=38.9155 Dec=+68.3523  matched=10  verified=3303  accept_lo=102.8  best_reject_lo=48.7
+[871/1000] 0870.json: SOLVED in 0.7s  RA=333.6943 Dec=-43.9166  matched=10  verified=2523  accept_lo=103.3  best_reject_lo=49.4
+[872/1000] 0871.json: SOLVED in 0.8s  RA=135.9423 Dec=+19.9693  matched=10  verified=1866  accept_lo=104.4  best_reject_lo=49.5
+[873/1000] 0872.json: SOLVED in 2.8s  RA=329.4963 Dec=-0.6732  matched=10  verified=8710  accept_lo=103.9  best_reject_lo=49.6
+[874/1000] 0873.json: SOLVED in 0.6s  RA=65.0605 Dec=-15.1918  matched=10  verified=1173  accept_lo=106.0  best_reject_lo=49.2
+[875/1000] 0874.json: SOLVED in 0.2s  RA=359.5841 Dec=+43.7939  matched=10  verified=654  accept_lo=101.6  best_reject_lo=49.7
+[876/1000] 0875.json: SOLVED in 10.8s  RA=91.5808 Dec=+56.1279  matched=10  verified=38493  accept_lo=101.6  best_reject_lo=50.0
+[877/1000] 0876.json: FAILED in 61.1s  verified=239695  best_lo=49.3(4m)  TIMEOUT
+[878/1000] 0877.json: SOLVED in 1.4s  RA=348.7977 Dec=-35.2324  matched=10  verified=5157  accept_lo=84.1  best_reject_lo=50.1
+[879/1000] 0878.json: SOLVED in 1.8s  RA=139.8411 Dec=+15.5642  matched=10  verified=3569  accept_lo=102.6  best_reject_lo=50.1
+[880/1000] 0879.json: SOLVED in 0.4s  RA=175.7852 Dec=-66.3544  matched=10  verified=1678  accept_lo=102.1  best_reject_lo=48.7
+[881/1000] 0880.json: SOLVED in 4.5s  RA=292.9924 Dec=-16.6647  matched=10  verified=12096  accept_lo=102.1  best_reject_lo=49.1
+[882/1000] 0881.json: SOLVED in 0.3s  RA=106.8521 Dec=-50.9717  matched=10  verified=947  accept_lo=105.0  best_reject_lo=49.3
+[883/1000] 0882.json: SOLVED in 0.4s  RA=207.4691 Dec=-34.6569  matched=10  verified=5950  accept_lo=102.3  best_reject_lo=49.2
+[884/1000] 0883.json: SOLVED in 26.5s  RA=132.7534 Dec=+33.7326  matched=10  verified=77805  accept_lo=103.1  best_reject_lo=49.2
+[885/1000] 0884.json: SOLVED in 5.4s  RA=305.5253 Dec=-58.6790  matched=10  verified=22302  accept_lo=100.8  best_reject_lo=48.9
+[886/1000] 0885.json: SOLVED in 13.9s  RA=48.5941 Dec=-1.0537  matched=10  verified=39915  accept_lo=105.0  best_reject_lo=49.8
+[887/1000] 0886.json: SOLVED in 0.0s  RA=5.6061 Dec=+34.5491  matched=10  verified=56  accept_lo=101.6  best_reject_lo=48.6
+[888/1000] 0887.json: SOLVED in 12.6s  RA=326.7783 Dec=-29.8469  matched=10  verified=41310  accept_lo=103.3  best_reject_lo=48.9
+[889/1000] 0888.json: SOLVED in 0.2s  RA=277.7127 Dec=+37.0867  matched=10  verified=319  accept_lo=101.8  best_reject_lo=50.3
+[890/1000] 0889.json: SOLVED in 0.1s  RA=40.1685 Dec=-17.4398  matched=10  verified=688  accept_lo=107.1  best_reject_lo=49.1
+[891/1000] 0890.json: SOLVED in 17.3s  RA=315.8481 Dec=-48.4003  matched=10  verified=55547  accept_lo=101.2  best_reject_lo=49.2
+[892/1000] 0891.json: FAILED in 60.4s  verified=133533  best_lo=49.9(4m)  TIMEOUT
+[893/1000] 0892.json: FAILED in 60.1s  verified=292416  best_lo=49.4(4m)  TIMEOUT
+[894/1000] 0893.json: SOLVED in 1.1s  RA=29.9777 Dec=+50.3386  matched=10  verified=3280  accept_lo=101.8  best_reject_lo=52.9
+[895/1000] 0894.json: SOLVED in 0.1s  RA=5.3894 Dec=+0.3172  matched=10  verified=344  accept_lo=107.5  best_reject_lo=14.2
+[896/1000] 0895.json: SOLVED in 0.1s  RA=235.2381 Dec=+10.2276  matched=10  verified=221  accept_lo=103.6  best_reject_lo=47.0
+[897/1000] 0896.json: SOLVED in 3.1s  RA=101.1997 Dec=+44.2603  matched=10  verified=35591  accept_lo=101.6  best_reject_lo=49.9
+[898/1000] 0897.json: SOLVED in 2.8s  RA=154.3364 Dec=+4.8787  matched=10  verified=7277  accept_lo=105.7  best_reject_lo=49.9
+[899/1000] 0898.json: SOLVED in 0.1s  RA=191.4341 Dec=+18.3203  matched=10  verified=784  accept_lo=107.1  best_reject_lo=48.6
+[900/1000] 0899.json: SOLVED in 0.7s  RA=131.0762 Dec=+30.0973  matched=10  verified=2393  accept_lo=103.3  best_reject_lo=49.0
+[901/1000] 0900.json: SOLVED in 0.2s  RA=232.8087 Dec=-68.0043  matched=10  verified=564  accept_lo=101.6  best_reject_lo=49.7
+[902/1000] 0901.json: SOLVED in 5.9s  RA=270.5330 Dec=+15.2268  matched=10  verified=37985  accept_lo=101.6  best_reject_lo=50.3
+[903/1000] 0902.json: SOLVED in 2.5s  RA=231.8394 Dec=+13.6998  matched=10  verified=9399  accept_lo=100.6  best_reject_lo=50.0
+[904/1000] 0903.json: SOLVED in 0.3s  RA=357.3746 Dec=-79.9767  matched=10  verified=1416  accept_lo=102.3  best_reject_lo=50.2
+[905/1000] 0904.json: SOLVED in 0.8s  RA=324.4906 Dec=-26.9302  matched=10  verified=3878  accept_lo=101.2  best_reject_lo=49.5
+[906/1000] 0905.json: SOLVED in 0.1s  RA=249.7776 Dec=+29.3344  matched=10  verified=403  accept_lo=102.8  best_reject_lo=50.0
+[907/1000] 0906.json: SOLVED in 1.4s  RA=357.8879 Dec=+6.2661  matched=10  verified=6201  accept_lo=104.7  best_reject_lo=49.0
+[908/1000] 0907.json: SOLVED in 2.3s  RA=349.7052 Dec=+34.4092  matched=10  verified=4629  accept_lo=101.0  best_reject_lo=49.5
+[909/1000] 0908.json: SOLVED in 6.8s  RA=299.5377 Dec=-50.0558  matched=10  verified=19196  accept_lo=101.2  best_reject_lo=48.8
+[910/1000] 0909.json: SOLVED in 0.2s  RA=135.2877 Dec=-12.2609  matched=10  verified=1918  accept_lo=100.8  best_reject_lo=50.0
+[911/1000] 0910.json: SOLVED in 0.9s  RA=37.9158 Dec=+59.7671  matched=10  verified=4200  accept_lo=101.0  best_reject_lo=49.7
+[912/1000] 0911.json: SOLVED in 2.3s  RA=351.4920 Dec=+16.7260  matched=10  verified=8839  accept_lo=101.0  best_reject_lo=49.2
+[913/1000] 0912.json: SOLVED in 0.0s  RA=307.6194 Dec=-1.3641  matched=10  verified=160  accept_lo=101.4  best_reject_lo=47.2
+[914/1000] 0913.json: SOLVED in 1.2s  RA=63.2286 Dec=+37.5476  matched=10  verified=2610  accept_lo=101.6  best_reject_lo=50.0
+[915/1000] 0914.json: SOLVED in 0.0s  RA=233.6568 Dec=-6.9389  matched=10  verified=152  accept_lo=100.2  best_reject_lo=50.1
+[916/1000] 0915.json: SOLVED in 0.1s  RA=352.7283 Dec=+23.0754  matched=10  verified=414  accept_lo=101.8  best_reject_lo=49.7
+[917/1000] 0916.json: SOLVED in 5.7s  RA=173.3431 Dec=+29.1793  matched=10  verified=20751  accept_lo=107.5  best_reject_lo=50.0
+[918/1000] 0917.json: SOLVED in 0.2s  RA=132.8400 Dec=+47.5102  matched=10  verified=402  accept_lo=103.6  best_reject_lo=49.2
+[919/1000] 0918.json: SOLVED in 1.2s  RA=300.5866 Dec=-8.9115  matched=10  verified=7209  accept_lo=101.6  best_reject_lo=50.1
+[920/1000] 0919.json: SOLVED in 2.8s  RA=191.8845 Dec=+34.0934  matched=10  verified=12340  accept_lo=113.3  best_reject_lo=49.8
+[921/1000] 0920.json: SOLVED in 0.3s  RA=39.9575 Dec=+42.3018  matched=10  verified=1400  accept_lo=101.6  best_reject_lo=49.4
+[922/1000] 0921.json: SOLVED in 8.9s  RA=248.0099 Dec=-21.2297  matched=10  verified=25785  accept_lo=101.6  best_reject_lo=50.1
+[923/1000] 0922.json: SOLVED in 8.2s  RA=340.1896 Dec=+14.4398  matched=10  verified=31303  accept_lo=100.0  best_reject_lo=49.0
+[924/1000] 0923.json: SOLVED in 0.8s  RA=257.6292 Dec=+50.0733  matched=10  verified=3387  accept_lo=102.6  best_reject_lo=49.9
+[925/1000] 0924.json: SOLVED in 0.9s  RA=31.0813 Dec=-28.8127  matched=10  verified=3634  accept_lo=107.1  best_reject_lo=49.4
+[926/1000] 0925.json: SOLVED in 0.0s  RA=93.7100 Dec=+87.3925  matched=10  verified=118  accept_lo=101.8  best_reject_lo=16.9
+[927/1000] 0926.json: SOLVED in 0.5s  RA=79.1636 Dec=-9.8256  matched=10  verified=1088  accept_lo=103.1  best_reject_lo=49.4
+[928/1000] 0927.json: SOLVED in 0.9s  RA=51.9912 Dec=-35.2655  matched=10  verified=4030  accept_lo=103.3  best_reject_lo=49.3
+[929/1000] 0928.json: SOLVED in 1.8s  RA=351.8061 Dec=-68.6529  matched=10  verified=7695  accept_lo=103.6  best_reject_lo=50.0
+[930/1000] 0929.json: SOLVED in 2.4s  RA=6.7911 Dec=-53.4251  matched=10  verified=7522  accept_lo=104.1  best_reject_lo=49.9
+[931/1000] 0930.json: SOLVED in 0.3s  RA=273.6166 Dec=+25.7214  matched=10  verified=1687  accept_lo=102.8  best_reject_lo=49.5
+[932/1000] 0931.json: SOLVED in 1.7s  RA=213.7288 Dec=+31.4736  matched=10  verified=6946  accept_lo=105.0  best_reject_lo=48.9
+[933/1000] 0932.json: SOLVED in 9.7s  RA=245.7764 Dec=+29.1959  matched=10  verified=31699  accept_lo=102.5  best_reject_lo=49.4
+[934/1000] 0933.json: SOLVED in 0.5s  RA=114.8971 Dec=+12.2183  matched=10  verified=3612  accept_lo=103.1  best_reject_lo=49.0
+[935/1000] 0934.json: SOLVED in 2.0s  RA=247.8609 Dec=-24.1827  matched=10  verified=6218  accept_lo=98.4  best_reject_lo=49.8
+[936/1000] 0935.json: SOLVED in 1.0s  RA=192.0734 Dec=-21.9659  matched=10  verified=5298  accept_lo=102.1  best_reject_lo=49.3
+[937/1000] 0936.json: SOLVED in 0.6s  RA=232.4046 Dec=-53.0630  matched=10  verified=1810  accept_lo=100.2  best_reject_lo=50.0
+[938/1000] 0937.json: SOLVED in 15.7s  RA=50.2485 Dec=+47.4364  matched=10  verified=52009  accept_lo=100.2  best_reject_lo=49.7
+[939/1000] 0938.json: SOLVED in 12.9s  RA=287.0102 Dec=-12.5722  matched=10  verified=46617  accept_lo=100.4  best_reject_lo=50.2
+[940/1000] 0939.json: SOLVED in 33.9s  RA=84.4966 Dec=+10.7106  matched=10  verified=89608  accept_lo=103.8  best_reject_lo=49.8
+[941/1000] 0940.json: SOLVED in 4.8s  RA=85.6819 Dec=+17.0117  matched=10  verified=14786  accept_lo=101.6  best_reject_lo=49.9
+[942/1000] 0941.json: SOLVED in 1.0s  RA=254.3871 Dec=-42.8051  matched=10  verified=2697  accept_lo=100.1  best_reject_lo=50.2
+[943/1000] 0942.json: SOLVED in 10.7s  RA=44.1950 Dec=+35.9022  matched=10  verified=37676  accept_lo=101.8  best_reject_lo=49.4
+[944/1000] 0943.json: SOLVED in 1.6s  RA=344.1791 Dec=-54.3314  matched=10  verified=5568  accept_lo=101.8  best_reject_lo=50.1
+[945/1000] 0944.json: SOLVED in 0.9s  RA=265.7835 Dec=+5.3977  matched=10  verified=3113  accept_lo=101.4  best_reject_lo=49.9
+[946/1000] 0945.json: SOLVED in 0.1s  RA=105.8936 Dec=-69.6262  matched=10  verified=536  accept_lo=101.8  best_reject_lo=49.9
+[947/1000] 0946.json: SOLVED in 0.3s  RA=20.7138 Dec=-13.4832  matched=10  verified=1279  accept_lo=108.8  best_reject_lo=49.8
+[948/1000] 0947.json: SOLVED in 0.2s  RA=46.0700 Dec=+42.7875  matched=10  verified=580  accept_lo=100.4  best_reject_lo=49.8
+[949/1000] 0948.json: SOLVED in 0.4s  RA=222.7916 Dec=-12.8124  matched=10  verified=1785  accept_lo=102.6  best_reject_lo=48.9
+[950/1000] 0949.json: SOLVED in 0.1s  RA=32.6506 Dec=+72.5718  matched=10  verified=1202  accept_lo=103.1  best_reject_lo=47.1
+[951/1000] 0950.json: SOLVED in 0.2s  RA=310.6452 Dec=+32.0339  matched=10  verified=705  accept_lo=102.3  best_reject_lo=49.4
+[952/1000] 0951.json: SOLVED in 29.7s  RA=239.2788 Dec=-36.7070  matched=10  verified=100586  accept_lo=102.1  best_reject_lo=49.3
+[953/1000] 0952.json: SOLVED in 0.2s  RA=352.5065 Dec=-75.9494  matched=10  verified=502  accept_lo=102.8  best_reject_lo=47.6
+[954/1000] 0953.json: SOLVED in 11.7s  RA=339.9701 Dec=+61.7417  matched=10  verified=38417  accept_lo=104.1  best_reject_lo=49.8
+[955/1000] 0954.json: SOLVED in 8.8s  RA=156.1195 Dec=+8.2148  matched=10  verified=46789  accept_lo=104.7  best_reject_lo=49.9
+[956/1000] 0955.json: SOLVED in 5.1s  RA=333.9620 Dec=-47.6754  matched=10  verified=15916  accept_lo=103.6  best_reject_lo=49.8
+[957/1000] 0956.json: SOLVED in 11.6s  RA=185.7013 Dec=-14.3524  matched=10  verified=46241  accept_lo=101.8  best_reject_lo=49.6
+[958/1000] 0957.json: SOLVED in 0.6s  RA=280.0342 Dec=-29.0854  matched=10  verified=2898  accept_lo=102.3  best_reject_lo=49.6
+[959/1000] 0958.json: SOLVED in 0.4s  RA=328.6025 Dec=-14.9007  matched=10  verified=1183  accept_lo=100.8  best_reject_lo=49.0
+[960/1000] 0959.json: SOLVED in 0.0s  RA=156.8451 Dec=+8.7714  matched=10  verified=83  accept_lo=108.3  best_reject_lo=50.2
+[961/1000] 0960.json: SOLVED in 17.7s  RA=27.1193 Dec=-71.7839  matched=10  verified=75402  accept_lo=101.4  best_reject_lo=49.4
+[962/1000] 0961.json: SOLVED in 5.5s  RA=136.0345 Dec=-41.4111  matched=10  verified=14447  accept_lo=100.6  best_reject_lo=50.3
+[963/1000] 0962.json: SOLVED in 0.4s  RA=114.9882 Dec=+58.4477  matched=10  verified=1010  accept_lo=101.8  best_reject_lo=49.7
+[964/1000] 0963.json: SOLVED in 3.5s  RA=147.0581 Dec=-23.1832  matched=10  verified=13117  accept_lo=100.7  best_reject_lo=49.2
+[965/1000] 0964.json: SOLVED in 0.0s  RA=29.6024 Dec=-48.9100  matched=10  verified=108  accept_lo=106.7  best_reject_lo=48.1
+[966/1000] 0965.json: SOLVED in 0.7s  RA=114.5645 Dec=-72.5552  matched=10  verified=2324  accept_lo=100.6  best_reject_lo=49.0
+[967/1000] 0966.json: SOLVED in 34.1s  RA=95.8571 Dec=-19.7926  matched=10  verified=142969  accept_lo=102.3  best_reject_lo=49.3
+[968/1000] 0967.json: FAILED in 64.0s  verified=287011  best_lo=49.9(4m)  TIMEOUT
+[969/1000] 0968.json: SOLVED in 0.3s  RA=24.8456 Dec=+3.0084  matched=10  verified=928  accept_lo=108.3  best_reject_lo=48.9
+[970/1000] 0969.json: SOLVED in 2.4s  RA=95.6454 Dec=-23.3820  matched=10  verified=7061  accept_lo=100.6  best_reject_lo=49.6
+[971/1000] 0970.json: SOLVED in 8.5s  RA=135.9160 Dec=+56.4552  matched=10  verified=24995  accept_lo=103.9  best_reject_lo=48.7
+[972/1000] 0971.json: SOLVED in 0.3s  RA=143.4540 Dec=-35.7985  matched=10  verified=1017  accept_lo=101.6  best_reject_lo=48.5
+[973/1000] 0972.json: SOLVED in 1.0s  RA=112.9876 Dec=+17.9787  matched=10  verified=2506  accept_lo=102.6  best_reject_lo=49.4
+[974/1000] 0973.json: SOLVED in 1.5s  RA=236.2106 Dec=-13.8893  matched=10  verified=5075  accept_lo=102.6  best_reject_lo=49.0
+[975/1000] 0974.json: SOLVED in 5.2s  RA=236.7086 Dec=-19.5804  matched=10  verified=21467  accept_lo=101.2  best_reject_lo=49.6
+[976/1000] 0975.json: SOLVED in 0.1s  RA=279.3917 Dec=-19.0952  matched=10  verified=1679  accept_lo=102.1  best_reject_lo=16.2
+[977/1000] 0976.json: SOLVED in 2.2s  RA=154.9941 Dec=+10.5328  matched=10  verified=6154  accept_lo=107.1  best_reject_lo=48.8
+[978/1000] 0977.json: SOLVED in 0.6s  RA=263.1716 Dec=+56.2903  matched=10  verified=2287  accept_lo=99.1  best_reject_lo=49.8
+[979/1000] 0978.json: SOLVED in 0.1s  RA=187.5766 Dec=+17.2203  matched=10  verified=770  accept_lo=105.3  best_reject_lo=49.7
+[980/1000] 0979.json: SOLVED in 0.6s  RA=152.9472 Dec=+83.2242  matched=10  verified=1043  accept_lo=101.0  best_reject_lo=49.3
+[981/1000] 0980.json: SOLVED in 0.1s  RA=47.0588 Dec=-52.8830  matched=10  verified=386  accept_lo=101.0  best_reject_lo=24.0
+[982/1000] 0981.json: SOLVED in 0.0s  RA=167.9802 Dec=+14.5468  matched=10  verified=81  accept_lo=110.2  best_reject_lo=21.9
+[983/1000] 0982.json: SOLVED in 0.1s  RA=0.1667 Dec=-16.4064  matched=10  verified=464  accept_lo=110.2  best_reject_lo=49.9
+[984/1000] 0983.json: FAILED in 60.4s  verified=184127  best_lo=49.4(4m)  TIMEOUT
+[985/1000] 0984.json: SOLVED in 7.0s  RA=339.7795 Dec=+23.4193  matched=10  verified=27662  accept_lo=101.0  best_reject_lo=49.9
+[986/1000] 0985.json: FAILED in 61.9s  verified=234104  best_lo=51.4(5m)  TIMEOUT
+[987/1000] 0986.json: SOLVED in 1.4s  RA=343.7387 Dec=+21.6078  matched=10  verified=5021  accept_lo=101.6  best_reject_lo=48.8
+[988/1000] 0987.json: SOLVED in 1.7s  RA=359.4472 Dec=+13.1963  matched=10  verified=5292  accept_lo=104.1  best_reject_lo=50.3
+[989/1000] 0988.json: SOLVED in 2.6s  RA=149.7285 Dec=+47.6349  matched=10  verified=9421  accept_lo=105.7  best_reject_lo=49.1
+[990/1000] 0989.json: SOLVED in 1.0s  RA=96.6223 Dec=-30.2987  matched=10  verified=3714  accept_lo=101.2  best_reject_lo=49.1
+[991/1000] 0990.json: SOLVED in 0.1s  RA=206.4278 Dec=-15.6582  matched=10  verified=286  accept_lo=100.4  best_reject_lo=48.8
+[992/1000] 0991.json: SOLVED in 27.4s  RA=94.7748 Dec=+13.8865  matched=10  verified=101834  accept_lo=102.1  best_reject_lo=50.0
+[993/1000] 0992.json: SOLVED in 1.1s  RA=192.5696 Dec=+56.9934  matched=10  verified=3880  accept_lo=109.7  best_reject_lo=49.6
+[994/1000] 0993.json: SOLVED in 16.9s  RA=226.1196 Dec=-58.6891  matched=10  verified=41763  accept_lo=101.4  best_reject_lo=49.4
+[995/1000] 0994.json: SOLVED in 0.0s  RA=146.4318 Dec=+51.3614  matched=10  verified=185  accept_lo=103.3  best_reject_lo=29.3
+[996/1000] 0995.json: SOLVED in 0.2s  RA=347.4798 Dec=+18.3243  matched=10  verified=903  accept_lo=100.4  best_reject_lo=49.1
+[997/1000] 0996.json: SOLVED in 0.1s  RA=153.2437 Dec=-29.5358  matched=10  verified=600  accept_lo=100.8  best_reject_lo=16.9
+[998/1000] 0997.json: SOLVED in 0.7s  RA=300.5970 Dec=+20.6926  matched=10  verified=2553  accept_lo=100.8  best_reject_lo=50.2
+[999/1000] 0998.json: SOLVED in 3.6s  RA=117.2815 Dec=-7.9446  matched=10  verified=9375  accept_lo=100.6  best_reject_lo=49.5
+[1000/1000] 0999.json: SOLVED in 1.0s  RA=182.2023 Dec=+68.9686  matched=10  verified=2421  accept_lo=104.4  best_reject_lo=50.3
+
+========== RESULTS ==========
+Solved: 960/1000 (96%)
+Failed: 40/1000
+
+Solve time distribution:
+  Min:    0.01s
+  Median: 1.06s
+  Mean:   3.58s
+  Max:    57.45s
+
+  Cumulative:
+    <=    1s: 469 (49%)
+    <=    5s: 787 (82%)
+    <=   10s: 870 (91%)
+    <=   30s: 937 (98%)
+    <=   60s: 960 (100%)
+
+--- Verification stats ---
+Total verifications: 21300733 (mean 21301/image)
+Accepted log-odds (n=960): min=79.3, median=102.1, max=115.7
+Best rejected overall: lo=69.2, matches=5

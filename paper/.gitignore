@@ -12,3 +12,6 @@ figures/
 *.fdb_latexmk
 *.synctex.gz
 *.pdf
+
+# Tracked figure-input logs (override *.log above).
+!data/*.log

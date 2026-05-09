@@ -5,11 +5,12 @@ Usage:
     python make_figures.py --only solve_cdf   # regenerate one
     python make_figures.py --list             # list known figures
 
-Inputs (paths are relative to the repo root by default):
-    scratch/4band_results.log     - 4-band batch-solve log
-    scratch/12band_results.log    - 12-band batch-solve log
-    scratch/12band_hires.log      - 12-band rerun with 8-decimal RA/Dec
-    test_cases/*.json             - 1000 synthetic field JSONs (truth + sources)
+Inputs (defaults are co-located with this script so checkouts are
+self-contained; override with --logs-dir / --cases-dir):
+    paper/data/4band_results.log   - 4-band batch-solve log
+    paper/data/12band_results.log  - 12-band batch-solve log
+    paper/data/12band_hires.log    - 12-band rerun with 8-decimal RA/Dec
+    test_cases/*.json              - 1000 synthetic field JSONs (truth + sources)
 
 Outputs are written to paper/figures/ as <name>.pdf and <name>.png; that
 directory is gitignored. .tex files should reference figures/<name>.pdf.
@@ -234,38 +235,38 @@ def fig_residual_scatter(name, log_path, cases_dir, out_dir):
 
 
 # Registry: figure name -> (callable, *args from REPO_ROOT)
-def figures(scratch_dir, cases_dir, out_dir):
+def figures(logs_dir, cases_dir, out_dir):
     return {
         "hist_4band": lambda: fig_solve_time_hist(
-            "hist_4band", scratch_dir / "4band_results.log",
+            "hist_4band", logs_dir / "4band_results.log",
             r"4 bands ($\alpha=3$)", out_dir,
         ),
         "hist_12band": lambda: fig_solve_time_hist(
-            "hist_12band", scratch_dir / "12band_results.log",
+            "hist_12band", logs_dir / "12band_results.log",
             r"12 bands ($\alpha=\sqrt{2}$)", out_dir,
         ),
         "hist_12band_hires": lambda: fig_solve_time_hist(
-            "hist_12band_hires", scratch_dir / "12band_hires.log",
+            "hist_12band_hires", logs_dir / "12band_hires.log",
             r"12 bands ($\alpha=\sqrt{2}$), rerun", out_dir,
         ),
         "solve_cdf": lambda: fig_solve_cdf(
             "solve_cdf",
             [
-                (scratch_dir / "4band_results.log", "4 bands"),
-                (scratch_dir / "12band_results.log", "12 bands"),
+                (logs_dir / "4band_results.log", "4 bands"),
+                (logs_dir / "12band_results.log", "12 bands"),
             ],
             out_dir,
         ),
         "hist_residuals": lambda: fig_residuals_raw(
-            "hist_residuals", scratch_dir / "12band_hires.log",
+            "hist_residuals", logs_dir / "12band_hires.log",
             cases_dir, out_dir,
         ),
         "hist_residuals_corrected": lambda: fig_residuals_corrected(
-            "hist_residuals_corrected", scratch_dir / "12band_hires.log",
+            "hist_residuals_corrected", logs_dir / "12band_hires.log",
             cases_dir, out_dir,
         ),
         "residual_scatter": lambda: fig_residual_scatter(
-            "residual_scatter", scratch_dir / "12band_hires.log",
+            "residual_scatter", logs_dir / "12band_hires.log",
             cases_dir, out_dir,
         ),
     }
@@ -274,7 +275,8 @@ def figures(scratch_dir, cases_dir, out_dir):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--scratch-dir", default=REPO_ROOT / "scratch", type=Path)
+    ap.add_argument("--logs-dir", default=PAPER_DIR / "data", type=Path,
+                    help="Directory holding the batch-solve .log files (default: paper/data/)")
     ap.add_argument("--cases-dir", default=REPO_ROOT / "test_cases", type=Path)
     ap.add_argument("--out-dir", default=DEFAULT_OUT_DIR, type=Path)
     ap.add_argument("--only", default=None,
@@ -284,7 +286,7 @@ def main():
     args = ap.parse_args()
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
-    figs = figures(args.scratch_dir, args.cases_dir, args.out_dir)
+    figs = figures(args.logs_dir, args.cases_dir, args.out_dir)
 
     if args.list:
         for name in figs:
