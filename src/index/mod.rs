@@ -15,12 +15,44 @@ pub use source::{HealpixCell, IndexFragment, IndexSource, ZdclFile};
 pub use store::load_bundle_bands;
 
 /// Metadata for a star in the index.
+///
+/// `ra` / `dec` are stored in **radians** at `ref_epoch`. `pmra` /
+/// `pmdec` are Gaia DR3 proper motions in **mas/yr** (Gaia convention:
+/// `pmra` already includes the cos(dec) factor). Either PM component
+/// may be NaN to indicate "no proper motion available" (Gaia
+/// 2-parameter solutions, legacy v1/v2 `.zdcl` loads with no Gaia
+/// sidecar). The propagator in `crate::geom::sphere::propagate_pm`
+/// treats NaN PM as identity.
 #[derive(Debug, Clone)]
 pub struct IndexStar {
     pub catalog_id: u64,
     pub ra: f64,
     pub dec: f64,
     pub mag: f64,
+    /// Proper motion in RA, mas/yr (Gaia convention, includes cos(dec)).
+    /// NaN if not available.
+    pub pmra: f64,
+    /// Proper motion in Dec, mas/yr. NaN if not available.
+    pub pmdec: f64,
+    /// Catalog reference epoch, decimal Julian years (Gaia DR3 = 2016.0).
+    pub ref_epoch: f64,
+}
+
+impl IndexStar {
+    /// Build an `IndexStar` from a legacy or test source with no proper
+    /// motion data. `pmra` / `pmdec` are NaN and `ref_epoch` is the
+    /// Gaia DR3 default (2016.0).
+    pub fn without_pm(catalog_id: u64, ra: f64, dec: f64, mag: f64) -> Self {
+        Self {
+            catalog_id,
+            ra,
+            dec,
+            mag,
+            pmra: f64::NAN,
+            pmdec: f64::NAN,
+            ref_epoch: 2016.0,
+        }
+    }
 }
 
 /// Build metadata stored in a v2 index file.

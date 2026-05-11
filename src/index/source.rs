@@ -395,12 +395,7 @@ impl ZdclFile {
         let ra = f64::from_le_bytes(self.mmap[off + 8..off + 16].try_into().unwrap());
         let dec = f64::from_le_bytes(self.mmap[off + 16..off + 24].try_into().unwrap());
         let mag = f64::from_le_bytes(self.mmap[off + 24..off + 32].try_into().unwrap());
-        Ok(IndexStar {
-            catalog_id,
-            ra,
-            dec,
-            mag,
-        })
+        Ok(IndexStar::without_pm(catalog_id, ra, dec, mag))
     }
 
     fn read_quad(&self, idx: usize) -> io::Result<Quad> {
@@ -739,12 +734,12 @@ mod tests {
         let mut stars = Vec::with_capacity(n);
         for i in 0..n {
             let frac = i as f64 / n.max(1) as f64;
-            stars.push(IndexStar {
-                catalog_id: 100 + i as u64,
-                ra: 1.0 + frac * 0.5,
-                dec: 0.3 + frac * 0.4,
-                mag: 5.0 + frac * 5.0,
-            });
+            stars.push(IndexStar::without_pm(
+                100 + i as u64,
+                1.0 + frac * 0.5,
+                0.3 + frac * 0.4,
+                5.0 + frac * 5.0,
+            ));
         }
         let star_points: Vec<[f64; 3]> = stars.iter().map(|s| radec_to_xyz(s.ra, s.dec)).collect();
         let star_indices: Vec<usize> = (0..n).collect();

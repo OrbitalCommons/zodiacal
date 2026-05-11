@@ -79,6 +79,47 @@ pub fn star_coords(point: [f64; 3], reference: [f64; 3]) -> Option<(f64, f64)> {
     Some((x, y))
 }
 
+/// Linear proper-motion extrapolation of a catalog position from
+/// `ref_epoch` to `obs_epoch`.
+///
+/// Inputs:
+/// - `ra`, `dec` — sky position at `ref_epoch`, **radians**.
+/// - `pmra`, `pmdec` — Gaia DR3 proper motions in **mas/yr**. `pmra`
+///   carries the cos(dec) factor (Gaia convention), so a true-sky
+///   rate, not a coordinate rate. Either may be NaN; if so the
+///   position is returned unchanged.
+/// - `ref_epoch`, `obs_epoch` — Julian decimal years (e.g. 2016.0).
+///
+/// The math is the standard small-angle linear extrapolation. For
+/// fast-moving stars (~5000 mas/yr) and decade-scale gaps this is
+/// accurate to ~10 µas, far below any pixel tolerance we care about.
+/// Parallax, light-time, and stellar aberration are NOT applied
+/// here — those live in the apparent-place pipeline used by the
+/// `crate::refinement` module.
+pub fn propagate_pm(
+    ra: f64,
+    dec: f64,
+    pmra: f64,
+    pmdec: f64,
+    ref_epoch: f64,
+    obs_epoch: f64,
+) -> (f64, f64) {
+    if pmra.is_nan() || pmdec.is_nan() {
+        return (ra, dec);
+    }
+    let dt_yr = obs_epoch - ref_epoch;
+    // 1 mas = pi / (180 * 3600 * 1000) rad
+    const MAS_TO_RAD: f64 = std::f64::consts::PI / (180.0 * 3600.0 * 1000.0);
+    let cos_dec = dec.cos();
+    // pmra has cos(dec) baked in; divide it out to get the coordinate
+    // rate dRA/dt. cos(dec) is bounded away from zero everywhere except
+    // exactly at the poles; sources within a few arcsec of either pole
+    // are vanishingly rare in Gaia.
+    let dra = pmra * dt_yr * MAS_TO_RAD / cos_dec;
+    let ddec = pmdec * dt_yr * MAS_TO_RAD;
+    (ra + dra, dec + ddec)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -136,6 +177,88 @@ mod tests {
 
         let (_, dec) = xyz_to_radec([0.0, 0.0, -1.0]);
         assert_close(dec, -FRAC_PI_2, EPS);
+    }
+
+    #[test]
+    fn propagate_pm_zero_dt_is_identity() {
+        let ra = 1.234;
+        let dec = 0.567;
+        let (ra2, dec2) = propagate_pm(ra, dec, 12.34, -5.67, 2016.0, 2016.0);
+        assert_close(ra, ra2, EPS);
+        assert_close(dec, dec2, EPS);
+    }
+
+    #[test]
+    fn propagate_pm_nan_pm_is_identity() {
+        let ra = 0.5;
+        let dec = 0.3;
+        // Either NaN component must short-circuit to identity. Gaia
+        // 2-parameter solutions leave both NaN, but defending against
+        // a single NaN component is free.
+        for (pmra, pmdec) in [(f64::NAN, 0.0), (0.0, f64::NAN), (f64::NAN, f64::NAN)] {
+            let (ra2, dec2) = propagate_pm(ra, dec, pmra, pmdec, 2016.0, 2002.0);
+            assert_close(ra, ra2, EPS);
+            assert_close(dec, dec2, EPS);
+        }
+    }
+
+    #[test]
+    fn propagate_pm_known_drift_m101_rank4() {
+        // Gaia DR3 1609274703365302528 (the M101 rank-4 detection from
+        // PR #126's investigation). Verified against the user-space
+        // astropy calculation: 13.126 yr × pmra=-12.145 mas/yr (cos dec
+        // included) → -159.5 mas in true sky, -3.3 mas in declination.
+        let ra_deg: f64 = 210.826611;
+        let dec_deg: f64 = 54.347952;
+        let ra = ra_deg.to_radians();
+        let dec = dec_deg.to_radians();
+        let pmra = -12.14525611646663;
+        let pmdec = -0.25469925378605757;
+        // From Gaia 2016.0 backward to HST DATE-OBS 2002-11-15
+        // midpoint = MJD 52593.98 = decimal year 2002.87392.
+        let (ra2, dec2) = propagate_pm(ra, dec, pmra, pmdec, 2016.0, 2002.87392);
+        let dra_arcsec = (ra2 - ra).to_degrees() * 3600.0 * dec.cos();
+        let ddec_arcsec = (dec2 - dec).to_degrees() * 3600.0;
+        // Expected: -12.145 * (2002.874 - 2016.0) = +159.4 mas RA·cos
+        // (sign: -pmra × negative dt → +mas), +3.3 mas Dec.
+        assert!(
+            (dra_arcsec - 0.1594).abs() < 1e-3,
+            "RA drift mismatch: got {dra_arcsec} arcsec, want ~0.1594"
+        );
+        assert!(
+            (ddec_arcsec - 0.0033).abs() < 1e-3,
+            "Dec drift mismatch: got {ddec_arcsec} arcsec, want ~0.0033"
+        );
+    }
+
+    #[test]
+    fn propagate_pm_sign_convention() {
+        // Positive pmra at positive dt should increase RA (in radians);
+        // positive pmdec at positive dt should increase Dec.
+        let (ra2, dec2) = propagate_pm(1.0, 0.0, 100.0, 100.0, 2000.0, 2010.0);
+        assert!(ra2 > 1.0, "pmra>0, dt>0 should push ra up: got {ra2}");
+        assert!(dec2 > 0.0, "pmdec>0, dt>0 should push dec up: got {dec2}");
+        // And the converse.
+        let (ra2, dec2) = propagate_pm(1.0, 0.0, -100.0, -100.0, 2000.0, 2010.0);
+        assert!(ra2 < 1.0, "pmra<0, dt>0 should pull ra down: got {ra2}");
+        assert!(dec2 < 0.0, "pmdec<0, dt>0 should pull dec down: got {dec2}");
+    }
+
+    #[test]
+    fn propagate_pm_cos_dec_correction() {
+        // At dec = 60°, cos(dec) = 0.5, so a given pmra (which has
+        // cos(dec) baked in) should produce twice the RA-coordinate
+        // change as the same pmra at dec = 0.
+        let pmra = 100.0;
+        let dt = 10.0;
+        let (ra_eq, _) = propagate_pm(0.0, 0.0, pmra, 0.0, 0.0, dt);
+        let (ra_60, _) = propagate_pm(0.0, 60.0_f64.to_radians(), pmra, 0.0, 0.0, dt);
+        // ra change at 60° should be ra_eq / cos(60°) = ra_eq / 0.5
+        let ratio = ra_60 / ra_eq;
+        assert!(
+            (ratio - 2.0).abs() < 1e-9,
+            "ra change at dec=60 should be 2x equator: ratio={ratio}"
+        );
     }
 
     #[test]

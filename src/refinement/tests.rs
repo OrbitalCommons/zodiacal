@@ -97,12 +97,7 @@ fn make_scenario() -> (
         let ref_ra = apparent_ra - d_ra;
         let ref_dec = apparent_dec - d_dec;
 
-        index_stars.push(IndexStar {
-            catalog_id: i as u64,
-            ra: ref_ra,
-            dec: ref_dec,
-            mag: i as f64,
-        });
+        index_stars.push(IndexStar::without_pm(i as u64, ref_ra, ref_dec, i as f64));
 
         field_sources.push(DetectedSource {
             x: px,

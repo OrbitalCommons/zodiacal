@@ -632,7 +632,8 @@ fn arcsec_to_radians(arcsec: f64) -> f64 {
 /// Construct an `IndexStar` from a 104-byte Gaia record.
 ///
 /// The shard stores RA/Dec in degrees per the spec; the index uses
-/// radians.
+/// radians. Proper-motion fields pass through as-is (mas/yr, Gaia
+/// convention); the shard's NaN sentinel for missing PM is preserved.
 #[inline]
 fn gaia_record_to_index_star(g: &GaiaRecord) -> IndexStar {
     IndexStar {
@@ -640,6 +641,9 @@ fn gaia_record_to_index_star(g: &GaiaRecord) -> IndexStar {
         ra: g.ra.to_radians(),
         dec: g.dec.to_radians(),
         mag: g.phot_g_mean_mag,
+        pmra: g.pmra,
+        pmdec: g.pmdec,
+        ref_epoch: g.ref_epoch,
     }
 }
 

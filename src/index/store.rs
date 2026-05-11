@@ -234,12 +234,7 @@ fn load_filtered(path: &Path, region_filter: Option<(&SkyRegion, f64)>) -> io::R
             }
         }
         if keep {
-            stars.push(IndexStar {
-                catalog_id,
-                ra,
-                dec,
-                mag,
-            });
+            stars.push(IndexStar::without_pm(catalog_id, ra, dec, mag));
         }
     }
 
@@ -370,12 +365,12 @@ mod tests {
         let mut stars = Vec::with_capacity(num_stars);
         for i in 0..num_stars {
             let frac = i as f64 / num_stars.max(1) as f64;
-            stars.push(IndexStar {
-                catalog_id: (i as u64) * 100 + 1,
-                ra: base_ra + frac * 0.01,
-                dec: base_dec + frac * 0.01,
-                mag: 5.0 + frac * 10.0,
-            });
+            stars.push(IndexStar::without_pm(
+                (i as u64) * 100 + 1,
+                base_ra + frac * 0.01,
+                base_dec + frac * 0.01,
+                5.0 + frac * 10.0,
+            ));
         }
 
         let mut quads = Vec::with_capacity(num_quads);
@@ -582,21 +577,21 @@ mod tests {
         let mut stars = Vec::new();
         for i in 0..n_a {
             let frac = i as f64 / n_a as f64;
-            stars.push(IndexStar {
-                catalog_id: 1000 + i as u64,
-                ra: patch_a[0] + frac * 0.005,
-                dec: patch_a[1] + frac * 0.005,
-                mag: 5.0 + frac,
-            });
+            stars.push(IndexStar::without_pm(
+                1000 + i as u64,
+                patch_a[0] + frac * 0.005,
+                patch_a[1] + frac * 0.005,
+                5.0 + frac,
+            ));
         }
         for i in 0..n_b {
             let frac = i as f64 / n_b as f64;
-            stars.push(IndexStar {
-                catalog_id: 2000 + i as u64,
-                ra: patch_b[0] + frac * 0.005,
-                dec: patch_b[1] + frac * 0.005,
-                mag: 5.0 + frac,
-            });
+            stars.push(IndexStar::without_pm(
+                2000 + i as u64,
+                patch_b[0] + frac * 0.005,
+                patch_b[1] + frac * 0.005,
+                5.0 + frac,
+            ));
         }
 
         // Quads: some entirely within A, some entirely within B, some that

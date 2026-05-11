@@ -221,12 +221,7 @@ pub fn build_index(stars: &[(u64, f64, f64, f64)], config: &IndexBuilderConfig) 
 
     let index_stars: Vec<IndexStar> = sorted
         .iter()
-        .map(|&(id, ra, dec, mag)| IndexStar {
-            catalog_id: id,
-            ra,
-            dec,
-            mag,
-        })
+        .map(|&(id, ra, dec, mag)| IndexStar::without_pm(id, ra, dec, mag))
         .collect();
 
     finish_spinner(
@@ -530,12 +525,7 @@ pub fn build_index_from_catalog(
     let mut stars: Vec<IndexStar> = Vec::new();
     for (_, heap) in cell_heaps {
         for hs in heap {
-            stars.push(IndexStar {
-                catalog_id: hs.id,
-                ra: hs.ra,
-                dec: hs.dec,
-                mag: hs.mag,
-            });
+            stars.push(IndexStar::without_pm(hs.id, hs.ra, hs.dec, hs.mag));
         }
     }
     stars.sort_by(|a, b| {
