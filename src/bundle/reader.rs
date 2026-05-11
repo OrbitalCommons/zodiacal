@@ -40,8 +40,6 @@ use lru::LruCache;
 use starfield::Equatorial;
 use starfield::time::Timescale;
 
-use crate::geom::ProperMotion;
-
 /// Default eviction cap for [`ZdclBundle`]'s per-cell shard LRU. Tuned
 /// so a 1000-case bench-bundle sweep at ~6,000 cells/case (5° hint on
 /// a depth-9 bundle) stays within typical host RAM. Override via
@@ -655,14 +653,7 @@ fn gaia_record_to_index_star(g: &GaiaRecord, timescale: &Timescale) -> IndexStar
         catalog_id: g.source_id,
         position: Equatorial::new(g.ra.to_radians(), g.dec.to_radians()),
         mag: g.phot_g_mean_mag,
-        proper_motion: if g.has_pm() {
-            Some(ProperMotion {
-                pmra: g.pmra,
-                pmdec: g.pmdec,
-            })
-        } else {
-            None
-        },
+        proper_motion: g.proper_motion(),
         ref_epoch: timescale.j(g.ref_epoch),
     }
 }

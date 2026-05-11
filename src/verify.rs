@@ -629,7 +629,7 @@ mod tests {
         //
         // Push it harder: 500 mas/yr × 14 yr = 7000 mas = 7″ = 7 px,
         // outside the default tolerance.
-        let pm = crate::geom::ProperMotion {
+        let pm = starfield::ProperMotion {
             pmra: 500.0,
             pmdec: 200.0,
         };

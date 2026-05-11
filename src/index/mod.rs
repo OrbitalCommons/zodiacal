@@ -9,10 +9,9 @@ pub mod store;
 
 use std::sync::OnceLock;
 
-use starfield::Equatorial;
 use starfield::time::{Time, Timescale};
+use starfield::{Equatorial, ProperMotion};
 
-use crate::geom::ProperMotion;
 use crate::kdtree::KdTree;
 use crate::quads::{DIMCODES, Quad};
 

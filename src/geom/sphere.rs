@@ -1,9 +1,7 @@
 use std::f64::consts::TAU;
 
-use starfield::Equatorial;
 use starfield::time::Time;
-
-use crate::geom::ProperMotion;
+use starfield::{Equatorial, ProperMotion};
 
 /// Convert (RA, Dec) in radians to a unit vector `[x, y, z]`.
 pub fn radec_to_xyz(ra: f64, dec: f64) -> [f64; 3] {
