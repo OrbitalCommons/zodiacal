@@ -162,6 +162,14 @@ enum Commands {
         /// Per-case solve timeout in seconds. 0 disables.
         #[arg(long, default_value_t = 0)]
         timeout_secs: u64,
+
+        /// Optional directory to write per-case trace JSON sidecars to.
+        /// On a successful solve, emits `<case>.trace.json` containing
+        /// the full WCS, the matched quad's 4 (field, catalog) pairs,
+        /// and the verification matched-pair list (for plotting hits/
+        /// misses against the image).
+        #[arg(long)]
+        trace_out: Option<PathBuf>,
     },
 
     /// Triage why specific bench cases failed. Projects bundle catalog
@@ -363,6 +371,7 @@ fn main() {
             limit,
             scale_hint,
             timeout_secs,
+            trace_out,
         } => {
             let cfg = BenchBundleConfig {
                 bundle_path: bundle_path.clone(),
@@ -371,6 +380,7 @@ fn main() {
                 limit: *limit,
                 scale_hint: *scale_hint,
                 timeout_secs: *timeout_secs,
+                trace_out: trace_out.clone(),
             };
             if let Err(e) = run_bench_bundle(&cfg) {
                 eprintln!("bench-bundle failed: {e}");

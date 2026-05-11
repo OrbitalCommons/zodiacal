@@ -99,9 +99,14 @@ pub struct SolveStats {
 /// Information about the quad that produced the solution.
 #[derive(Debug, Clone)]
 pub struct QuadMatch {
+    /// Position of the matched index in the `&[&Index]` slice passed
+    /// to [`solve`]. With multi-band bundles each band is one Index,
+    /// so this also identifies the band.
+    pub index_id: usize,
     /// Indices into the field source list.
     pub field_indices: [usize; DIMQUADS],
-    /// Indices into the index star list.
+    /// Indices into the index star list (i.e. into
+    /// `indexes[index_id].stars`).
     pub index_indices: [usize; DIMQUADS],
 }
 
@@ -183,7 +188,7 @@ fn try_quad(
         let reordered_positions: [(f64, f64); DIMQUADS] =
             std::array::from_fn(|i| positions[reordered[i]]);
 
-        for index in indexes {
+        for (index_id, index) in indexes.iter().enumerate() {
             // Skip this index if the backbone angular scale can't overlap
             // with the index's quad scale band.
             if let Some((pix_lo_rad, pix_hi_rad)) = scale_rad {
@@ -271,6 +276,7 @@ fn try_quad(
                         wcs,
                         verify_result,
                         quad_match: QuadMatch {
+                            index_id,
                             field_indices: reordered_orig,
                             index_indices: quad.star_ids,
                         },

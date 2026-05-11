@@ -8,17 +8,17 @@
 
 use std::fs;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use starfield::Equatorial;
 
 use zodiacal::bundle::reader::ZdclBundle;
 use zodiacal::extraction::DetectedSource;
 use zodiacal::geom::sphere::{angular_distance, radec_to_xyz};
 use zodiacal::index::Index;
-use zodiacal::solver::{SkyRegion, SolverConfig, solve};
+use zodiacal::solver::{SkyRegion, Solution, SolverConfig, solve};
 use zodiacal::verify::VerifyConfig;
 
 #[derive(Debug, Deserialize)]
@@ -49,6 +49,12 @@ pub struct BenchBundleConfig {
     pub scale_hint: bool,
     /// Per-case solve timeout (seconds). 0 disables.
     pub timeout_secs: u64,
+    /// Optional directory for per-case `<case>.trace.json` sidecars.
+    /// When set and a case solves, the full solver trace is dumped:
+    /// solved WCS, the matched quad's 4 (field, catalog) pairs, and the
+    /// verification matched-pair list. Useful for visualising hits/
+    /// misses against the source image.
+    pub trace_out: Option<PathBuf>,
 }
 
 pub fn run(cfg: &BenchBundleConfig) -> io::Result<()> {
@@ -78,7 +84,7 @@ pub fn run(cfg: &BenchBundleConfig) -> io::Result<()> {
     );
 
     println!(
-        "case,solved,solve_ms,load_ms,error_arcsec,n_total_quads,n_total_stars,n_verified,best_rejected_log_odds,best_rejected_n_matched,best_rejected_error_arcsec,timed_out"
+        "case,solved,solve_ms,load_ms,error_arcsec,solved_ra_deg,solved_dec_deg,n_total_quads,n_total_stars,n_verified,best_rejected_log_odds,best_rejected_n_matched,best_rejected_error_arcsec,timed_out"
     );
 
     let mut n_solved = 0usize;
@@ -151,9 +157,17 @@ pub fn run(cfg: &BenchBundleConfig) -> io::Result<()> {
             angular_distance(truth_xyz, got_xyz).to_degrees() * 3600.0
         };
 
-        let (solved, error_arcsec) = match solution {
-            Some(sol) => (true, wcs_error_arcsec(&sol.wcs)),
-            None => (false, f64::NAN),
+        let (solved, error_arcsec, solved_ra_deg, solved_dec_deg) = match &solution {
+            Some(sol) => {
+                let (got_ra, got_dec) = sol.wcs.field_center();
+                (
+                    true,
+                    wcs_error_arcsec(&sol.wcs),
+                    got_ra.to_degrees(),
+                    got_dec.to_degrees(),
+                )
+            }
+            None => (false, f64::NAN, f64::NAN, f64::NAN),
         };
 
         let (best_rej_log_odds, best_rej_n_matched, best_rej_error) =
@@ -172,6 +186,15 @@ pub fn run(cfg: &BenchBundleConfig) -> io::Result<()> {
         total_solve_ms += solve_ms;
 
         let case_name = p.file_stem().unwrap().to_string_lossy();
+
+        // Optional per-case trace JSON sidecar. Dumped only on a
+        // successful solve; the renderer uses it to draw the matched
+        // quad and verification hits/misses.
+        if let (Some(out_dir), Some(sol)) = (cfg.trace_out.as_ref(), solution.as_ref()) {
+            std::fs::create_dir_all(out_dir)?;
+            let trace_path = out_dir.join(format!("{case_name}.trace.json"));
+            write_trace(&trace_path, &case_name, &tc, sol, &sources, &indexes)?;
+        }
         let fmt_f = |v: f64| -> String {
             if v.is_nan() {
                 String::new()
@@ -180,13 +203,22 @@ pub fn run(cfg: &BenchBundleConfig) -> io::Result<()> {
             }
         };
         let fmt_i = |v: i64| -> String { if v < 0 { String::new() } else { v.to_string() } };
+        let fmt_deg = |v: f64| -> String {
+            if v.is_nan() {
+                String::new()
+            } else {
+                format!("{:.6}", v)
+            }
+        };
         println!(
-            "{},{},{:.1},{:.1},{},{},{},{},{},{},{},{}",
+            "{},{},{:.1},{:.1},{},{},{},{},{},{},{},{},{},{}",
             case_name,
             solved as u8,
             solve_ms,
             load_ms,
             fmt_f(error_arcsec),
+            fmt_deg(solved_ra_deg),
+            fmt_deg(solved_dec_deg),
             total_quads,
             total_stars,
             stats.n_verified,
@@ -223,5 +255,156 @@ pub fn run(cfg: &BenchBundleConfig) -> io::Result<()> {
     eprintln!("Avg solve:    {:.1} ms", total_solve_ms / n);
     eprintln!("Wall-clock:   {:.1} s", total_elapsed);
 
+    Ok(())
+}
+
+/// Per-case solver trace dumped to `<trace_out>/<case>.trace.json`
+/// when `--trace-out` is passed and the case solves. The schema is
+/// stable enough for downstream renderers to consume directly.
+#[derive(Serialize)]
+struct TraceFile<'a> {
+    case: &'a str,
+    image_width: f64,
+    image_height: f64,
+    truth: TraceCenter,
+    solved: TraceWcs,
+    quad: TraceQuad,
+    verification: TraceVerification,
+}
+
+#[derive(Serialize)]
+struct TraceCenter {
+    ra_deg: f64,
+    dec_deg: f64,
+    plate_scale_arcsec: f64,
+}
+
+#[derive(Serialize)]
+struct TraceWcs {
+    ra_deg: f64,
+    dec_deg: f64,
+    crpix: [f64; 2],
+    cd: [[f64; 2]; 2],
+    image_size: [f64; 2],
+}
+
+#[derive(Serialize)]
+struct TraceQuad {
+    /// Position of the matched index in the band slice (= band index
+    /// for a multi-band bundle).
+    band_idx: usize,
+    /// 4 detected-source indices (into the test-case `sources` list,
+    /// 0-based, in the brightness order the bench passes to `solve`).
+    field_indices: [usize; 4],
+    /// 4 catalog-star pixel positions (post-fit) and sky positions.
+    catalog: [TraceCatalogStar; 4],
+}
+
+#[derive(Serialize)]
+struct TraceCatalogStar {
+    /// Pixel position of the catalog star projected through the
+    /// solver's WCS — what the matched quad's vertex looks like on
+    /// the image after the fit.
+    px: f64,
+    py: f64,
+    ra_deg: f64,
+    dec_deg: f64,
+}
+
+#[derive(Serialize)]
+struct TraceVerification {
+    log_odds: f64,
+    n_matched: usize,
+    n_distractor: usize,
+    /// One entry per accepted match during verification: the field
+    /// source index, the catalog star's projected pixel position, and
+    /// its sky position.
+    matches: Vec<TraceMatch>,
+}
+
+#[derive(Serialize)]
+struct TraceMatch {
+    field_idx: usize,
+    px: f64,
+    py: f64,
+    ra_deg: f64,
+    dec_deg: f64,
+}
+
+fn write_trace(
+    path: &Path,
+    case: &str,
+    tc: &TestCase,
+    sol: &Solution,
+    _sources: &[DetectedSource],
+    indexes: &[Index],
+) -> io::Result<()> {
+    let (got_ra, got_dec) = sol.wcs.field_center();
+    let band = &indexes[sol.quad_match.index_id];
+    let project = |ra: f64, dec: f64| -> (f64, f64) {
+        sol.wcs
+            .radec_to_pixel(ra, dec)
+            .unwrap_or((f64::NAN, f64::NAN))
+    };
+
+    let catalog: [TraceCatalogStar; 4] = std::array::from_fn(|i| {
+        let s = &band.stars[sol.quad_match.index_indices[i]];
+        let (px, py) = project(s.ra, s.dec);
+        TraceCatalogStar {
+            px,
+            py,
+            ra_deg: s.ra.to_degrees(),
+            dec_deg: s.dec.to_degrees(),
+        }
+    });
+
+    let matches: Vec<TraceMatch> = sol
+        .verify_result
+        .matched_pairs
+        .iter()
+        .map(|&(field_idx, ref_idx)| {
+            let s = &band.stars[ref_idx];
+            let (px, py) = project(s.ra, s.dec);
+            TraceMatch {
+                field_idx,
+                px,
+                py,
+                ra_deg: s.ra.to_degrees(),
+                dec_deg: s.dec.to_degrees(),
+            }
+        })
+        .collect();
+
+    let trace = TraceFile {
+        case,
+        image_width: tc.image_width,
+        image_height: tc.image_height,
+        truth: TraceCenter {
+            ra_deg: tc.ra_deg,
+            dec_deg: tc.dec_deg,
+            plate_scale_arcsec: tc.plate_scale_arcsec,
+        },
+        solved: TraceWcs {
+            ra_deg: got_ra.to_degrees(),
+            dec_deg: got_dec.to_degrees(),
+            crpix: sol.wcs.crpix,
+            cd: sol.wcs.cd,
+            image_size: sol.wcs.image_size,
+        },
+        quad: TraceQuad {
+            band_idx: sol.quad_match.index_id,
+            field_indices: sol.quad_match.field_indices,
+            catalog,
+        },
+        verification: TraceVerification {
+            log_odds: sol.verify_result.log_odds,
+            n_matched: sol.verify_result.n_matched,
+            n_distractor: sol.verify_result.n_distractor,
+            matches,
+        },
+    };
+
+    let json = serde_json::to_string_pretty(&trace).map_err(io::Error::other)?;
+    std::fs::write(path, json)?;
     Ok(())
 }
