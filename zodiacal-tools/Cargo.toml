@@ -15,7 +15,7 @@ path = "src/main.rs"
 [dependencies]
 zodiacal = { path = "..", version = "0.4" }
 cdshealpix = "0.9"
-starfield = "0.11"
+starfield = "0.12"
 starfield-gaia = { git = "https://github.com/OrbitalCommons/starfield-datasources" }
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4.5", features = ["derive"] }
