@@ -41,37 +41,6 @@ pub fn default_timescale() -> &'static Timescale {
     TS.get_or_init(Timescale::default)
 }
 
-/// Sync-safe wrapper around [`starfield::time::Time`].
-///
-/// `starfield::Time` is currently `!Sync` because it caches lazy
-/// UT1 / TDB / delta-T conversions in `Cell<Option<f64>>` fields.
-/// Within zodiacal we only ever read `.j()` / `.tt()` / `.jd()`
-/// (TT-based, no cache touch), so sharing a `Time` across threads is
-/// safe in our usage pattern — we promise we never call the
-/// cache-mutating methods on a shared instance.
-///
-/// TODO: drop this wrapper once `starfield::Time` becomes `Sync`
-/// (tracked at OrbitalCommons/starfield#138). At that point the
-/// `ref_epoch` field below can change back to plain `Time`.
-#[derive(Debug, Clone)]
-pub struct RefEpoch(Time);
-
-// SAFETY: zodiacal only ever calls TT-based accessors (`.j()`, `.tt()`,
-// `.jd()`) on stored `Time` values, never the lazy-caching UT1/TDB
-// methods. Until starfield#138 lands, this manual Sync impl is the
-// least-invasive way to allow `Index` to live behind `Arc<Index>` in
-// server / realtime modes.
-unsafe impl Sync for RefEpoch {}
-
-impl RefEpoch {
-    pub fn new(t: Time) -> Self {
-        Self(t)
-    }
-    pub fn as_time(&self) -> &Time {
-        &self.0
-    }
-}
-
 /// Metadata for a star in the index.
 ///
 /// `position` is the catalog sky position at `ref_epoch`.
@@ -85,7 +54,7 @@ pub struct IndexStar {
     pub position: Equatorial,
     pub mag: f64,
     pub proper_motion: Option<ProperMotion>,
-    pub ref_epoch: RefEpoch,
+    pub ref_epoch: Time,
 }
 
 impl IndexStar {
@@ -98,10 +67,22 @@ impl IndexStar {
             position,
             mag,
             proper_motion: None,
-            ref_epoch: RefEpoch::new(default_timescale().j(2016.0)),
+            ref_epoch: default_timescale().j(2016.0),
         }
     }
 }
+
+// Compile-time guard: `IndexStar` (and therefore `Index` and any
+// `Arc<Index>` we hand out to server / realtime callers) must be
+// `Send + Sync`. The non-obvious bit is `ref_epoch: Time` — `Time` is
+// `Sync` from starfield 0.12.4 onward (OrbitalCommons/starfield#138 →
+// `OnceLock<f64>` replacing the old `Cell<Option<f64>>` caches). If a
+// future starfield bump regresses on that, this assertion will catch
+// it before runtime.
+const _: () = {
+    const fn assert_sync<T: Sync>() {}
+    assert_sync::<IndexStar>();
+};
 
 /// Build metadata stored in a v2 index file.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

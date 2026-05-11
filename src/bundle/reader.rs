@@ -41,7 +41,6 @@ use starfield::Equatorial;
 use starfield::time::Timescale;
 
 use crate::geom::ProperMotion;
-use crate::index::RefEpoch;
 
 /// Default eviction cap for [`ZdclBundle`]'s per-cell shard LRU. Tuned
 /// so a 1000-case bench-bundle sweep at ~6,000 cells/case (5° hint on
@@ -664,7 +663,7 @@ fn gaia_record_to_index_star(g: &GaiaRecord, timescale: &Timescale) -> IndexStar
         } else {
             None
         },
-        ref_epoch: RefEpoch::new(timescale.j(g.ref_epoch)),
+        ref_epoch: timescale.j(g.ref_epoch),
     }
 }
 

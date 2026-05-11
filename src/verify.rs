@@ -106,7 +106,7 @@ pub fn verify_solution(
         let star = &index.stars[result.index];
         let pos = match (obs_epoch, &star.proper_motion) {
             (Some(obs), Some(pm)) => {
-                crate::geom::sphere::propagate_pm(star.position, *pm, star.ref_epoch.as_time(), obs)
+                crate::geom::sphere::propagate_pm(star.position, *pm, &star.ref_epoch, obs)
             }
             _ => star.position,
         };
@@ -652,7 +652,7 @@ mod tests {
             position: Equatorial::new(det_ra - dra, det_dec - ddec),
             mag: 10.0,
             proper_motion: Some(pm),
-            ref_epoch: crate::index::RefEpoch::new(ref_epoch),
+            ref_epoch,
         };
         let index = make_test_index(vec![star_with_pm]);
 

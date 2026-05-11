@@ -2727,9 +2727,9 @@ dependencies = [
 
 [[package]]
 name = "starfield"
-version = "0.12.2"
+version = "0.12.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5382835eb9ac044f278dba017dbbc6313061d3313948d42e630e13f051e4cb14"
+checksum = "ba96df54731ffa29c347f80813a074c46cfe9c0212d85e7c942e8c4de69b3dcb"
 dependencies = [
  "base64",
  "byteorder",
@@ -3779,7 +3779,7 @@ dependencies = [
  "rayon",
  "serde",
  "serde_json",
- "starfield 0.12.2",
+ "starfield 0.12.4",
  "tempfile",
  "zip",
 ]
@@ -3794,7 +3794,7 @@ dependencies = [
  "rayon",
  "serde",
  "serde_json",
- "starfield 0.12.2",
+ "starfield 0.12.4",
  "starfield-gaia",
  "tempfile",
  "zodiacal",

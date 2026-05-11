@@ -222,12 +222,9 @@ fn try_quad(
                 let star_xyz: [[f64; 3]; DIMQUADS] = std::array::from_fn(|i| {
                     let s = &index.stars[quad.star_ids[i]];
                     let pos = match (&config.obs_epoch, &s.proper_motion) {
-                        (Some(obs), Some(pm)) => crate::geom::sphere::propagate_pm(
-                            s.position,
-                            *pm,
-                            s.ref_epoch.as_time(),
-                            obs,
-                        ),
+                        (Some(obs), Some(pm)) => {
+                            crate::geom::sphere::propagate_pm(s.position, *pm, &s.ref_epoch, obs)
+                        }
                         _ => s.position,
                     };
                     radec_to_xyz(pos.ra, pos.dec)
