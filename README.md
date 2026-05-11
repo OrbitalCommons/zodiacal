@@ -63,6 +63,37 @@ cargo run -p zodiacal-tools --release -- bench-bundle \
     --test-cases-dir ../zodiacal-test-cases/set1-legacy
 ```
 
+### Inspecting individual solves
+
+`bench-bundle --trace-out DIR` emits a `<case>.trace.json` sidecar per
+successful solve, containing the full WCS, the matched quad's four
+(field, catalog) pairs, and every verification matched-pair the solver
+recorded. Useful when you want to see *which* detection became A/B/C/D
+and which top-50 stars verified vs missed.
+
+```bash
+cargo run -p zodiacal-tools --release -- bench-bundle \
+    --bundle-path <bundle.zdcl> \
+    --test-cases-dir ../zodiacal-test-cases/set2-dr3-mag19 \
+    --trace-out /tmp/traces
+```
+
+`scripts/render_solver_trace.py` overlays a trace on its FITS plate using
+the manim default palette (A=red, B=green, C=cyan, D=orange), with
+clipped backbone/reference lines and a dashed AB-diameter validity
+circle. Top-50 verification hits draw as open lime circles, misses as
+crimson ×s, and rank > 50 detections as faint cyan ×s underneath.
+Requires `numpy`, `matplotlib`, and `astropy`.
+
+```bash
+python scripts/render_solver_trace.py \
+    --case 0042 \
+    --fits  /path/to/frame_0042.fits \
+    --src-json  ../zodiacal-test-cases/set2-dr3-mag19/0042.json \
+    --trace /tmp/traces/0042.trace.json \
+    --out   /tmp/0042.png
+```
+
 ## Building Indexes
 
 Zodiacal requires prebuilt index files (`.zdcl`) containing star positions and quad hash codes. These are built from a [starfield](https://github.com/OrbitalCommons/starfield) binary catalog.
