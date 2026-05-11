@@ -170,6 +170,14 @@ enum Commands {
         /// misses against the image).
         #[arg(long)]
         trace_out: Option<PathBuf>,
+
+        /// Observation epoch (Julian decimal year, e.g. 2002.874)
+        /// used to propagate catalog proper motions before the WCS fit
+        /// and verification step. When omitted, HST cases auto-fill
+        /// from `hst.t_min_mjd`/`t_max_mjd` and synthetic Gaia-epoch
+        /// cases default to no propagation.
+        #[arg(long)]
+        obs_epoch: Option<f64>,
     },
 
     /// Triage why specific bench cases failed. Projects bundle catalog
@@ -372,6 +380,7 @@ fn main() {
             scale_hint,
             timeout_secs,
             trace_out,
+            obs_epoch,
         } => {
             let cfg = BenchBundleConfig {
                 bundle_path: bundle_path.clone(),
@@ -381,6 +390,7 @@ fn main() {
                 scale_hint: *scale_hint,
                 timeout_secs: *timeout_secs,
                 trace_out: trace_out.clone(),
+                obs_epoch: *obs_epoch,
             };
             if let Err(e) = run_bench_bundle(&cfg) {
                 eprintln!("bench-bundle failed: {e}");

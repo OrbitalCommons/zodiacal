@@ -77,6 +77,7 @@ pub fn verify_solution(
     field_sources: &[DetectedSource],
     index: &Index,
     config: &VerifyConfig,
+    obs_epoch: Option<f64>,
 ) -> VerifyResult {
     if field_sources.is_empty() {
         return VerifyResult {
@@ -103,7 +104,18 @@ pub fn verify_solution(
 
     for result in &nearby_results {
         let star = &index.stars[result.index];
-        if let Some((px, py)) = wcs.radec_to_pixel(star.ra, star.dec)
+        let (ra, dec) = match obs_epoch {
+            Some(obs) => crate::geom::sphere::propagate_pm(
+                star.ra,
+                star.dec,
+                star.pmra,
+                star.pmdec,
+                star.ref_epoch,
+                obs,
+            ),
+            None => (star.ra, star.dec),
+        };
+        if let Some((px, py)) = wcs.radec_to_pixel(ra, dec)
             && px >= -margin
             && px <= wcs.image_size[0] + margin
             && py >= -margin
@@ -280,7 +292,7 @@ mod tests {
             .collect();
 
         let config = VerifyConfig::default();
-        let result = verify_solution(&wcs, &field_sources, &index, &config);
+        let result = verify_solution(&wcs, &field_sources, &index, &config, None);
 
         assert!(
             result.log_odds > 0.0,
@@ -321,7 +333,7 @@ mod tests {
             log_odds_bail: f64::NEG_INFINITY,
             ..VerifyConfig::default()
         };
-        let result = verify_solution(&wcs, &field_sources, &index, &config);
+        let result = verify_solution(&wcs, &field_sources, &index, &config, None);
 
         assert_eq!(result.n_matched, 20);
         assert_eq!(result.n_distractor, 0);
@@ -354,7 +366,7 @@ mod tests {
             .collect();
 
         let config = VerifyConfig::default();
-        let result = verify_solution(&wrong_wcs, &field_sources, &index, &config);
+        let result = verify_solution(&wrong_wcs, &field_sources, &index, &config, None);
 
         assert!(
             result.log_odds <= 0.0,
@@ -405,7 +417,7 @@ mod tests {
             min_matches: 3,
             ..VerifyConfig::default()
         };
-        let result = verify_solution(&wcs, &field_sources, &index, &config);
+        let result = verify_solution(&wcs, &field_sources, &index, &config, None);
 
         assert!(
             result.n_matched >= 3,
@@ -457,7 +469,7 @@ mod tests {
             .collect();
 
         let config = VerifyConfig::default();
-        let result = verify_solution(&wrong_wcs, &field_sources, &index, &config);
+        let result = verify_solution(&wrong_wcs, &field_sources, &index, &config, None);
 
         assert!(
             result.log_odds <= 0.0 || result.n_matched == 0,
@@ -476,7 +488,7 @@ mod tests {
         let field_sources: Vec<DetectedSource> = vec![];
 
         let config = VerifyConfig::default();
-        let result = verify_solution(&wcs, &field_sources, &index, &config);
+        let result = verify_solution(&wcs, &field_sources, &index, &config, None);
 
         assert_eq!(result.log_odds, 0.0);
         assert_eq!(result.n_matched, 0);
@@ -571,7 +583,7 @@ mod tests {
             ..VerifyConfig::default()
         };
 
-        let result = verify_solution(&wrong_wcs, &field_sources, &index, &config);
+        let result = verify_solution(&wrong_wcs, &field_sources, &index, &config, None);
 
         let total_examined = result.n_matched + result.n_distractor;
         assert!(
@@ -583,5 +595,89 @@ mod tests {
             "Expected early bail or all sources examined"
         );
         assert!(!result.is_accepted(&config));
+    }
+
+    /// Regression for #125: a catalog star with non-trivial proper motion
+    /// must match its detection only when `obs_epoch` is set and
+    /// `propagate_pm` is applied.
+    ///
+    /// Scenario: detection sits at pixel (300, 400). The catalog star's
+    /// position at the *observation* epoch projects to that pixel. We
+    /// then back-extrapolate the catalog position to a Gaia 2016
+    /// reference epoch by applying the *negative* of the proper motion;
+    /// that's the (ra, dec) we store in the index. Without
+    /// `obs_epoch`, the verifier projects the index's 2016 position and
+    /// misses. With `obs_epoch = obs`, it forward-propagates back to
+    /// the obs position and matches.
+    #[test]
+    fn obs_epoch_recovers_high_pm_star() {
+        let wcs = make_test_wcs();
+
+        // Detection at pixel (300, 400).
+        let det_px = (300.0_f64, 400.0_f64);
+        let (det_ra, det_dec) = wcs.pixel_to_radec(det_px.0, det_px.1);
+        let field_sources = vec![DetectedSource {
+            x: det_px.0,
+            y: det_px.1,
+            flux: 100.0,
+        }];
+
+        // PM in mas/yr. 50 mas/yr × 14 yr = 700 mas drift in RA. At the
+        // synthetic 1″/px plate scale, that's 0.7 px — comfortably
+        // inside the default 5 px match radius, so the test must fail
+        // for the right reason (PM not applied), not because the index
+        // is way off-image.
+        //
+        // Push it harder: 500 mas/yr × 14 yr = 7000 mas = 7″ = 7 px,
+        // outside the default tolerance.
+        let pmra_mas_per_yr = 500.0;
+        let pmdec_mas_per_yr = 200.0;
+        let ref_epoch = 2016.0;
+        let obs_epoch = 2002.0;
+        let dt = obs_epoch - ref_epoch; // negative
+
+        const MAS_TO_RAD: f64 = std::f64::consts::PI / (180.0 * 3600.0 * 1000.0);
+        // Reverse the PM extrapolation: where the star was at ref_epoch
+        // such that at obs_epoch (with the recorded PM) it ends up at
+        // (det_ra, det_dec).
+        let cos_dec = det_dec.cos();
+        let dra = pmra_mas_per_yr * dt * MAS_TO_RAD / cos_dec;
+        let ddec = pmdec_mas_per_yr * dt * MAS_TO_RAD;
+        // Store position at ref_epoch = det position - PM*dt (rearranged
+        // from propagate_pm).
+        let ra_2016 = det_ra - dra;
+        let dec_2016 = det_dec - ddec;
+
+        let star_with_pm = IndexStar {
+            catalog_id: 1,
+            ra: ra_2016,
+            dec: dec_2016,
+            mag: 10.0,
+            pmra: pmra_mas_per_yr,
+            pmdec: pmdec_mas_per_yr,
+            ref_epoch,
+        };
+        let index = make_test_index(vec![star_with_pm]);
+
+        let config = VerifyConfig::default();
+
+        // Without obs_epoch: the catalog projects to its 2016 position,
+        // ~7 px away from the detection — outside the default 5 px
+        // match radius. So this should be a miss.
+        let r_no_pm = verify_solution(&wcs, &field_sources, &index, &config, None);
+        assert_eq!(
+            r_no_pm.n_matched, 0,
+            "Without obs_epoch the high-PM star should miss; got {} matches",
+            r_no_pm.n_matched
+        );
+
+        // With obs_epoch: propagate_pm forwards the catalog position to
+        // 2002, landing on the detection. Now it's a hit.
+        let r_with_pm = verify_solution(&wcs, &field_sources, &index, &config, Some(obs_epoch));
+        assert_eq!(
+            r_with_pm.n_matched, 1,
+            "With obs_epoch the high-PM star should match; got {} matches",
+            r_with_pm.n_matched
+        );
     }
 }
