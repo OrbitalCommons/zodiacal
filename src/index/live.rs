@@ -430,12 +430,12 @@ mod tests {
             let mut stars = Vec::new();
             for i in 0..6 {
                 let frac = i as f64 / 6.0;
-                stars.push(IndexStar {
-                    catalog_id: cell_id * 1000 + i as u64,
-                    ra: ra + frac * 0.005,
-                    dec: dec + frac * 0.005,
-                    mag: 5.0 + frac,
-                });
+                stars.push(IndexStar::without_pm(
+                    cell_id * 1000 + i as u64,
+                    ra + frac * 0.005,
+                    dec + frac * 0.005,
+                    5.0 + frac,
+                ));
             }
             cells.push(MockCell {
                 cell: HealpixCell {

@@ -254,12 +254,7 @@ mod tests {
             .enumerate()
             .map(|(i, &(px, py))| {
                 let (ra, dec) = wcs.pixel_to_radec(px, py);
-                IndexStar {
-                    catalog_id: i as u64,
-                    ra,
-                    dec,
-                    mag: 10.0,
-                }
+                IndexStar::without_pm(i as u64, ra, dec, 10.0)
             })
             .collect()
     }
@@ -475,12 +470,7 @@ mod tests {
     fn empty_field() {
         let wcs = make_test_wcs();
 
-        let stars = vec![IndexStar {
-            catalog_id: 0,
-            ra: PI,
-            dec: 0.25,
-            mag: 10.0,
-        }];
+        let stars = vec![IndexStar::without_pm(0, PI, 0.25, 10.0)];
         let index = make_test_index(stars);
 
         let field_sources: Vec<DetectedSource> = vec![];

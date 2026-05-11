@@ -340,12 +340,7 @@ mod tests {
                 let py = h * 0.1 + h * 0.8 * (iy as f64) / (side as f64 - 1.0).max(1.0);
                 let (ra, dec) = wcs.pixel_to_radec(px, py);
 
-                stars.push(IndexStar {
-                    catalog_id: count as u64,
-                    ra,
-                    dec,
-                    mag: count as f64,
-                });
+                stars.push(IndexStar::without_pm(count as u64, ra, dec, count as f64));
                 sources.push(DetectedSource {
                     x: px,
                     y: py,
@@ -423,12 +418,12 @@ mod tests {
                 let py = h * 0.1 + h * 0.8 * (iy as f64) / (side as f64 - 1.0);
                 let (ra, dec) = wcs.pixel_to_radec(px, py);
 
-                stars.push(IndexStar {
-                    catalog_id: (iy * side + ix) as u64,
+                stars.push(IndexStar::without_pm(
+                    (iy * side + ix) as u64,
                     ra,
                     dec,
-                    mag: 10.0,
-                });
+                    10.0,
+                ));
 
                 // The field source is at a distorted position.
                 // If the TAN WCS predicts pixel (px, py) for this star,
