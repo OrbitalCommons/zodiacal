@@ -14,6 +14,8 @@ use std::path::Path;
 use cdshealpix::nested;
 use memmap2::Mmap;
 
+use starfield::Equatorial;
+
 use crate::geom::sphere::radec_to_xyz;
 use crate::quads::{Code, DIMCODES, DIMQUADS, Quad};
 use crate::solver::SkyRegion;
@@ -395,7 +397,11 @@ impl ZdclFile {
         let ra = f64::from_le_bytes(self.mmap[off + 8..off + 16].try_into().unwrap());
         let dec = f64::from_le_bytes(self.mmap[off + 16..off + 24].try_into().unwrap());
         let mag = f64::from_le_bytes(self.mmap[off + 24..off + 32].try_into().unwrap());
-        Ok(IndexStar::without_pm(catalog_id, ra, dec, mag))
+        Ok(IndexStar::without_pm(
+            catalog_id,
+            Equatorial::new(ra, dec),
+            mag,
+        ))
     }
 
     fn read_quad(&self, idx: usize) -> io::Result<Quad> {
@@ -600,7 +606,7 @@ pub(super) fn write_v3<W: io::Write>(
     let mut indexed_with_cell: Vec<(usize, u64)> = stars
         .iter()
         .enumerate()
-        .map(|(i, s)| (i, nested::hash(cell_depth, s.ra, s.dec)))
+        .map(|(i, s)| (i, nested::hash(cell_depth, s.position.ra, s.position.dec)))
         .collect();
     indexed_with_cell.sort_by_key(|&(orig_idx, cell_id)| (cell_id, orig_idx));
 
@@ -645,7 +651,7 @@ pub(super) fn write_v3<W: io::Write>(
     // Remap quad star_ids; codes get recomputed from sorted positions.
     let star_xyz: Vec<[f64; 3]> = sorted_stars
         .iter()
-        .map(|s| radec_to_xyz(s.ra, s.dec))
+        .map(|s| radec_to_xyz(s.position.ra, s.position.dec))
         .collect();
 
     // Header.
@@ -693,8 +699,8 @@ pub(super) fn write_v3<W: io::Write>(
 
     for s in &sorted_stars {
         w.write_all(&s.catalog_id.to_le_bytes())?;
-        w.write_all(&s.ra.to_le_bytes())?;
-        w.write_all(&s.dec.to_le_bytes())?;
+        w.write_all(&s.position.ra.to_le_bytes())?;
+        w.write_all(&s.position.dec.to_le_bytes())?;
         w.write_all(&s.mag.to_le_bytes())?;
     }
 
@@ -736,12 +742,14 @@ mod tests {
             let frac = i as f64 / n.max(1) as f64;
             stars.push(IndexStar::without_pm(
                 100 + i as u64,
-                1.0 + frac * 0.5,
-                0.3 + frac * 0.4,
+                Equatorial::new(1.0 + frac * 0.5, 0.3 + frac * 0.4),
                 5.0 + frac * 5.0,
             ));
         }
-        let star_points: Vec<[f64; 3]> = stars.iter().map(|s| radec_to_xyz(s.ra, s.dec)).collect();
+        let star_points: Vec<[f64; 3]> = stars
+            .iter()
+            .map(|s| radec_to_xyz(s.position.ra, s.position.dec))
+            .collect();
         let star_indices: Vec<usize> = (0..n).collect();
         let star_tree = KdTree::<3>::build(star_points.clone(), star_indices);
         // Build a few quads if we have enough stars.

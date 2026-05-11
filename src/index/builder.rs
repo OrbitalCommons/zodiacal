@@ -6,6 +6,8 @@ use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use starfield::catalogs::{StarCatalog, StarData};
 
+use starfield::Equatorial;
+
 use crate::geom::sphere::{angular_distance, radec_to_xyz, star_midpoint};
 use crate::kdtree::KdTree;
 use crate::quads::{Code, DIMCODES, DIMQUADS, Quad, compute_canonical_code};
@@ -221,7 +223,7 @@ pub fn build_index(stars: &[(u64, f64, f64, f64)], config: &IndexBuilderConfig) 
 
     let index_stars: Vec<IndexStar> = sorted
         .iter()
-        .map(|&(id, ra, dec, mag)| IndexStar::without_pm(id, ra, dec, mag))
+        .map(|&(id, ra, dec, mag)| IndexStar::without_pm(id, Equatorial::new(ra, dec), mag))
         .collect();
 
     finish_spinner(
@@ -255,7 +257,7 @@ fn build_index_from_stars(
 
     let xyzs: Vec<[f64; 3]> = index_stars
         .iter()
-        .map(|s| radec_to_xyz(s.ra, s.dec))
+        .map(|s| radec_to_xyz(s.position.ra, s.position.dec))
         .collect();
 
     let star_points = xyzs.clone();
@@ -525,7 +527,11 @@ pub fn build_index_from_catalog(
     let mut stars: Vec<IndexStar> = Vec::new();
     for (_, heap) in cell_heaps {
         for hs in heap {
-            stars.push(IndexStar::without_pm(hs.id, hs.ra, hs.dec, hs.mag));
+            stars.push(IndexStar::without_pm(
+                hs.id,
+                Equatorial::new(hs.ra, hs.dec),
+                hs.mag,
+            ));
         }
     }
     stars.sort_by(|a, b| {
@@ -552,7 +558,10 @@ pub fn build_index_from_catalog(
     pb_tree.set_message("building 3D KD-tree...");
     pb_tree.enable_steady_tick(std::time::Duration::from_millis(80));
 
-    let xyzs: Vec<[f64; 3]> = stars.iter().map(|s| radec_to_xyz(s.ra, s.dec)).collect();
+    let xyzs: Vec<[f64; 3]> = stars
+        .iter()
+        .map(|s| radec_to_xyz(s.position.ra, s.position.dec))
+        .collect();
     let star_points = xyzs.clone();
     let star_indices: Vec<usize> = (0..xyzs.len()).collect();
     let star_tree = KdTree::<3>::build(star_points, star_indices);
@@ -577,7 +586,7 @@ pub fn build_index_from_catalog(
     // Assign each star to its quad-depth cell.
     let mut cell_stars: HashMap<u64, Vec<usize>> = HashMap::new();
     for (idx, star) in stars.iter().enumerate() {
-        let cell = cdshealpix::nested::hash(quad_depth, star.ra, star.dec);
+        let cell = cdshealpix::nested::hash(quad_depth, star.position.ra, star.position.dec);
         cell_stars.entry(cell).or_default().push(idx);
     }
 
@@ -825,9 +834,7 @@ mod tests {
         for quad in &index.quads {
             let a = &index.stars[quad.star_ids[0]];
             let b = &index.stars[quad.star_ids[1]];
-            let a_xyz = radec_to_xyz(a.ra, a.dec);
-            let b_xyz = radec_to_xyz(b.ra, b.dec);
-            let dist = angular_distance(a_xyz, b_xyz);
+            let dist = a.position.angular_distance(&b.position);
             assert!(
                 dist <= scale_upper * 3.0,
                 "quad backbone distance {dist} unexpectedly large (scale_upper = {scale_upper})"
@@ -925,7 +932,7 @@ mod tests {
         let quad = &index.quads[0];
         let star_xyz: [[f64; 3]; DIMQUADS] = std::array::from_fn(|i| {
             let s = &index.stars[quad.star_ids[i]];
-            radec_to_xyz(s.ra, s.dec)
+            radec_to_xyz(s.position.ra, s.position.dec)
         });
         let (code, _, _) = compute_canonical_code(&star_xyz, quad.star_ids);
 

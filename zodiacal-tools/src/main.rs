@@ -382,6 +382,11 @@ fn main() {
             trace_out,
             obs_epoch,
         } => {
+            // Build a `Time` for the user-supplied --obs-epoch flag.
+            // We don't need leap-second / delta-T tables here — Time is
+            // only consumed by `propagate_pm` via `Time::j()` (pure TT
+            // arithmetic).
+            let cli_obs_epoch = obs_epoch.map(|year| starfield::time::Timescale::default().j(year));
             let cfg = BenchBundleConfig {
                 bundle_path: bundle_path.clone(),
                 test_cases_dir: test_cases_dir.clone(),
@@ -390,7 +395,7 @@ fn main() {
                 scale_hint: *scale_hint,
                 timeout_secs: *timeout_secs,
                 trace_out: trace_out.clone(),
-                obs_epoch: *obs_epoch,
+                obs_epoch: cli_obs_epoch,
             };
             if let Err(e) = run_bench_bundle(&cfg) {
                 eprintln!("bench-bundle failed: {e}");

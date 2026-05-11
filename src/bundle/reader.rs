@@ -37,6 +37,11 @@ use std::sync::{Arc, Mutex};
 
 use cdshealpix::nested;
 use lru::LruCache;
+use starfield::Equatorial;
+use starfield::time::Timescale;
+
+use crate::geom::ProperMotion;
+use crate::index::RefEpoch;
 
 /// Default eviction cap for [`ZdclBundle`]'s per-cell shard LRU. Tuned
 /// so a 1000-case bench-bundle sweep at ~6,000 cells/case (5° hint on
@@ -136,6 +141,10 @@ pub struct ZdclBundle {
     manifest: BundleManifest,
     populated_cells: BTreeSet<u32>,
     cell_cache: Mutex<LruCache<u32, Arc<CellEntries>>>,
+    /// Timescale used to materialise `Time` from Gaia `ref_epoch` values
+    /// at load time. Held here so every `IndexStar` produced from this
+    /// bundle shares the same `Arc<TimescaleInner>`.
+    timescale: Timescale,
 }
 
 impl std::fmt::Debug for ZdclBundle {
@@ -206,6 +215,7 @@ impl ZdclBundle {
             manifest,
             populated_cells,
             cell_cache: Mutex::new(LruCache::new(cap)),
+            timescale: Timescale::default(),
         })
     }
 
@@ -282,7 +292,10 @@ impl ZdclBundle {
 
         // Build the canonical IndexStar vector once from the unioned
         // gaia records. Each band's fragment shares this list (cloned).
-        let stars: Vec<IndexStar> = gaia_records.iter().map(gaia_record_to_index_star).collect();
+        let stars: Vec<IndexStar> = gaia_records
+            .iter()
+            .map(|g| gaia_record_to_index_star(g, &self.timescale))
+            .collect();
 
         // Concatenate per-band quads + codes across cells, remapping
         // local cell-relative star indices to global indices into
@@ -631,19 +644,27 @@ fn arcsec_to_radians(arcsec: f64) -> f64 {
 
 /// Construct an `IndexStar` from a 104-byte Gaia record.
 ///
-/// The shard stores RA/Dec in degrees per the spec; the index uses
-/// radians. Proper-motion fields pass through as-is (mas/yr, Gaia
-/// convention); the shard's NaN sentinel for missing PM is preserved.
+/// The shard stores RA/Dec in degrees per the spec; the runtime
+/// `Equatorial` uses radians. PM is present iff the record's
+/// `FLAG_HAS_PM` bit is set; otherwise `None`. The Gaia `ref_epoch`
+/// (e.g. 2016.0 for DR3) is materialised as a `Time` from the
+/// caller-supplied `Timescale`; every star produced from one
+/// `Timescale` shares its underlying `Arc<TimescaleInner>`.
 #[inline]
-fn gaia_record_to_index_star(g: &GaiaRecord) -> IndexStar {
+fn gaia_record_to_index_star(g: &GaiaRecord, timescale: &Timescale) -> IndexStar {
     IndexStar {
         catalog_id: g.source_id,
-        ra: g.ra.to_radians(),
-        dec: g.dec.to_radians(),
+        position: Equatorial::new(g.ra.to_radians(), g.dec.to_radians()),
         mag: g.phot_g_mean_mag,
-        pmra: g.pmra,
-        pmdec: g.pmdec,
-        ref_epoch: g.ref_epoch,
+        proper_motion: if g.has_pm() {
+            Some(ProperMotion {
+                pmra: g.pmra,
+                pmdec: g.pmdec,
+            })
+        } else {
+            None
+        },
+        ref_epoch: RefEpoch::new(timescale.j(g.ref_epoch)),
     }
 }
 

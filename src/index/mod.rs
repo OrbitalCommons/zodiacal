@@ -7,6 +7,12 @@ pub mod quads;
 pub mod source;
 pub mod store;
 
+use std::sync::OnceLock;
+
+use starfield::Equatorial;
+use starfield::time::{Time, Timescale};
+
+use crate::geom::ProperMotion;
 use crate::kdtree::KdTree;
 use crate::quads::{DIMCODES, Quad};
 
@@ -14,43 +20,85 @@ pub use live::{DropReport, EnsureReport, LiveIndex};
 pub use source::{HealpixCell, IndexFragment, IndexSource, ZdclFile};
 pub use store::load_bundle_bands;
 
+/// Process-wide default `Timescale` with no leap-second or delta-T
+/// tables loaded.
+///
+/// The only `Time` operation zodiacal performs on catalog epochs is
+/// [`Time::j`](starfield::time::Time::j) — TT Julian decimal year —
+/// which is pure arithmetic on the underlying JD and doesn't traverse
+/// the UTC / TAI / UT1 chain. So an empty default `Timescale` is
+/// sufficient for proper-motion propagation; loading the full leap /
+/// delta-T tables would be wasted work. (If a future caller does need
+/// leap-second-accurate UTC↔TT conversions for catalog epochs, build
+/// a populated `Timescale` explicitly and feed it into the typed
+/// surfaces — they all accept a `Timescale` parameter.)
+///
+/// Lazily initialised on first use so the heap allocation happens once
+/// per process. All `Time` values constructed from this Timescale share
+/// the same `Arc<TimescaleInner>` (see starfield#134 / 0.12.2).
+pub fn default_timescale() -> &'static Timescale {
+    static TS: OnceLock<Timescale> = OnceLock::new();
+    TS.get_or_init(Timescale::default)
+}
+
+/// Sync-safe wrapper around [`starfield::time::Time`].
+///
+/// `starfield::Time` is currently `!Sync` because it caches lazy
+/// UT1 / TDB / delta-T conversions in `Cell<Option<f64>>` fields.
+/// Within zodiacal we only ever read `.j()` / `.tt()` / `.jd()`
+/// (TT-based, no cache touch), so sharing a `Time` across threads is
+/// safe in our usage pattern — we promise we never call the
+/// cache-mutating methods on a shared instance.
+///
+/// TODO: drop this wrapper once `starfield::Time` becomes `Sync`
+/// (tracked at OrbitalCommons/starfield#138). At that point the
+/// `ref_epoch` field below can change back to plain `Time`.
+#[derive(Debug, Clone)]
+pub struct RefEpoch(Time);
+
+// SAFETY: zodiacal only ever calls TT-based accessors (`.j()`, `.tt()`,
+// `.jd()`) on stored `Time` values, never the lazy-caching UT1/TDB
+// methods. Until starfield#138 lands, this manual Sync impl is the
+// least-invasive way to allow `Index` to live behind `Arc<Index>` in
+// server / realtime modes.
+unsafe impl Sync for RefEpoch {}
+
+impl RefEpoch {
+    pub fn new(t: Time) -> Self {
+        Self(t)
+    }
+    pub fn as_time(&self) -> &Time {
+        &self.0
+    }
+}
+
 /// Metadata for a star in the index.
 ///
-/// `ra` / `dec` are stored in **radians** at `ref_epoch`. `pmra` /
-/// `pmdec` are Gaia DR3 proper motions in **mas/yr** (Gaia convention:
-/// `pmra` already includes the cos(dec) factor). Either PM component
-/// may be NaN to indicate "no proper motion available" (Gaia
-/// 2-parameter solutions, legacy v1/v2 `.zdcl` loads with no Gaia
-/// sidecar). The propagator in `crate::geom::sphere::propagate_pm`
-/// treats NaN PM as identity.
+/// `position` is the catalog sky position at `ref_epoch`.
+/// `proper_motion = None` indicates no PM data is available (Gaia
+/// 2-parameter solution or legacy v1/v2 `.zdcl` load with no Gaia
+/// sidecar); the solver and verifier then leave the position fixed at
+/// `ref_epoch` rather than propagating.
 #[derive(Debug, Clone)]
 pub struct IndexStar {
     pub catalog_id: u64,
-    pub ra: f64,
-    pub dec: f64,
+    pub position: Equatorial,
     pub mag: f64,
-    /// Proper motion in RA, mas/yr (Gaia convention, includes cos(dec)).
-    /// NaN if not available.
-    pub pmra: f64,
-    /// Proper motion in Dec, mas/yr. NaN if not available.
-    pub pmdec: f64,
-    /// Catalog reference epoch, decimal Julian years (Gaia DR3 = 2016.0).
-    pub ref_epoch: f64,
+    pub proper_motion: Option<ProperMotion>,
+    pub ref_epoch: RefEpoch,
 }
 
 impl IndexStar {
     /// Build an `IndexStar` from a legacy or test source with no proper
-    /// motion data. `pmra` / `pmdec` are NaN and `ref_epoch` is the
-    /// Gaia DR3 default (2016.0).
-    pub fn without_pm(catalog_id: u64, ra: f64, dec: f64, mag: f64) -> Self {
+    /// motion data. `ref_epoch` defaults to TT 2016.0 (Gaia DR3),
+    /// constructed from the process-wide [`default_timescale`].
+    pub fn without_pm(catalog_id: u64, position: Equatorial, mag: f64) -> Self {
         Self {
             catalog_id,
-            ra,
-            dec,
+            position,
             mag,
-            pmra: f64::NAN,
-            pmdec: f64::NAN,
-            ref_epoch: 2016.0,
+            proper_motion: None,
+            ref_epoch: RefEpoch::new(default_timescale().j(2016.0)),
         }
     }
 }
@@ -117,7 +165,7 @@ impl From<IndexFragment> for Index {
         let star_points: Vec<[f64; 3]> = frag
             .stars
             .iter()
-            .map(|s| radec_to_xyz(s.ra, s.dec))
+            .map(|s| radec_to_xyz(s.position.ra, s.position.dec))
             .collect();
         let star_indices: Vec<usize> = (0..frag.stars.len()).collect();
         let star_tree = KdTree::<3>::build(star_points, star_indices);

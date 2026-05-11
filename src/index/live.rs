@@ -236,7 +236,7 @@ impl<S: IndexSource> LiveIndex<S> {
             let star_points: Vec<[f64; 3]> = frag
                 .stars
                 .iter()
-                .map(|s| radec_to_xyz(s.ra, s.dec))
+                .map(|s| radec_to_xyz(s.position.ra, s.position.dec))
                 .collect();
             let star_indices: Vec<usize> = (0..n_stars).collect();
             let star_tree = KdTree::<3>::build(star_points, star_indices);
@@ -318,7 +318,10 @@ impl<S: IndexSource> LiveIndex<S> {
             }
         }
 
-        let star_points: Vec<[f64; 3]> = stars.iter().map(|s| radec_to_xyz(s.ra, s.dec)).collect();
+        let star_points: Vec<[f64; 3]> = stars
+            .iter()
+            .map(|s| radec_to_xyz(s.position.ra, s.position.dec))
+            .collect();
         let star_idx: Vec<usize> = (0..stars.len()).collect();
         let star_tree = KdTree::<3>::build(star_points, star_idx);
         let code_idx: Vec<usize> = (0..codes.len()).collect();
@@ -343,6 +346,7 @@ mod tests {
     use crate::index::{HealpixCell, IndexFragment, IndexMetadata, IndexSource};
     use crate::kdtree::KdQueryable;
     use crate::quads::{DIMQUADS, Quad};
+    use starfield::Equatorial;
     use std::sync::Mutex;
 
     /// In-memory `IndexSource` for tests: stores a flat list of
@@ -432,8 +436,7 @@ mod tests {
                 let frac = i as f64 / 6.0;
                 stars.push(IndexStar::without_pm(
                     cell_id * 1000 + i as u64,
-                    ra + frac * 0.005,
-                    dec + frac * 0.005,
+                    Equatorial::new(ra + frac * 0.005, dec + frac * 0.005),
                     5.0 + frac,
                 ));
             }
