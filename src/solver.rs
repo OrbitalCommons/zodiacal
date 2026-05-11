@@ -58,6 +58,19 @@ pub struct SolverConfig {
     pub timeout: Option<Duration>,
     /// Only accept solutions whose field center falls within this sky region.
     pub within: Option<SkyRegion>,
+    /// Observation epoch (Julian decimal year). When set, every catalog
+    /// star's `(ra, dec)` is propagated from its `ref_epoch` using its
+    /// `pmra`/`pmdec` via `crate::geom::sphere::propagate_pm` before
+    /// being fed into the WCS fit and the verification step. Stars
+    /// with NaN PM (Gaia 2-parameter solutions or legacy non-Gaia
+    /// indexes) pass through unchanged.
+    ///
+    /// Leave `None` for synthetic test corpora generated at Gaia epoch
+    /// and for legacy `.zdcl` v1/v2 indexes that don't carry PM. Set
+    /// to the plate's observation epoch (e.g. 2002.874 for HST data
+    /// from 2002-11-15) when solving real imagery against a Gaia DR3
+    /// bundle.
+    pub obs_epoch: Option<f64>,
 }
 
 impl Default for SolverConfig {
@@ -69,6 +82,7 @@ impl Default for SolverConfig {
             verify: VerifyConfig::default(),
             timeout: None,
             within: None,
+            obs_epoch: None,
         }
     }
 }
@@ -208,7 +222,18 @@ fn try_quad(
 
                 let star_xyz: [[f64; 3]; DIMQUADS] = std::array::from_fn(|i| {
                     let s = &index.stars[quad.star_ids[i]];
-                    radec_to_xyz(s.ra, s.dec)
+                    let (ra, dec) = match config.obs_epoch {
+                        Some(obs) => crate::geom::sphere::propagate_pm(
+                            s.ra,
+                            s.dec,
+                            s.pmra,
+                            s.pmdec,
+                            s.ref_epoch,
+                            obs,
+                        ),
+                        None => (s.ra, s.dec),
+                    };
+                    radec_to_xyz(ra, dec)
                 });
 
                 // Pre-fit cheap rejection: see issue #48. The eventual fit's
@@ -267,7 +292,8 @@ fn try_quad(
                     continue;
                 }
 
-                let verify_result = verify_solution(&wcs, sources, index, &config.verify);
+                let verify_result =
+                    verify_solution(&wcs, sources, index, &config.verify, config.obs_epoch);
                 stats.n_verified += 1;
 
                 if verify_result.is_accepted(&config.verify) {

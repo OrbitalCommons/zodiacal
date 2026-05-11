@@ -29,6 +29,18 @@ struct TestCase {
     dec_deg: f64,
     plate_scale_arcsec: f64,
     sources: Vec<TestCaseSource>,
+    #[serde(default)]
+    hst: Option<HstBlock>,
+}
+
+#[derive(Debug, Deserialize)]
+struct HstBlock {
+    /// Exposure start in MJD (Modified Julian Date).
+    #[serde(default)]
+    t_min_mjd: Option<f64>,
+    /// Exposure end in MJD.
+    #[serde(default)]
+    t_max_mjd: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -36,6 +48,27 @@ struct TestCaseSource {
     x: f64,
     y: f64,
     flux: f64,
+}
+
+/// Convert a Modified Julian Date to decimal year (Julian).
+///
+/// MJD 51544.5 = J2000.0 = 2000.0 decimal year. One Julian year is
+/// exactly 365.25 days, so `dy = 2000.0 + (mjd - 51544.5) / 365.25`.
+fn mjd_to_decimal_year(mjd: f64) -> f64 {
+    2000.0 + (mjd - 51544.5) / 365.25
+}
+
+/// If the test case carries an `hst` block with MJD timestamps, return
+/// the exposure midpoint as a decimal-year `obs_epoch` suitable for
+/// PM propagation. Returns `None` for synthetic test corpora.
+fn obs_epoch_from_test_case(tc: &TestCase) -> Option<f64> {
+    let hst = tc.hst.as_ref()?;
+    let mid = match (hst.t_min_mjd, hst.t_max_mjd) {
+        (Some(a), Some(b)) => 0.5 * (a + b),
+        (Some(a), None) | (None, Some(a)) => a,
+        (None, None) => return None,
+    };
+    Some(mjd_to_decimal_year(mid))
 }
 
 pub struct BenchBundleConfig {
@@ -55,6 +88,10 @@ pub struct BenchBundleConfig {
     /// verification matched-pair list. Useful for visualising hits/
     /// misses against the source image.
     pub trace_out: Option<PathBuf>,
+    /// Observation epoch override. When `None`, the harness auto-fills
+    /// from the test case's `hst.t_min_mjd`/`t_max_mjd` midpoint (HST
+    /// cases) and leaves it as `None` for synthetic corpora.
+    pub obs_epoch: Option<f64>,
 }
 
 pub fn run(cfg: &BenchBundleConfig) -> io::Result<()> {
@@ -130,6 +167,10 @@ pub fn run(cfg: &BenchBundleConfig) -> io::Result<()> {
             },
             ..SolverConfig::default()
         };
+        // PM propagation: explicit --obs-epoch wins, otherwise auto-fill
+        // from the HST exposure midpoint when the case carries one.
+        // Synthetic cases at Gaia epoch leave obs_epoch = None (identity).
+        solver_cfg.obs_epoch = cfg.obs_epoch.or_else(|| obs_epoch_from_test_case(&tc));
         if cfg.scale_hint {
             // ±25% tolerance — wide enough to absorb sub-pixel residuals
             // and the scale-vs-band-edge interaction without destroying
