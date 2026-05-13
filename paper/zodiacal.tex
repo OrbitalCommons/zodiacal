@@ -542,15 +542,17 @@ Table~\ref{tab:beff} evaluates this for representative configurations.
 \caption{Effective bands searched $B_{\text{eff}}$ and false-positive
 reduction factor $B/B_{\text{eff}}$ for different scale brackets and
 band widths. \label{tab:beff}}
-\begin{tabular}{lcccc}
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}lccc@{}}
 \toprule
-Scenario & $\delta$ & $\alpha = 3$ & $\alpha = \sqrt{2}$ \\
- & & $B_{\text{eff}}$ (reduction) & $B_{\text{eff}}$ (reduction) \\
+Scenario & $\delta$ & \multicolumn{1}{c}{$\alpha = 3$} & \multicolumn{1}{c}{$\alpha = \sqrt{2}$} \\
+         &          & $B_{\text{eff}}$ (red.) & $B_{\text{eff}}$ (red.) \\
 \midrule
-Known ($\pm 5\%$) & 0.05 & 1 ($4\times$) & 1--2 ($6$--$12\times$) \\
-Moderate ($\pm 20\%$) & 0.20 & 1 ($4\times$) & 2--3 ($4$--$6\times$) \\
-Coarse ($\pm 50\%$) & 0.50 & 1--2 ($2$--$4\times$) & 3--4 ($3$--$4\times$) \\
-Unknown ($\delta \to \infty$) & --- & 4 ($1\times$) & 12 ($1\times$) \\
+Known ($\pm 5\%$)           & 0.05 & 1 ($4\times$)         & 1--2 ($6$--$12\times$) \\
+Moderate ($\pm 20\%$)       & 0.20 & 1 ($4\times$)         & 2--3 ($4$--$6\times$)  \\
+Coarse ($\pm 50\%$)         & 0.50 & 1--2 ($2$--$4\times$) & 3--4 ($3$--$4\times$)  \\
+Unknown ($\delta\to\infty$) & ---  & 4 ($1\times$)         & 12 ($1\times$)         \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -703,13 +705,13 @@ Two Gaia DR3 catalogs were used:
 Table~\ref{tab:results} summarizes the solver performance across
 index configurations.
 
-\begin{table}[t]
+\begin{table*}[t]
 \centering
 \caption{Solver performance across index configurations on 1{,}000
 simulated fields. All configurations use the same underlying catalog
 and solver parameters; only the index sharding strategy differs.
 \label{tab:results}}
-\begin{tabular}{lcccccc}
+\begin{tabular}{@{}lcccccc@{}}
 \toprule
 Configuration & $B$ & $\alpha$ & Solved & Rate & Median $t$ & Mean verif. \\
 \midrule
@@ -717,7 +719,7 @@ Mag 16, 4 bands          & 4  & 3.0          & 960  & 96.0\% & 1.05\,s & 21{,}30
 Mag 19, 12 bands         & 12 & $\sqrt{2}$   & \textbf{983} & \textbf{98.3\%} & 1.42\,s & 14{,}139 \\
 \bottomrule
 \end{tabular}
-\end{table}
+\end{table*}
 
 The key findings are:
 
@@ -810,15 +812,16 @@ solved and failed cases.
 \centering
 \caption{Number of WCS candidates verified during a solve attempt.
 \label{tab:verified}}
-\begin{tabular}{llccc}
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}llccc@{}}
 \toprule
 Config & Outcome & Min & Median & Max \\
 \midrule
-4-band  & Solved  & 13      & 3{,}596  & 471{,}309 \\
+4-band  & Solved  & 13        & 3{,}596   & 471{,}309 \\
 4-band  & Failed  & 133{,}533 & 226{,}861 & 325{,}582 \\
 \midrule
-12-band & Solved  & 50      & 4{,}440  & 268{,}884 \\
-12-band & Failed  & 17{,}012 & 159{,}399 & 210{,}378 \\
+12-band & Solved  & 50        & 4{,}440   & 268{,}884 \\
+12-band & Failed  & 17{,}012  & 159{,}399 & 210{,}378 \\
 \bottomrule
 \end{tabular}
 \end{table}
