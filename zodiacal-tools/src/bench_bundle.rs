@@ -242,7 +242,15 @@ pub fn run(cfg: &BenchBundleConfig) -> io::Result<()> {
         if let (Some(out_dir), Some(sol)) = (cfg.trace_out.as_ref(), solution.as_ref()) {
             std::fs::create_dir_all(out_dir)?;
             let trace_path = out_dir.join(format!("{case_name}.trace.json"));
-            write_trace(&trace_path, &case_name, &tc, sol, &sources, &indexes)?;
+            write_trace(
+                &trace_path,
+                &case_name,
+                &tc,
+                sol,
+                &sources,
+                &indexes,
+                solver_cfg.obs_epoch.as_ref(),
+            )?;
         }
         let fmt_f = |v: f64| -> String {
             if v.is_nan() {
@@ -319,6 +327,12 @@ struct TraceFile<'a> {
     solved: TraceWcs,
     quad: TraceQuad,
     verification: TraceVerification,
+    /// Every bundle catalog star (across all bands) whose
+    /// PM-corrected projection through the solved WCS lands inside the
+    /// image rectangle. Used by external analyses to attribute
+    /// per-detection misses to "catalog has it but the WCS is locally
+    /// off" vs "catalog doesn't carry it at all".
+    projected_catalog: Vec<TraceProjectedStar>,
 }
 
 #[derive(Serialize)]
@@ -358,6 +372,20 @@ struct TraceCatalogStar {
     py: f64,
     ra_deg: f64,
     dec_deg: f64,
+    /// Gaia G-band apparent magnitude.
+    mag_g: f64,
+}
+
+#[derive(Serialize)]
+struct TraceProjectedStar {
+    px: f64,
+    py: f64,
+    ra_deg: f64,
+    dec_deg: f64,
+    mag_g: f64,
+    /// `source_id` from the bundle (Gaia DR3 source_id; Hipparcos-
+    /// supplement records have bit 63 set).
+    catalog_id: u64,
 }
 
 #[derive(Serialize)]
@@ -378,6 +406,7 @@ struct TraceMatch {
     py: f64,
     ra_deg: f64,
     dec_deg: f64,
+    mag_g: f64,
 }
 
 fn write_trace(
@@ -387,23 +416,37 @@ fn write_trace(
     sol: &Solution,
     _sources: &[DetectedSource],
     indexes: &[Index],
+    obs_epoch: Option<&starfield::time::Time>,
 ) -> io::Result<()> {
     let (got_ra, got_dec) = sol.wcs.field_center();
     let band = &indexes[sol.quad_match.index_id];
-    let project = |ra: f64, dec: f64| -> (f64, f64) {
-        sol.wcs
-            .radec_to_pixel(ra, dec)
-            .unwrap_or((f64::NAN, f64::NAN))
+
+    // Apply the same PM propagation the solver/verifier did. Without
+    // this, the projection here would disagree with what the verifier
+    // saw, defeating the point of attributing misses.
+    let pm_project = |s: &zodiacal::index::IndexStar| -> (f64, f64, f64, f64) {
+        let pos = match (obs_epoch, &s.proper_motion) {
+            (Some(obs), Some(pm)) => {
+                zodiacal::geom::sphere::propagate_pm(s.position, *pm, &s.ref_epoch, obs)
+            }
+            _ => s.position,
+        };
+        let (px, py) = sol
+            .wcs
+            .radec_to_pixel(pos.ra, pos.dec)
+            .unwrap_or((f64::NAN, f64::NAN));
+        (px, py, pos.ra.to_degrees(), pos.dec.to_degrees())
     };
 
     let catalog: [TraceCatalogStar; 4] = std::array::from_fn(|i| {
         let s = &band.stars[sol.quad_match.index_indices[i]];
-        let (px, py) = project(s.position.ra, s.position.dec);
+        let (px, py, ra_deg, dec_deg) = pm_project(s);
         TraceCatalogStar {
             px,
             py,
-            ra_deg: s.position.ra.to_degrees(),
-            dec_deg: s.position.dec.to_degrees(),
+            ra_deg,
+            dec_deg,
+            mag_g: s.mag,
         }
     });
 
@@ -413,16 +456,47 @@ fn write_trace(
         .iter()
         .map(|&(field_idx, ref_idx)| {
             let s = &band.stars[ref_idx];
-            let (px, py) = project(s.position.ra, s.position.dec);
+            let (px, py, ra_deg, dec_deg) = pm_project(s);
             TraceMatch {
                 field_idx,
                 px,
                 py,
-                ra_deg: s.position.ra.to_degrees(),
-                dec_deg: s.position.dec.to_degrees(),
+                ra_deg,
+                dec_deg,
+                mag_g: s.mag,
             }
         })
         .collect();
+
+    // Full projected catalog: every band's stars, PM-propagated and
+    // filtered to in-bounds. De-dupe by catalog_id since the same star
+    // appears in every band that overlaps its scale.
+    let img_w = sol.wcs.image_size[0];
+    let img_h = sol.wcs.image_size[1];
+    let mut seen: std::collections::HashSet<u64> = std::collections::HashSet::new();
+    let mut projected_catalog: Vec<TraceProjectedStar> = Vec::new();
+    for index in indexes {
+        for s in &index.stars {
+            if !seen.insert(s.catalog_id) {
+                continue;
+            }
+            let (px, py, ra_deg, dec_deg) = pm_project(s);
+            if px.is_nan() || py.is_nan() {
+                continue;
+            }
+            if px < 0.0 || px >= img_w || py < 0.0 || py >= img_h {
+                continue;
+            }
+            projected_catalog.push(TraceProjectedStar {
+                px,
+                py,
+                ra_deg,
+                dec_deg,
+                mag_g: s.mag,
+                catalog_id: s.catalog_id,
+            });
+        }
+    }
 
     let trace = TraceFile {
         case,
@@ -451,6 +525,7 @@ fn write_trace(
             n_distractor: sol.verify_result.n_distractor,
             matches,
         },
+        projected_catalog,
     };
 
     let json = serde_json::to_string_pretty(&trace).map_err(io::Error::other)?;

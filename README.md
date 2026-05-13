@@ -78,21 +78,60 @@ cargo run -p zodiacal-tools --release -- bench-bundle \
     --trace-out /tmp/traces
 ```
 
-`scripts/render_solver_trace.py` overlays a trace on its FITS plate using
-the manim default palette (A=red, B=green, C=cyan, D=orange), with
-clipped backbone/reference lines and a dashed AB-diameter validity
-circle. Top-50 verification hits draw as open lime circles, misses as
-crimson ×s, and rank > 50 detections as faint cyan ×s underneath.
-Requires `numpy`, `matplotlib`, and `astropy`.
+Three Python tools in `scripts/` consume `<case>.trace.json` sidecars.
+All accept either `--fits PATH` or, when the case JSON carries an `hst`
+block (HST cases from `starfield-datasources`' MAST helper), they fetch
+the FITS file automatically from MAST and cache it under
+`--cache-dir DIR` (default `/tmp/fits_cache`). All require `numpy`,
+`matplotlib`, and `astropy`.
+
+**Whole-scene overlay** — the matched quad on the plate. Manim default
+palette (A=red, B=green, C=cyan, D=orange), clipped backbone/reference
+lines, dashed AB-diameter validity circle. Top-50 verification hits
+draw as open lime circles, misses as crimson ×s, rank > 50 detections
+as faint cyan ×s underneath.
 
 ```bash
 python scripts/render_solver_trace.py \
-    --case 0042 \
-    --fits  /path/to/frame_0042.fits \
     --src-json  ../zodiacal-test-cases/set2-dr3-mag19/0042.json \
-    --trace /tmp/traces/0042.trace.json \
-    --out   /tmp/0042.png
+    --trace     /tmp/traces/0042.trace.json \
+    --out       /tmp/0042_scene.png
 ```
+
+**Miss grid** — every top-50 verification miss zoomed to a small crop,
+bucketed against the bundle's projected catalog: **yellow ×** if a
+catalog Gaia projection sits within `--catalog-near-px` of the
+detection (in our catalog → WCS local error / Bayesian rejection),
+**crimson ×** otherwise (expected, but missing from our catalog). The
+optional `--out-magflux` companion plots the matched-hit photometric
+fit `log10(flux) = slope·G + intercept` with misses overlaid.
+
+```bash
+python scripts/render_miss_grid.py \
+    --case-json   ../zodiacal-test-cases/hubble-f606w/jbrv14010.json \
+    --trace-json  /tmp/traces/jbrv14010.trace.json \
+    --out-grid    /tmp/jbrv_miss_grid.png \
+    --out-magflux /tmp/jbrv_mag_flux.png
+```
+
+**Single-detection probe** — multi-radius diagnostic for one detection.
+Pick by `--rank N` (1-based brightness) or `--field-idx N` (0-based).
+All radii share one white→black colorbar; the figure title carries the
+implied Gaia G from the photometric fit and the nearest bundle catalog
+projection.
+
+```bash
+python scripts/probe_detection.py \
+    --case-json  /tmp/m101_solve/0000.json \
+    --trace-json /tmp/m101_pm/on/0000.trace.json \
+    --rank 2 \
+    --out /tmp/m101_rank2_probe.png
+```
+
+`bench-bundle` must be invoked with `--trace-out` to produce the
+`projected_catalog` field that the miss-grid and probe tools read; the
+field was added mid-2026, re-run the bench after any bundle/source
+change.
 
 ## Building Indexes
 
