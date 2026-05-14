@@ -3,69 +3,57 @@
 //!
 //! The tidy phase is the **commit edge** of the bundle build pipeline:
 //! a bundle is "real" iff its `manifest.json` is present and parseable.
-//! This module transforms a populated work directory (as produced by
+//! This module promotes a populated work directory (as produced by
 //! [`crate::index::multiband_cell_builder::build_bundle_work_dir`])
-//! into one of two equally first-class output forms, with the manifest
-//! written last so a crash mid-tidy leaves a `.partial` artifact that
-//! the next run can overwrite.
+//! into one of two equally first-class output forms.
 //!
 //! See `docs/bundle-format.md` § "Phase 2 — tidy sweep into final
 //! artifact" for the broader design.
 //!
 //! ## Two entry points
 //!
-//! - [`tidy_to_folder`] writes a directory bundle: per-cell shards are
-//!   copied into `<output>.partial/{quads,gaia}/`, the manifest is
-//!   written into `<output>.partial/manifest.json`, and the whole
-//!   `.partial` tree is atomically renamed onto `<output>`.
+//! - [`tidy_to_folder`] writes a directory bundle by **renaming**
+//!   `work_dir` onto `<output_path>`. The work dir's `quads/`/`gaia/`
+//!   layout is already byte-identical to the final bundle's, so we
+//!   just write `manifest.json` into it and call `rename(2)`. Atomic
+//!   on the same filesystem, instantaneous, no data movement, no
+//!   per-file `fsync`. **Consumes the work directory.**
 //! - [`tidy_to_zip`] writes a zip archive: per-cell entries are
 //!   stream-zipped (Stored, no compression — binary shards are not
 //!   very compressible) into `<output>.partial`, then `manifest.json`
 //!   (Deflated) as the final entry, then the file is atomically
-//!   renamed onto `<output>`.
+//!   renamed onto `<output>`. **Preserves the work directory** —
+//!   reads from it without modifying it.
 //!
-//! Both forms preserve `work_dir`. Use [`prune_work_dir`] for explicit
-//! opt-in cleanup once the operator no longer needs to repackage from
-//! the same work directory.
+//! To emit both forms from one build, run the zip tidy first (reads
+//! from work_dir) then the folder tidy (consumes work_dir).
 //!
 //! ## Atomicity
 //!
-//! - Pre-existing `<output>.partial` is removed at entry; if a previous
-//!   tidy crashed and left one behind, the new run overwrites it.
-//! - The manifest is written last and itself uses an atomic
-//!   `.partial.json` + rename pattern.
-//! - The final `rename` of the entire `.partial` directory tree (or
-//!   `.partial` zip file) onto the canonical output path is what
-//!   commits the bundle. POSIX `rename(2)` is atomic against
-//!   concurrent namespace observers on the same filesystem, so a
-//!   reader never sees a half-built bundle directory.
+//! - The folder commit is one `rename(work_dir, output_path)`. POSIX
+//!   `rename(2)` on the same filesystem is atomic against concurrent
+//!   namespace observers, so a reader sees either the pre-tidy state
+//!   (`work_dir` exists, `output_path` does not) or the post-tidy
+//!   state (`output_path` exists, `work_dir` does not).
+//! - The zip commit is `rename(<output>.partial, <output>)` after
+//!   the full archive is stream-written. Pre-existing `.partial`
+//!   from a crashed previous run is removed at entry.
+//! - The manifest writes use their own atomic `.partial.json` +
+//!   rename pattern, so a crash mid-manifest-write leaves the
+//!   work_dir consistent (no `manifest.json` present, the next tidy
+//!   tries again).
 //!
-//! We deliberately do **not** call `fsync` on per-cell files, on the
-//! parent directories, or on the manifest file itself. The kernel's
-//! page-cache writeback runs on its own (~5 s default commit interval
+//! We deliberately do **not** call `fsync` anywhere. Kernel page-cache
+//! writeback auto-commits on its own (~5 s default `commit` interval
 //! on ext4), and within seconds of `tidy_to_folder` returning all of
 //! the work is durable. The crash window — power loss between
 //! "tidy returned" and "writeback completed" — is at most that few
 //! seconds wide, which is negligible relative to a multi-hour build.
-//! Forcing per-file fsync trades that small risk for a ~30× tidy
-//! slowdown, which isn't a good deal.
-//!
-//! ## Parallelism
-//!
-//! The folder-tidy per-cell copy is parallelised with rayon. Each
-//! cell's `(.zqd, .zga)` pair is independent of every other cell's,
-//! and `std::fs::copy` on Linux uses `copy_file_range(2)` — an
-//! in-kernel transfer that doesn't round-trip through userspace.
-//! Many concurrent copies saturate NVMe bandwidth better than a
-//! sequential loop. The zip-tidy path is left sequential — a single
-//! `ZipWriter` is the natural commit cursor and parallelising it
-//! would require a different archive format.
 
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
-use rayon::prelude::*;
 use zip::CompressionMethod;
 use zip::write::FileOptions;
 
@@ -396,13 +384,26 @@ fn remove_partial(partial: &Path) -> io::Result<()> {
 
 /// Tidy a populated `work_dir` into a folder bundle at `output_path`.
 ///
-/// Always copies (never moves) per-cell files: the work directory
-/// survives by default so an operator can run a second tidy to produce
-/// the alternate output form. Use [`prune_work_dir`] to drop the
-/// work_dir explicitly when no longer needed.
+/// The work directory's `quads/` and `gaia/` layout is already
+/// identical to the final bundle's, so we promote it in place: write
+/// `manifest.json` into `work_dir`, then `rename(work_dir, output_path)`.
+/// POSIX `rename(2)` on the same filesystem is atomic against
+/// concurrent namespace observers, so a reader never sees a half-built
+/// bundle.
 ///
-/// The folder bundle's commit edge is the final `rename` of
-/// `<output_path>.partial/` onto `<output_path>`.
+/// Consequences:
+///
+/// - The work directory is **consumed** by tidy. After a successful
+///   commit, `work_dir` no longer exists — its contents are now under
+///   `output_path`. `--prune-work-dir` becomes a no-op (it's implicit).
+/// - `build-manifest.json` (the build phase's resume-state file) is
+///   carried into the bundle alongside the proper `manifest.json`.
+///   Readers ignore unknown top-level files, so this is harmless; it
+///   also leaves the work-resume artifact in place for forensics if a
+///   later step ever needs it.
+/// - To emit both a folder and a zip from a single build, run the zip
+///   tidy first (it reads from `work_dir` without modifying it), then
+///   the folder tidy (which moves it).
 pub fn tidy_to_folder(
     work_dir: &Path,
     output_path: &Path,
@@ -428,35 +429,11 @@ pub fn tidy_to_folder(
     let populated = enumerate_populated_cells(work_dir, metadata.cell_depth)?;
     let manifest = build_final_manifest(work_dir, metadata, &populated)?;
 
-    let partial = partial_path_for(output_path);
-    remove_partial(&partial)?;
-
-    let partial_quads = partial.join(QUADS_SUBDIR);
-    let partial_gaia = partial.join(GAIA_SUBDIR);
-    std::fs::create_dir_all(&partial_quads)?;
-    std::fs::create_dir_all(&partial_gaia)?;
-
-    // Per-cell copy is embarrassingly parallel — each cell writes two
-    // independent files in disjoint subdirectories. `std::fs::copy`
-    // uses `copy_file_range(2)` on Linux (zero-copy in-kernel
-    // transfer); rayon lets multiple cells stream concurrently.
-    let cell_depth = metadata.cell_depth;
-    let work_dir_ref = work_dir;
-    let partial_ref = &partial;
-    populated
-        .par_iter()
-        .try_for_each(|&cell_id| -> io::Result<()> {
-            let src_q = cell_shard_path(work_dir_ref, QUADS_SUBDIR, QUAD_EXT, cell_depth, cell_id);
-            let dst_q = cell_shard_path(partial_ref, QUADS_SUBDIR, QUAD_EXT, cell_depth, cell_id);
-            std::fs::copy(&src_q, &dst_q)?;
-
-            let src_g = cell_shard_path(work_dir_ref, GAIA_SUBDIR, GAIA_EXT, cell_depth, cell_id);
-            let dst_g = cell_shard_path(partial_ref, GAIA_SUBDIR, GAIA_EXT, cell_depth, cell_id);
-            std::fs::copy(&src_g, &dst_g)?;
-            Ok(())
-        })?;
-
-    let manifest_path = partial.join("manifest.json");
+    // Write the final manifest into work_dir alongside the existing
+    // `quads/`, `gaia/`, and `build-manifest.json`. `manifest.save`
+    // itself uses an atomic `.partial.json` + rename pattern, so a
+    // crash here leaves work_dir consistent with no `manifest.json`.
+    let manifest_path = work_dir.join("manifest.json");
     manifest.save(&manifest_path)?;
 
     // Pre-existing canonical output is replaced atomically by `rename`
@@ -471,7 +448,9 @@ pub fn tidy_to_folder(
         }
     }
 
-    std::fs::rename(&partial, output_path)?;
+    // The commit: rename work_dir onto output_path. Atomic on the
+    // same filesystem, instantaneous, no data movement.
+    std::fs::rename(work_dir, output_path)?;
 
     Ok(())
 }
@@ -907,72 +886,65 @@ mod tests {
     }
 
     #[test]
-    fn folder_tidy_preserves_work_dir() {
-        let (work_tmp, cells, metadata) = build_work_dir();
+    fn folder_tidy_consumes_work_dir() {
+        let (work_tmp, _cells, metadata) = build_work_dir();
+        let work_path = work_tmp.path().to_path_buf();
         let out_tmp = tempfile::tempdir().unwrap();
         let out = out_tmp.path().join("index.zdcl.bundle");
 
-        tidy_to_folder(work_tmp.path(), &out, &metadata).unwrap();
+        tidy_to_folder(&work_path, &out, &metadata).unwrap();
 
-        // Build manifest still present.
+        // work_dir was renamed onto output_path, so it should no
+        // longer exist at its original location.
         assert!(
-            work_tmp
-                .path()
-                .join(crate::index::build_manifest::MANIFEST_FILENAME)
-                .is_file()
+            !work_path.exists(),
+            "work_dir survived tidy_to_folder; expected it to be moved"
         );
-        // Per-cell .zqd shards still present.
-        for cell in &cells {
-            let q = cell_shard_path(
-                work_tmp.path(),
-                QUADS_SUBDIR,
-                QUAD_EXT,
-                TEST_DEPTH,
-                cell.cell_id,
-            );
-            let g = cell_shard_path(
-                work_tmp.path(),
-                GAIA_SUBDIR,
-                GAIA_EXT,
-                TEST_DEPTH,
-                cell.cell_id,
-            );
-            assert!(q.is_file());
-            assert!(g.is_file());
-        }
+        // The output bundle is well-formed.
+        assert!(out.join("manifest.json").is_file());
+        assert!(out.join(QUADS_SUBDIR).is_dir());
+        assert!(out.join(GAIA_SUBDIR).is_dir());
+
+        // Defuse the TempDir Drop: the directory has been moved to a
+        // sibling location, so the drop's cleanup is a no-op and the
+        // OS will reclaim the temp parent normally.
+        std::mem::forget(work_tmp);
     }
 
     #[test]
-    fn tidy_overwrites_stale_partial() {
+    fn folder_tidy_replaces_existing_output() {
         let (work_tmp, _cells, metadata) = build_work_dir();
         let out_tmp = tempfile::tempdir().unwrap();
         let out = out_tmp.path().join("index.zdcl.bundle");
-        let stale = partial_path_for(&out);
 
-        // Pre-create a stale .partial directory full of garbage.
-        std::fs::create_dir_all(&stale).unwrap();
-        std::fs::write(stale.join("garbage.bin"), b"crashed previous tidy").unwrap();
-        std::fs::create_dir_all(stale.join("nested")).unwrap();
-        std::fs::write(stale.join("nested").join("more.bin"), b"more garbage").unwrap();
+        // Pre-create a stale committed bundle at the output path.
+        std::fs::create_dir_all(out.join("quads")).unwrap();
+        std::fs::write(out.join("garbage.bin"), b"stale committed bundle").unwrap();
+        std::fs::write(out.join("manifest.json"), b"stale-manifest-bytes").unwrap();
 
         tidy_to_folder(work_tmp.path(), &out, &metadata).unwrap();
 
-        // Stale .partial is gone; final output is well-formed.
-        assert!(!stale.exists(), "stale partial survived");
+        // The stale output got replaced wholesale; the new manifest is parseable.
         assert!(out.join("manifest.json").is_file());
-        assert!(!out.join("garbage.bin").exists());
+        assert!(!out.join("garbage.bin").exists(), "stale file survived");
         let _ = BundleManifest::load(&out.join("manifest.json")).unwrap();
+        std::mem::forget(work_tmp);
     }
 
     #[test]
-    fn tidy_to_folder_then_tidy_to_zip_byte_equivalent_logical() {
+    fn tidy_zip_then_folder_byte_equivalent_logical() {
+        // Order matters with the new tidy_to_folder semantics: zip
+        // reads from work_dir without modifying it, folder consumes
+        // it. So zip must come first if we want both outputs from the
+        // same build.
         let (work_tmp, cells, metadata) = build_work_dir();
         let out_tmp = tempfile::tempdir().unwrap();
         let folder_out = out_tmp.path().join("index.zdcl.bundle");
         let zip_out = out_tmp.path().join("index.zdcl.bundle.zip");
 
-        tidy_to_folder(work_tmp.path(), &folder_out, &metadata).unwrap();
         tidy_to_zip(work_tmp.path(), &zip_out, &metadata).unwrap();
+        tidy_to_folder(work_tmp.path(), &folder_out, &metadata).unwrap();
+        std::mem::forget(work_tmp);
 
         let f = File::open(&zip_out).unwrap();
         let mut archive = zip::ZipArchive::new(f).unwrap();
