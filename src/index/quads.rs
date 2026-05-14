@@ -16,7 +16,7 @@
 use std::collections::HashSet;
 
 use crate::geom::sphere::{angular_distance, radec_to_xyz, star_midpoint};
-use crate::quads::{Code, DIMQUADS, Quad, compute_canonical_code};
+use crate::quads::{Code, DIMQUADS, Quad, ab_circle_chord_sq, compute_canonical_code};
 
 use super::cell_builder::{CellBuildConfig, CellStar};
 use super::multiband_cell_builder::ScaleBand;
@@ -79,7 +79,10 @@ pub fn build_quads_for_cell(
             }
 
             let mid = star_midpoint(a_xyz, b_xyz);
-            let cd_radius_sq = 2.0 * (1.0 - ab_dist.cos());
+            // Lang 2010 AB-diameter circle: C, D must lie within chord²
+            // distance corresponding to angular half-distance `ab_dist/2`
+            // from the midpoint. See `crate::quads::ab_circle_chord_sq`.
+            let cd_radius_sq = ab_circle_chord_sq(ab_dist);
 
             // Linear scan for candidates near the midpoint. At
             // per-cell granularity n_stars is small (tens to a few

@@ -8,7 +8,7 @@ use starfield::catalogs::{StarCatalog, StarData};
 
 use crate::geom::sphere::{angular_distance, radec_to_xyz, star_midpoint};
 use crate::kdtree::KdTree;
-use crate::quads::{Code, DIMCODES, DIMQUADS, Quad, compute_canonical_code};
+use crate::quads::{Code, DIMCODES, DIMQUADS, Quad, ab_circle_chord_sq, compute_canonical_code};
 
 use super::{Index, IndexStar};
 
@@ -319,7 +319,9 @@ fn build_index_from_stars(
                 }
 
                 let mid = star_midpoint(a_xyz, b_xyz);
-                let cd_radius_sq = angular_to_chord_sq(ab_dist);
+                // Lang AB-diameter circle: C, D within `ab_dist/2`
+                // angular distance of the midpoint.
+                let cd_radius_sq = ab_circle_chord_sq(ab_dist);
                 let candidates = star_tree.range_search(&mid, cd_radius_sq);
 
                 let candidate_ids: Vec<usize> = candidates
@@ -634,7 +636,9 @@ pub fn build_index_from_catalog(
                     }
 
                     let mid = star_midpoint(a_xyz, b_xyz);
-                    let cd_radius_sq = angular_to_chord_sq(ab_dist);
+                    // Lang AB-diameter circle: C, D within `ab_dist/2`
+                    // angular distance of the midpoint.
+                    let cd_radius_sq = ab_circle_chord_sq(ab_dist);
                     let candidates: Vec<usize> = local_star_indices
                         .iter()
                         .copied()
