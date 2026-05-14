@@ -32,25 +32,34 @@
 //!
 //! - Pre-existing `<output>.partial` is removed at entry; if a previous
 //!   tidy crashed and left one behind, the new run overwrites it.
-//! - Per-cell files are fsynced before the parent directory is
-//!   fsynced; the manifest is written last and itself uses an atomic
+//! - The manifest is written last and itself uses an atomic
 //!   `.partial.json` + rename pattern.
 //! - The final `rename` of the entire `.partial` directory tree (or
 //!   `.partial` zip file) onto the canonical output path is what
-//!   commits the bundle.
+//!   commits the bundle. POSIX `rename(2)` is atomic against
+//!   concurrent namespace observers on the same filesystem, so a
+//!   reader never sees a half-built bundle directory.
+//!
+//! We deliberately do **not** call `fsync` on per-cell files, on the
+//! parent directories, or on the manifest file itself. The kernel's
+//! page-cache writeback runs on its own (~5 s default commit interval
+//! on ext4), and within seconds of `tidy_to_folder` returning all of
+//! the work is durable. The crash window — power loss between
+//! "tidy returned" and "writeback completed" — is at most that few
+//! seconds wide, which is negligible relative to a multi-hour build.
+//! Forcing per-file fsync trades that small risk for a ~30× tidy
+//! slowdown, which isn't a good deal.
 //!
 //! ## Parallelism
 //!
 //! The folder-tidy per-cell copy is parallelised with rayon. Each
 //! cell's `(.zqd, .zga)` pair is independent of every other cell's,
-//! and the limit on throughput is fsync latency (~1–3 ms each on NVMe,
-//! serialised through the filesystem journal). Issuing many fsyncs
-//! concurrently lets the kernel coalesce journal commits and pushes
-//! the per-file overhead from ~3 ms serial to roughly the device's
-//! sustained sync rate. On a depth-9 G≤20 bundle (~6 M small files)
-//! this is a ~30× wall-clock reduction. The zip-tidy path is left
-//! sequential — a single `ZipWriter` is the natural commit cursor
-//! and parallelising it would require a different archive format.
+//! and `std::fs::copy` on Linux uses `copy_file_range(2)` — an
+//! in-kernel transfer that doesn't round-trip through userspace.
+//! Many concurrent copies saturate NVMe bandwidth better than a
+//! sequential loop. The zip-tidy path is left sequential — a single
+//! `ZipWriter` is the natural commit cursor and parallelising it
+//! would require a different archive format.
 
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
@@ -381,11 +390,6 @@ fn remove_partial(partial: &Path) -> io::Result<()> {
     }
 }
 
-fn fsync_dir(path: &Path) -> io::Result<()> {
-    let dir = File::open(path)?;
-    dir.sync_all()
-}
-
 // ---------------------------------------------------------------------------
 //  Folder output
 // ---------------------------------------------------------------------------
@@ -433,12 +437,9 @@ pub fn tidy_to_folder(
     std::fs::create_dir_all(&partial_gaia)?;
 
     // Per-cell copy is embarrassingly parallel — each cell writes two
-    // independent files in disjoint subdirectories. The dominant cost
-    // is per-file `fsync` (~1–3 ms each on NVMe, serialised through the
-    // filesystem journal); rayon lets many workers queue fsyncs at once
-    // and the kernel coalesces journal commits. For a typical
-    // depth-9 G≤20 bundle (~3.14 M populated cells, ~6.3 M files) this
-    // moves the tidy phase from ~10 h to ~20 min on modern NVMe.
+    // independent files in disjoint subdirectories. `std::fs::copy`
+    // uses `copy_file_range(2)` on Linux (zero-copy in-kernel
+    // transfer); rayon lets multiple cells stream concurrently.
     let cell_depth = metadata.cell_depth;
     let work_dir_ref = work_dir;
     let partial_ref = &partial;
@@ -447,21 +448,16 @@ pub fn tidy_to_folder(
         .try_for_each(|&cell_id| -> io::Result<()> {
             let src_q = cell_shard_path(work_dir_ref, QUADS_SUBDIR, QUAD_EXT, cell_depth, cell_id);
             let dst_q = cell_shard_path(partial_ref, QUADS_SUBDIR, QUAD_EXT, cell_depth, cell_id);
-            copy_and_fsync(&src_q, &dst_q)?;
+            std::fs::copy(&src_q, &dst_q)?;
 
             let src_g = cell_shard_path(work_dir_ref, GAIA_SUBDIR, GAIA_EXT, cell_depth, cell_id);
             let dst_g = cell_shard_path(partial_ref, GAIA_SUBDIR, GAIA_EXT, cell_depth, cell_id);
-            copy_and_fsync(&src_g, &dst_g)?;
+            std::fs::copy(&src_g, &dst_g)?;
             Ok(())
         })?;
 
-    fsync_dir(&partial_quads)?;
-    fsync_dir(&partial_gaia)?;
-
     let manifest_path = partial.join("manifest.json");
     manifest.save(&manifest_path)?;
-
-    fsync_dir(&partial)?;
 
     // Pre-existing canonical output is replaced atomically by `rename`
     // when the target is a directory; on Linux this requires the target
@@ -477,17 +473,6 @@ pub fn tidy_to_folder(
 
     std::fs::rename(&partial, output_path)?;
 
-    if !parent.as_os_str().is_empty() {
-        fsync_dir(parent)?;
-    }
-
-    Ok(())
-}
-
-fn copy_and_fsync(src: &Path, dst: &Path) -> io::Result<()> {
-    std::fs::copy(src, dst)?;
-    let f = File::open(dst)?;
-    f.sync_all()?;
     Ok(())
 }
 
@@ -571,7 +556,6 @@ pub fn tidy_to_zip(
             zip.finish().map_err(io::Error::other)?;
         }
         buf.flush()?;
-        buf.get_ref().sync_all()?;
     }
 
     if let Ok(meta) = std::fs::symlink_metadata(output_zip_path) {
@@ -584,9 +568,6 @@ pub fn tidy_to_zip(
 
     std::fs::rename(&partial, output_zip_path)?;
 
-    if !parent.as_os_str().is_empty() {
-        fsync_dir(parent)?;
-    }
     Ok(())
 }
 
