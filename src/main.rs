@@ -894,6 +894,7 @@ fn cmd_diagnose(
     threshold_sigma: f64,
     max_sources: usize,
 ) {
+    use starfield::Equatorial;
     use zodiacal::extraction::extract_sources;
     use zodiacal::geom::sphere::{angular_distance, radec_to_xyz};
     use zodiacal::geom::tan::TanWcs;
@@ -959,7 +960,7 @@ fn cmd_diagnose(
         let mut ref_pixels: Vec<(f64, f64)> = Vec::new();
         for result in &nearby {
             let star = &index.stars[result.index];
-            if let Some((px, py)) = wcs.radec_to_pixel(star.ra, star.dec)
+            if let Some((px, py)) = wcs.radec_to_pixel(star.position.ra, star.position.dec)
                 && px >= 0.0
                 && px <= w as f64
                 && py >= 0.0
@@ -1141,7 +1142,7 @@ fn cmd_diagnose(
                     .min_by(|a, b| a.dist_sq.partial_cmp(&b.dist_sq).unwrap())
                     .unwrap();
                 let star = &index.stars[best.index];
-                let sep_rad = angular_distance(src_xyz, radec_to_xyz(star.ra, star.dec));
+                let sep_rad = Equatorial::new(src_ra, src_dec).angular_distance(&star.position);
                 total_sep += sep_rad.to_degrees() * 3600.0;
                 n_with_neighbor += 1;
             }
@@ -1185,7 +1186,7 @@ fn cmd_diagnose(
                 .min_by(|a, b| a.dist_sq.partial_cmp(&b.dist_sq).unwrap())
                 .unwrap();
             let star = &index.stars[best.index];
-            let sep_rad = angular_distance(src_xyz, radec_to_xyz(star.ra, star.dec));
+            let sep_rad = Equatorial::new(src_ra, src_dec).angular_distance(&star.position);
             let sep_arcsec = sep_rad.to_degrees() * 3600.0;
             eprintln!(
                 "  {:3}  ({:7.1},{:7.1})  RA={:9.4} Dec={:+9.4}  idx RA={:9.4} Dec={:+9.4}  sep={:.1}\"",
@@ -1194,8 +1195,8 @@ fn cmd_diagnose(
                 src.y,
                 src_ra.to_degrees(),
                 src_dec.to_degrees(),
-                star.ra.to_degrees(),
-                star.dec.to_degrees(),
+                star.position.ra.to_degrees(),
+                star.position.dec.to_degrees(),
                 sep_arcsec
             );
         }

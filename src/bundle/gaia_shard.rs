@@ -121,6 +121,22 @@ impl GaiaRecord {
         self.flags & Self::FLAG_HAS_PM != 0
     }
 
+    /// Typed proper motion in the Gaia DR3 convention, or `None` if the
+    /// record carries no PM (2-parameter solution or
+    /// Hipparcos-supplement entry with `FLAG_HAS_PM` unset). Mirrors the
+    /// upstream `starfield_gaia::GaiaCore::proper_motion` accessor.
+    #[inline]
+    pub fn proper_motion(&self) -> Option<starfield::ProperMotion> {
+        if self.has_pm() {
+            Some(starfield::ProperMotion {
+                pmra: self.pmra,
+                pmdec: self.pmdec,
+            })
+        } else {
+            None
+        }
+    }
+
     /// True iff `FLAG_HAS_PARALLAX` is set.
     #[inline]
     pub fn has_parallax(&self) -> bool {

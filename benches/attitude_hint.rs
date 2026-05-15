@@ -220,7 +220,7 @@ fn synthesize_sources_from_real_index(
             break;
         }
         let star = &index.stars[n_match.index];
-        let xyz = radec_to_xyz(star.ra, star.dec);
+        let xyz = radec_to_xyz(star.position.ra, star.position.dec);
         if let Some((px, py)) = wcs.xyz_to_pixel(xyz)
             && px >= 0.0
             && px < image_size.0

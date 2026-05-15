@@ -4,6 +4,7 @@
 use std::time::{Duration, Instant};
 
 use starfield::Equatorial;
+use starfield::time::Time;
 
 use crate::extraction::DetectedSource;
 use crate::fitting::{FitError, fit_tan_wcs};
@@ -38,9 +39,7 @@ impl SkyRegion {
 
     /// Check whether a point (ra, dec in radians) falls within this region.
     pub fn contains(&self, ra: f64, dec: f64) -> bool {
-        let center_xyz = radec_to_xyz(self.center.ra, self.center.dec);
-        let point_xyz = radec_to_xyz(ra, dec);
-        angular_distance(center_xyz, point_xyz) <= self.radius_rad
+        self.center.angular_distance(&Equatorial::new(ra, dec)) <= self.radius_rad
     }
 }
 
@@ -58,19 +57,19 @@ pub struct SolverConfig {
     pub timeout: Option<Duration>,
     /// Only accept solutions whose field center falls within this sky region.
     pub within: Option<SkyRegion>,
-    /// Observation epoch (Julian decimal year). When set, every catalog
-    /// star's `(ra, dec)` is propagated from its `ref_epoch` using its
-    /// `pmra`/`pmdec` via `crate::geom::sphere::propagate_pm` before
-    /// being fed into the WCS fit and the verification step. Stars
-    /// with NaN PM (Gaia 2-parameter solutions or legacy non-Gaia
-    /// indexes) pass through unchanged.
+    /// Observation epoch. When set, every catalog star's position is
+    /// propagated from its `ref_epoch` using its `ProperMotion` via
+    /// [`crate::geom::sphere::propagate_pm`] before being fed into
+    /// the WCS fit and the verification step. Stars with no PM
+    /// (Gaia 2-parameter solutions or legacy non-Gaia indexes) pass
+    /// through unchanged.
     ///
     /// Leave `None` for synthetic test corpora generated at Gaia epoch
     /// and for legacy `.zdcl` v1/v2 indexes that don't carry PM. Set
-    /// to the plate's observation epoch (e.g. 2002.874 for HST data
-    /// from 2002-11-15) when solving real imagery against a Gaia DR3
-    /// bundle.
-    pub obs_epoch: Option<f64>,
+    /// to the plate's observation epoch (e.g.
+    /// `Timescale::default().j(2002.874)` for HST data from 2002-11-15)
+    /// when solving real imagery against a Gaia DR3 bundle.
+    pub obs_epoch: Option<Time>,
 }
 
 impl Default for SolverConfig {
@@ -222,18 +221,13 @@ fn try_quad(
 
                 let star_xyz: [[f64; 3]; DIMQUADS] = std::array::from_fn(|i| {
                     let s = &index.stars[quad.star_ids[i]];
-                    let (ra, dec) = match config.obs_epoch {
-                        Some(obs) => crate::geom::sphere::propagate_pm(
-                            s.ra,
-                            s.dec,
-                            s.pmra,
-                            s.pmdec,
-                            s.ref_epoch,
-                            obs,
-                        ),
-                        None => (s.ra, s.dec),
+                    let pos = match (&config.obs_epoch, &s.proper_motion) {
+                        (Some(obs), Some(pm)) => {
+                            crate::geom::sphere::propagate_pm(s.position, *pm, &s.ref_epoch, obs)
+                        }
+                        _ => s.position,
                     };
-                    radec_to_xyz(ra, dec)
+                    radec_to_xyz(pos.ra, pos.dec)
                 });
 
                 // Pre-fit cheap rejection: see issue #48. The eventual fit's
@@ -292,8 +286,13 @@ fn try_quad(
                     continue;
                 }
 
-                let verify_result =
-                    verify_solution(&wcs, sources, index, &config.verify, config.obs_epoch);
+                let verify_result = verify_solution(
+                    &wcs,
+                    sources,
+                    index,
+                    &config.verify,
+                    config.obs_epoch.as_ref(),
+                );
                 stats.n_verified += 1;
 
                 if verify_result.is_accepted(&config.verify) {

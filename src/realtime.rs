@@ -14,8 +14,6 @@ use std::time::{Duration, Instant};
 use starfield::time::Time;
 
 use crate::extraction::DetectedSource;
-use crate::geom::sphere::angular_distance;
-use crate::geom::sphere::radec_to_xyz;
 use crate::index::{EnsureReport, Index, IndexSource, LiveIndex};
 use crate::pointing::PointingSource;
 use crate::solver::{SkyRegion, Solution, SolverConfig, solve};
@@ -187,9 +185,7 @@ impl<S: IndexSource, P: PointingSource> RealtimeSolver<S, P> {
                 if prev.when.elapsed() >= max_age {
                     return true;
                 }
-                let prev_xyz = radec_to_xyz(prev.region.center.ra, prev.region.center.dec);
-                let new_xyz = radec_to_xyz(candidate.center.ra, candidate.center.dec);
-                angular_distance(prev_xyz, new_xyz) >= angular_threshold_rad
+                prev.region.center.angular_distance(&candidate.center) >= angular_threshold_rad
             }
             (RefreshPolicy::OnInterval { period }, Some(prev)) => prev.when.elapsed() >= period,
         }
@@ -249,6 +245,7 @@ mod tests {
     use crate::quads::{Code, DIMQUADS};
     use crate::{extraction::DetectedSource, geom::tan::TanWcs};
     use crate::{
+        geom::sphere::radec_to_xyz,
         index::IndexSource,
         index::builder::{IndexBuilderConfig, build_index},
         verify::VerifyConfig,
@@ -279,7 +276,7 @@ mod tests {
                 .index
                 .stars
                 .iter()
-                .map(|s| radec_to_xyz(s.ra, s.dec))
+                .map(|s| radec_to_xyz(s.position.ra, s.position.dec))
                 .collect();
             let mut codes: Vec<Code> = Vec::with_capacity(self.index.quads.len());
             for q in &self.index.quads {

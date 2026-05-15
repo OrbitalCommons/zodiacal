@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use starfield::Equatorial;
+use starfield::time::{Time, Timescale};
 
 use zodiacal::bundle::reader::ZdclBundle;
 use zodiacal::extraction::DetectedSource;
@@ -50,25 +51,24 @@ struct TestCaseSource {
     flux: f64,
 }
 
-/// Convert a Modified Julian Date to decimal year (Julian).
-///
-/// MJD 51544.5 = J2000.0 = 2000.0 decimal year. One Julian year is
-/// exactly 365.25 days, so `dy = 2000.0 + (mjd - 51544.5) / 365.25`.
-fn mjd_to_decimal_year(mjd: f64) -> f64 {
-    2000.0 + (mjd - 51544.5) / 365.25
-}
-
 /// If the test case carries an `hst` block with MJD timestamps, return
-/// the exposure midpoint as a decimal-year `obs_epoch` suitable for
-/// PM propagation. Returns `None` for synthetic test corpora.
-fn obs_epoch_from_test_case(tc: &TestCase) -> Option<f64> {
+/// the exposure midpoint as a `Time` suitable for PM propagation.
+/// Returns `None` for synthetic test corpora.
+///
+/// MJD → JD: `jd = mjd + 2400000.5`. We then hand that to
+/// [`Timescale::tt_jd`] which carries the TT semantics through. The
+/// `Time` is only ever consumed by [`zodiacal::geom::sphere::propagate_pm`]
+/// via `Time::j()` (TT Julian decimal year) — pure arithmetic on the
+/// JD, no leap-second / delta-T table lookup — so an empty default
+/// `Timescale` is sufficient.
+fn obs_epoch_from_test_case(tc: &TestCase, timescale: &Timescale) -> Option<Time> {
     let hst = tc.hst.as_ref()?;
-    let mid = match (hst.t_min_mjd, hst.t_max_mjd) {
+    let mid_mjd = match (hst.t_min_mjd, hst.t_max_mjd) {
         (Some(a), Some(b)) => 0.5 * (a + b),
         (Some(a), None) | (None, Some(a)) => a,
         (None, None) => return None,
     };
-    Some(mjd_to_decimal_year(mid))
+    Some(timescale.tt_jd(mid_mjd + 2400000.5, None))
 }
 
 pub struct BenchBundleConfig {
@@ -91,7 +91,7 @@ pub struct BenchBundleConfig {
     /// Observation epoch override. When `None`, the harness auto-fills
     /// from the test case's `hst.t_min_mjd`/`t_max_mjd` midpoint (HST
     /// cases) and leaves it as `None` for synthetic corpora.
-    pub obs_epoch: Option<f64>,
+    pub obs_epoch: Option<Time>,
 }
 
 pub fn run(cfg: &BenchBundleConfig) -> io::Result<()> {
@@ -113,6 +113,11 @@ pub fn run(cfg: &BenchBundleConfig) -> io::Result<()> {
     if let Some(n) = cfg.limit {
         paths.truncate(n);
     }
+    // A single Timescale used to materialise every per-case `Time` —
+    // leap-second / delta-T tables are not needed (see
+    // `zodiacal::index::default_timescale`).
+    let timescale = Timescale::default();
+
     eprintln!(
         "Running {} test case(s) at radius {:.3}°, scale_hint={}",
         paths.len(),
@@ -170,7 +175,10 @@ pub fn run(cfg: &BenchBundleConfig) -> io::Result<()> {
         // PM propagation: explicit --obs-epoch wins, otherwise auto-fill
         // from the HST exposure midpoint when the case carries one.
         // Synthetic cases at Gaia epoch leave obs_epoch = None (identity).
-        solver_cfg.obs_epoch = cfg.obs_epoch.or_else(|| obs_epoch_from_test_case(&tc));
+        solver_cfg.obs_epoch = cfg
+            .obs_epoch
+            .clone()
+            .or_else(|| obs_epoch_from_test_case(&tc, &timescale));
         if cfg.scale_hint {
             // ±25% tolerance — wide enough to absorb sub-pixel residuals
             // and the scale-vs-band-edge interaction without destroying
@@ -234,7 +242,15 @@ pub fn run(cfg: &BenchBundleConfig) -> io::Result<()> {
         if let (Some(out_dir), Some(sol)) = (cfg.trace_out.as_ref(), solution.as_ref()) {
             std::fs::create_dir_all(out_dir)?;
             let trace_path = out_dir.join(format!("{case_name}.trace.json"));
-            write_trace(&trace_path, &case_name, &tc, sol, &sources, &indexes)?;
+            write_trace(
+                &trace_path,
+                &case_name,
+                &tc,
+                sol,
+                &sources,
+                &indexes,
+                solver_cfg.obs_epoch.as_ref(),
+            )?;
         }
         let fmt_f = |v: f64| -> String {
             if v.is_nan() {
@@ -311,6 +327,12 @@ struct TraceFile<'a> {
     solved: TraceWcs,
     quad: TraceQuad,
     verification: TraceVerification,
+    /// Every bundle catalog star (across all bands) whose
+    /// PM-corrected projection through the solved WCS lands inside the
+    /// image rectangle. Used by external analyses to attribute
+    /// per-detection misses to "catalog has it but the WCS is locally
+    /// off" vs "catalog doesn't carry it at all".
+    projected_catalog: Vec<TraceProjectedStar>,
 }
 
 #[derive(Serialize)]
@@ -350,6 +372,20 @@ struct TraceCatalogStar {
     py: f64,
     ra_deg: f64,
     dec_deg: f64,
+    /// Gaia G-band apparent magnitude.
+    mag_g: f64,
+}
+
+#[derive(Serialize)]
+struct TraceProjectedStar {
+    px: f64,
+    py: f64,
+    ra_deg: f64,
+    dec_deg: f64,
+    mag_g: f64,
+    /// `source_id` from the bundle (Gaia DR3 source_id; Hipparcos-
+    /// supplement records have bit 63 set).
+    catalog_id: u64,
 }
 
 #[derive(Serialize)]
@@ -370,6 +406,7 @@ struct TraceMatch {
     py: f64,
     ra_deg: f64,
     dec_deg: f64,
+    mag_g: f64,
 }
 
 fn write_trace(
@@ -379,23 +416,37 @@ fn write_trace(
     sol: &Solution,
     _sources: &[DetectedSource],
     indexes: &[Index],
+    obs_epoch: Option<&starfield::time::Time>,
 ) -> io::Result<()> {
     let (got_ra, got_dec) = sol.wcs.field_center();
     let band = &indexes[sol.quad_match.index_id];
-    let project = |ra: f64, dec: f64| -> (f64, f64) {
-        sol.wcs
-            .radec_to_pixel(ra, dec)
-            .unwrap_or((f64::NAN, f64::NAN))
+
+    // Apply the same PM propagation the solver/verifier did. Without
+    // this, the projection here would disagree with what the verifier
+    // saw, defeating the point of attributing misses.
+    let pm_project = |s: &zodiacal::index::IndexStar| -> (f64, f64, f64, f64) {
+        let pos = match (obs_epoch, &s.proper_motion) {
+            (Some(obs), Some(pm)) => {
+                zodiacal::geom::sphere::propagate_pm(s.position, *pm, &s.ref_epoch, obs)
+            }
+            _ => s.position,
+        };
+        let (px, py) = sol
+            .wcs
+            .radec_to_pixel(pos.ra, pos.dec)
+            .unwrap_or((f64::NAN, f64::NAN));
+        (px, py, pos.ra.to_degrees(), pos.dec.to_degrees())
     };
 
     let catalog: [TraceCatalogStar; 4] = std::array::from_fn(|i| {
         let s = &band.stars[sol.quad_match.index_indices[i]];
-        let (px, py) = project(s.ra, s.dec);
+        let (px, py, ra_deg, dec_deg) = pm_project(s);
         TraceCatalogStar {
             px,
             py,
-            ra_deg: s.ra.to_degrees(),
-            dec_deg: s.dec.to_degrees(),
+            ra_deg,
+            dec_deg,
+            mag_g: s.mag,
         }
     });
 
@@ -405,16 +456,47 @@ fn write_trace(
         .iter()
         .map(|&(field_idx, ref_idx)| {
             let s = &band.stars[ref_idx];
-            let (px, py) = project(s.ra, s.dec);
+            let (px, py, ra_deg, dec_deg) = pm_project(s);
             TraceMatch {
                 field_idx,
                 px,
                 py,
-                ra_deg: s.ra.to_degrees(),
-                dec_deg: s.dec.to_degrees(),
+                ra_deg,
+                dec_deg,
+                mag_g: s.mag,
             }
         })
         .collect();
+
+    // Full projected catalog: every band's stars, PM-propagated and
+    // filtered to in-bounds. De-dupe by catalog_id since the same star
+    // appears in every band that overlaps its scale.
+    let img_w = sol.wcs.image_size[0];
+    let img_h = sol.wcs.image_size[1];
+    let mut seen: std::collections::HashSet<u64> = std::collections::HashSet::new();
+    let mut projected_catalog: Vec<TraceProjectedStar> = Vec::new();
+    for index in indexes {
+        for s in &index.stars {
+            if !seen.insert(s.catalog_id) {
+                continue;
+            }
+            let (px, py, ra_deg, dec_deg) = pm_project(s);
+            if px.is_nan() || py.is_nan() {
+                continue;
+            }
+            if px < 0.0 || px >= img_w || py < 0.0 || py >= img_h {
+                continue;
+            }
+            projected_catalog.push(TraceProjectedStar {
+                px,
+                py,
+                ra_deg,
+                dec_deg,
+                mag_g: s.mag,
+                catalog_id: s.catalog_id,
+            });
+        }
+    }
 
     let trace = TraceFile {
         case,
@@ -443,6 +525,7 @@ fn write_trace(
             n_distractor: sol.verify_result.n_distractor,
             matches,
         },
+        projected_catalog,
     };
 
     let json = serde_json::to_string_pretty(&trace).map_err(io::Error::other)?;

@@ -3,12 +3,15 @@
 default-palette convention.
 
 Inputs:
-  --case        case id (used to look up FITS / JSON / trace)
-  --fits        full path to the FITS frame
+  --case        case id (used in the title; defaults to the src-json stem)
+  --fits        full path to the FITS frame. Optional — if omitted and
+                the src-json carries an `hst` block, the file is
+                downloaded from MAST and cached under `--cache-dir`.
   --src-json    extracted-sources JSON (zodiacal extract output)
   --trace       bench-bundle --trace-out sidecar
   --out         output PNG path
   --hdu         HDU index (default = first 2-D image HDU)
+  --cache-dir   FITS download cache (default /tmp/fits_cache)
 
 Colour convention (manim default palette):
   A (anchor)            #FC6255   AB-backbone line          #FFFF00 (yellow)
@@ -27,6 +30,7 @@ each endpoint's circle boundary.
 import argparse
 import itertools
 import json
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -34,16 +38,31 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Circle
 from astropy.io import fits
 
+sys.path.insert(0, str(Path(__file__).parent))
+from _debugutil import pick_image_hdu, resolve_fits_path  # noqa: E402
+
 ap = argparse.ArgumentParser()
-ap.add_argument("--case", required=True)
-ap.add_argument("--fits", required=True, type=Path)
+ap.add_argument("--case", default=None,
+                help="Case ID for the title. Defaults to the src-json filename stem.")
+ap.add_argument("--fits", type=Path, default=None,
+                help="FITS path. If omitted, auto-downloaded via MAST when "
+                     "the src-json has an `hst` block.")
 ap.add_argument("--src-json", required=True, type=Path)
 ap.add_argument("--trace", required=True, type=Path)
 ap.add_argument("--out", required=True, type=Path)
 ap.add_argument("--hdu", type=int, default=None,
                 help="HDU index. Default: first 2-D image HDU.")
+ap.add_argument("--cache-dir", type=Path, default=Path("/tmp/fits_cache"),
+                help="FITS download cache. (default: /tmp/fits_cache)")
 ap.add_argument("--top-n", type=int, default=50)
+ap.add_argument("--figsize", type=float, default=11.0,
+                help="Side length of the figure in inches; output pixels = "
+                     "figsize * dpi. Bump to ~24 for zoom-in detail. (default: 11)")
+ap.add_argument("--dpi", type=int, default=140,
+                help="Output DPI. (default: 140)")
 args = ap.parse_args()
+if args.case is None:
+    args.case = args.src_json.stem
 
 # --- palette ---
 COL_A = "#FC6255"   # anchor
@@ -60,11 +79,9 @@ COL_NONTOP = "cyan"
 trace = json.loads(args.trace.read_text())
 src_json = json.loads(args.src_json.read_text())
 
-hdul = fits.open(args.fits)
-if args.hdu is not None:
-    sci = hdul[args.hdu]
-else:
-    sci = next((h for h in hdul if h.data is not None and h.data.ndim >= 2))
+fits_path = resolve_fits_path(src_json, args.fits, args.cache_dir)
+hdul = fits.open(fits_path)
+sci = pick_image_hdu(hdul, args.hdu)
 img = np.squeeze(sci.data).astype(np.float32)
 ny, nx = img.shape
 
@@ -104,7 +121,7 @@ matched_xy_cat = np.array([(m["px"], y_flip(m["py"])) for m in verif["matches"]]
     if verif["matches"] else np.zeros((0, 2))
 
 # --- figure ----------------------------------------------------------------
-fig, ax = plt.subplots(figsize=(11, 11))
+fig, ax = plt.subplots(figsize=(args.figsize, args.figsize))
 finite = img[np.isfinite(img)]
 lo, hi = np.percentile(finite, [10, 99.7])
 disp = np.arcsinh(np.clip(img, lo, hi) - lo)
@@ -238,5 +255,5 @@ ax.set_title(
 )
 ax.legend(loc="lower right", fontsize=9)
 fig.tight_layout()
-fig.savefig(args.out, dpi=140, bbox_inches="tight")
+fig.savefig(args.out, dpi=args.dpi, bbox_inches="tight")
 print(f"wrote {args.out}")
