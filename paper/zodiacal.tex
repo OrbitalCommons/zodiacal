@@ -106,7 +106,13 @@ Section~\ref{sec:indexing} details the index construction pipeline and
 sharding strategies. Section~\ref{sec:results} presents benchmark results
 across configurations. Section~\ref{sec:failure} analyzes the failure
 population. Section~\ref{sec:discussion} discusses implications and future
-work.
+work. Section~\ref{sec:bundle} extends the scale-only sharding of
+\S\ref{sec:indexing} along a second, spatial axis (the
+\texttt{.zdcl.bundle} format) and characterises region-restricted
+solving against a depth-9, $G \le 20$ Gaia bundle.
+Section~\ref{sec:pm} describes how proper motion is applied at WCS
+fit and verification so that out-of-epoch plates (e.g.\ archival
+Hubble frames) solve against the same Gaia-epoch bundle.
 
 % =============================================================================
 \section{Algorithm} \label{sec:algorithm}
@@ -177,8 +183,53 @@ Field quads are generated incrementally from the $N$ brightest sources
 
 This ensures each unique quad is attempted exactly once across all
 iterations, maximizing search coverage without redundancy. A bounding
-circle constraint (candidate must lie within distance $|AB|$ of the $AB$
-midpoint) rejects geometrically implausible quads early.
+circle constraint (\S\ref{sec:abcircle}) rejects geometrically
+implausible $C$ and $D$ candidates early.
+
+\subsection{The AB-Diameter Inscription Test} \label{sec:abcircle}
+
+The Lang quad invariant requires the two off-diagonal stars $C$ and
+$D$ to lie inside the \emph{$AB$-diameter circle}---the circle whose
+diameter is the segment $\overline{AB}$. In the canonical code-space
+coordinates of \S\ref{sec:codec} (with $A$ at the origin and $B$ at
+$(1, 0)$), this is the circle of radius $\tfrac{1}{2}$ centred on
+$(\tfrac{1}{2}, \tfrac{1}{2})$:
+\begin{equation} \label{eq:inbox}
+    \left( x - \tfrac{1}{2}\right)^{\!2}
+    + \left( y - \tfrac{1}{2}\right)^{\!2} \le \tfrac{1}{2},
+\end{equation}
+matching \texttt{astrometry.net}'s
+\texttt{solver/quad-builder.c::check\_inbox}. During quad
+\emph{construction} the test is evaluated on the sphere before
+projection, to skip the gnomonic step for candidates that will fail
+the invariant. Let $\mathbf{M}$ be the midpoint of $A$ and $B$ on the
+unit sphere and $\theta_{AB}$ the angular separation of $A$ and $B$.
+The spherical-geometry form of Eq.~\ref{eq:inbox} is
+\begin{equation} \label{eq:inbox-sphere}
+    \|\mathbf{C} - \mathbf{M}\|^{2} \le 2\!\left(1 - \cos\frac{\theta_{AB}}{2}\right),
+\end{equation}
+expressed in the squared Euclidean (chord) distance between unit
+vectors. The right-hand side is the chord$^{2}$ corresponding to
+angular distance $\theta_{AB}/2$ from $\mathbf{M}$, i.e. the radius
+of the inscription circle on the sphere.
+
+A subtle error in our original implementation used
+$2(1 - \cos\theta_{AB})$ for the threshold---the chord$^{2}$ for
+angular distance $\theta_{AB}$, twice the correct radius---admitting
+candidates anywhere within distance $|\overline{AB}|$ of
+$\mathbf{M}$ rather than $|\overline{AB}|/2$. The encoding-side
+canonicalisation (mean-$x$ and ordering constraints of
+\S\ref{sec:codec}) was unaffected, so codes themselves remained
+well-formed, but the index admitted quads whose $C$ or $D$ projected
+outside the validity circle in code space. The bug was caught
+visually on a Hubble Space Telescope scene render where $D$ sat at
+122.7\,\% of the inscription radius despite a correct solve, and
+fixed by replacing the threshold with Eq.~\ref{eq:inbox-sphere} at
+all three quad-build sites. Bundles rebuilt against the corrected
+threshold are 20--30\,\% smaller per band, with proportionally fewer
+spurious code matches per solve; older bundles continue to work
+unchanged because the verifier already rejects the laxer quads as
+verification failures.
 
 \subsection{Code Matching via $k$-d Tree} \label{sec:matching}
 
@@ -1011,6 +1062,11 @@ Several avenues could address the remaining 1.7\% failure rate:
           geometric diversity.
     \item \textbf{SIP distortion models}: extending beyond TAN to handle
           optical distortions in wide-field imagers.
+    \item \textbf{Proper-motion-aware verification}, addressed in
+          \S\ref{sec:pm}: the verifier now propagates each catalog
+          star to the observation epoch when one is supplied,
+          recovering high-PM detections on archival plates whose
+          observation time is far from the Gaia DR3 reference epoch.
 \end{itemize}
 
 % =============================================================================
@@ -1088,9 +1144,14 @@ fixes were necessary to complete on a 64-GB host:
 
 The build operates in two phases: a parallel \emph{cell phase} that
 emits the work-directory \texttt{.zqd}/\texttt{.zga} shards plus a
-crash-safe build manifest after each cell, and a sequential
-\emph{tidy phase} that copies the populated cells into a final
-canonical bundle layout. A dedicated \emph{manifest actor} thread
+crash-safe build manifest after each cell, and a \emph{tidy phase}
+that materialises the populated cells in the final canonical
+bundle layout. The tidy phase is itself parallelised across cells
+via \texttt{rayon} because the work is fsync-latency-bound rather
+than CPU-bound; on a depth-9 $G \le 20$ bundle it copies
+$\sim 6 \times 10^{6}$ files (3.1\,M cells $\times$ 2 shards) and a
+single-threaded loop spent most of its wall time blocked in
+\texttt{fsync}. A dedicated \emph{manifest actor} thread
 owns the \texttt{BuildManifest} exclusively and serialises it to disk
 on a wall-clock cadence, decoupling worker throughput from the
 manifest fsync rate. With these in place a 7-band, $G \le 20$,
@@ -1296,6 +1357,113 @@ rate or layer a post-solve sanity check (e.g., requiring residual
 RMS $\le$ catalog precision) on top of the log-odds verification.
 
 % =============================================================================
+\section{Proper Motion at the Observation Epoch} \label{sec:pm}
+% =============================================================================
+
+The bundle results in \S\ref{sec:bundle-results} were measured against
+the \texttt{set2-dr3-mag19} corpus, which is synthesised at Gaia DR3's
+reference epoch ($J2016.0$). For survey pipelines operating close to
+that epoch the simplification is harmless: stellar drift over a few
+years stays well below a typical 5\,px match radius. Out-of-epoch
+plates---most acutely \emph{archival} Hubble Space Telescope frames
+spanning $\sim$1990--2015, but also any pipeline asked to register an
+image to a time-of-flight epoch---break this assumption. A nominally
+500\,mas\,yr$^{-1}$ star drifts 7\arcsec\ in 14 years; on a Hubble ACS
+0.05\arcsec/px plate that is 140\,px and the verifier will not
+associate the detection with the catalog entry at all.
+
+Zodiacal handles this by carrying per-star proper motion through the
+index and applying it at both read sites that turn $(\alpha, \delta)$
+into a sky vector: the quad-to-WCS fit
+(\S\ref{sec:fitting}) and the Bayesian verification pass
+(\S\ref{sec:verify}). The on-disk \texttt{.zga} per-cell Gaia shard
+(\S\ref{sec:bundle-format}) already carries the full DR3 astrometric
+solution (\texttt{pmra}, \texttt{pmdec}, reference epoch); enabling
+this path required only widening the in-memory \texttt{IndexStar}
+record from 4 to 7 fields and threading an \texttt{Option<f64>}
+observation epoch through the solver configuration.
+
+\subsection{Linear Small-Angle Extrapolation} \label{sec:pm-prop}
+
+The extrapolation is the standard linear form, applied independently
+to each axis:
+\begin{align}
+    \alpha(t_{\text{obs}}) &= \alpha(t_{\text{ref}})
+        + \mu_{\alpha^*} \cdot \frac{t_{\text{obs}} - t_{\text{ref}}}
+        {\cos \delta(t_{\text{ref}})}, \label{eq:pm-ra} \\
+    \delta(t_{\text{obs}}) &= \delta(t_{\text{ref}})
+        + \mu_{\delta} \cdot (t_{\text{obs}} - t_{\text{ref}}), \label{eq:pm-dec}
+\end{align}
+where $\mu_{\alpha^*} \equiv \mu_{\alpha} \cos \delta$ is the Gaia
+true-sky RA proper motion in mas\,yr$^{-1}$, the time difference is in
+Julian decimal years, and the inverse $\cos \delta$ converts the
+true-sky rate into a coordinate rate. For fast-moving stars
+($\mu \sim 5{,}000$\,mas\,yr$^{-1}$) over decade-scale gaps this is
+accurate to $\sim 10\,\mu$as---two orders of magnitude below any
+pixel tolerance we care about. Parallax, light-time, and stellar
+aberration are not applied at the solver level; the \texttt{refinement}
+module's apparent-place pipeline picks those up for follow-up
+astrometry once a WCS is in hand.
+
+Two practical guards keep this robust against legacy data. Catalog
+entries with NaN proper motion---Gaia DR3's 2-parameter solutions, and
+all stars in pre-bundle \texttt{.zdcl} v1/v2 indexes---are returned
+unchanged, so a missing measurement degrades silently to the identity
+rather than corrupting the position with NaN propagation. The
+observation epoch is itself optional: passing \texttt{None} bypasses
+\eqref{eq:pm-ra}--\eqref{eq:pm-dec} entirely and the verifier behaves
+bit-identically to the pre-PM solver. Synthetic Gaia-epoch corpora
+therefore continue to produce the same outcomes as
+\S\ref{sec:bundle-results}.
+
+\subsection{Recovering a High-Proper-Motion Star} \label{sec:pm-recovery}
+
+A regression test in \texttt{src/verify.rs} pins the behaviour with
+a worked instance. A synthetic detection is placed at pixel
+$(300, 400)$ under a 1\arcsec/px WCS, and the catalog entry is
+back-extrapolated from a 14-year-distant observation epoch using a
+$500$\,mas\,yr$^{-1}$ proper motion. The forward drift between
+epochs is $7000$\,mas $= 7$\,px, outside the default $5$\,px match
+radius:
+
+\begin{itemize}
+    \item \textbf{Without} \texttt{obs\_epoch}: the verifier projects
+          the index's 2016 position, lands $\sim 7$\,px from the
+          detection, and the star is unmatched.
+    \item \textbf{With} \texttt{obs\_epoch}: the projection
+          first applies Eqs.~\ref{eq:pm-ra}--\ref{eq:pm-dec} to roll
+          the position forward to the observation epoch, lands inside
+          the match circle, and the star contributes its
+          $\Delta_i \gtrsim 0$ to the log-odds total.
+\end{itemize}
+
+The same wiring is used by \texttt{zodiacal-tools bench-bundle}, which
+gained an \texttt{--obs-epoch} flag and an automatic Hubble path that
+fills \texttt{obs\_epoch} from the test case's \texttt{t\_min\_mjd}/
+\texttt{t\_max\_mjd} midpoint. HST plates therefore solve without
+operator intervention against a Gaia-epoch bundle, and the bundle on
+disk gains no new fields.
+
+\subsection{When Proper Motion Matters in Practice} \label{sec:pm-when}
+
+The pixel-scale drift admissible without proper-motion correction is
+\begin{equation} \label{eq:pm-budget}
+    \Delta t \lesssim \frac{r_{\text{match}} \cdot s_{\text{px}}}
+                            {\mu_{\text{cap}}},
+\end{equation}
+where $r_{\text{match}}$ is the verifier match radius (default
+$5$\,px), $s_{\text{px}}$ is the plate scale, and
+$\mu_{\text{cap}}$ is the proper motion above which a star
+contributes to verification failures. At the bench's
+0.1296\arcsec/px and the $\sim$1\,\% of Gaia DR3 stars with
+$\mu > 100$\,mas\,yr$^{-1}$, the budget is $\sim 6.5$\,years before
+high-PM stars start dropping out of the match circle. At HST/ACS's
+0.05\arcsec/px it shrinks to $\sim 2.5$\,years. Pipelines registering
+images more than this far from the catalog epoch should set
+\texttt{obs\_epoch}; pipelines within the budget see no behavioural
+change either way.
+
+% =============================================================================
 \section{Conclusion} \label{sec:conclusion}
 % =============================================================================
 
@@ -1332,6 +1500,14 @@ positional accuracy. We characterise the speed/accuracy trade-off
 across hint radii of $0.5\degr$--$4.0\degr$, including the
 false-positive WCS regime that emerges at large radii where multiple
 quads can plausibly verify the same field.
+
+Out-of-epoch plates are handled by \S\ref{sec:pm}: per-star proper
+motion is carried through the bundle's \texttt{.zga} shards and
+applied at WCS fit and verification when the caller supplies an
+observation epoch. The solver continues to behave bit-identically to
+the pre-PM path when no epoch is given, so synthetic Gaia-epoch
+corpora are unaffected; archival HST plates now solve against the
+same depth-9 bundle without operator intervention.
 
 Zodiacal is open-source and available at
 \url{https://github.com/OrbitalCommons/zodiacal}.
