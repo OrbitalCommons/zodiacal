@@ -1145,19 +1145,80 @@ fixes were necessary to complete on a 64-GB host:
 The build operates in two phases: a parallel \emph{cell phase} that
 emits the work-directory \texttt{.zqd}/\texttt{.zga} shards plus a
 crash-safe build manifest after each cell, and a \emph{tidy phase}
-that materialises the populated cells in the final canonical
-bundle layout. The tidy phase is itself parallelised across cells
-via \texttt{rayon} because the work is fsync-latency-bound rather
-than CPU-bound; on a depth-9 $G \le 20$ bundle it copies
-$\sim 6 \times 10^{6}$ files (3.1\,M cells $\times$ 2 shards) and a
-single-threaded loop spent most of its wall time blocked in
-\texttt{fsync}. A dedicated \emph{manifest actor} thread
+(§\ref{sec:tidy-rename}) that promotes the populated work directory
+into a finished bundle. A dedicated \emph{manifest actor} thread
 owns the \texttt{BuildManifest} exclusively and serialises it to disk
 on a wall-clock cadence, decoupling worker throughput from the
 manifest fsync rate. With these in place a 7-band, $G \le 20$,
 $d_b{=}9$ bundle ($\sim 9 \times 10^8$ stars, $1.6 \times 10^9$
 quads) builds end-to-end in roughly 14 hours on an 80-core x86 host;
 peak resident memory stays under 8\,GB across both phases.
+
+\subsection{Commit-Edge Atomicity: Eliminating the Tidy Copy}
+\label{sec:tidy-rename}
+
+The work directory produced by the cell phase already has the on-disk
+layout the finished bundle exposes: per-cell shards at
+\texttt{quads/cell\_NNNN.zqd} and \texttt{gaia/cell\_NNNN.zga}, named
+by their HEALPix index. The original tidy phase nevertheless treated
+the work directory as a staging area: it copied every shard pair into
+a \texttt{<output>.partial/} sibling, \texttt{fsync}'d each file, then
+atomically renamed the sibling onto \texttt{<output>}. On a depth-9
+$G \le 20$ bundle that meant copying ${\sim}6 \times 10^{6}$ files
+and issuing ${\sim}6 \times 10^{6}$ \texttt{fsync(2)} calls --- a
+serialised, journal-bound loop that ran about ten hours on the
+80-core test bench, comparable in wall-clock to the cell phase itself.
+
+Three progressive simplifications collapse that phase by roughly six
+orders of magnitude:
+
+\begin{enumerate}
+  \item \textbf{Parallelise the copy.} Cell shard pairs land in
+    disjoint paths and never share mutable state, so the loop
+    converts trivially to
+    \texttt{populated.par\_iter().try\_for\_each(...)}. Many
+    concurrent \texttt{fsync}'s let the kernel coalesce journal
+    commits; throughput rises from one fsync at a time to the
+    device-sustained sync rate, about a $30\times$ wall-clock
+    reduction in practice.
+
+  \item \textbf{Drop the per-file fsync.} A bundle is ``real'' only
+    once its \texttt{manifest.json} is present; everything else is
+    cell-shard data that the manifest enumerates. The manifest is
+    written last and itself uses an atomic
+    \texttt{.partial.json}\,$+$\,rename pattern, so a crash mid-tidy
+    leaves either no manifest (the bundle does not exist) or a
+    complete one (the bundle does). Per-file \texttt{fsync} adds no
+    atomicity guarantee beyond what the manifest already provides;
+    the Linux page cache flushes the shards within seconds either
+    way. Dropping the fsync calls yields roughly another $30\times$
+    reduction.
+
+  \item \textbf{Rename in place rather than copy.} Once the copy is
+    no longer load-bearing, it has no purpose at all: the work
+    directory's layout \emph{is} the bundle layout. Tidy reduces to
+    writing \texttt{manifest.json} into \texttt{work\_dir/} and then
+    a single \texttt{rename(work\_dir, output)}. POSIX
+    \texttt{rename(2)} on the same filesystem is atomic against
+    namespace observers: a concurrent reader sees either the
+    pre-tidy or post-tidy state, never a half-merged one. Wall-clock
+    cost: microseconds.
+\end{enumerate}
+
+The resulting commit edge is essentially free: bundle finalisation
+costs the time to serialise the manifest ($\sim$\,a few hundred
+milliseconds at depth~9) plus one \texttt{rename(2)} syscall. The
+end-to-end build of the depth-9 bundle drops from ${\sim}24$\,h on
+the original copy-and-fsync pipeline to the $\sim$14\,h figure cited
+above; what remains is the catalog-bound cell phase, which is the
+lower bound any honest implementation has to pay.
+
+The \texttt{tidy\_to\_zip} entry point still streams from the work
+directory without consuming it, because a single \texttt{ZipWriter}
+is the natural commit cursor and parallelising it would require a
+different archive format. The two tidy forms are independent: to
+emit both representations from one build, run zip first (it
+preserves the work directory) and then folder (it consumes it).
 
 \subsection{FOV-Aware Choice of Bundle Depth} \label{sec:fov-aware}
 
