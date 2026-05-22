@@ -1417,6 +1417,59 @@ degree-scale priors should accept the sub-percent false-positive
 rate or layer a post-solve sanity check (e.g., requiring residual
 RMS $\le$ catalog precision) on top of the log-odds verification.
 
+\subsection{Bounded Caches for Long-Running Services}
+\label{sec:bounded-caches}
+
+The radius sweep in \S\ref{sec:bundle-results} exposed a stability
+problem inherent to mmap-backed bundle access. Both the per-cell
+shard cache in \texttt{ZdclBundle} and the per-entry mmap cache in
+the underlying \texttt{FsAccessor} were initially unbounded
+\texttt{HashMap}s: once a cell was touched, its quad and Gaia bytes
+stayed mapped for the lifetime of the bundle handle. For a 1000-case
+sweep at $R = 5\degr$ this is roughly $10^{6}$ cells $\times$
+${\sim}30$\,kB/cell ${\approx}$~45\,GB of cumulative mappings;
+the process \texttt{malloc}'d to death at case 92.
+
+Both caches are now \texttt{LruCache}s with a configurable capacity
+(default $10^{5}$ entries). The eviction-safety subtlety is in
+\texttt{FsAccessor}: the public read API previously returned a slice
+borrowed into the cached \texttt{Box<Mmap>} and relied on entries
+never being removed. We changed the cached value to \texttt{Arc<Mmap>}
+and the return type from \texttt{\&[u8]} to an \texttt{EntryBytes}
+enum whose mmap variant carries an \texttt{Arc} clone. Callers that
+still hold an \texttt{EntryBytes} keep the underlying mapping alive
+through their \texttt{Arc} even after the cache evicts the entry,
+preserving the zero-copy fast path on the hot path while allowing
+the LRU to do its job. With both caches bounded, the sweep at
+$R = 4\degr$ now completes in $\sim$4\,GB peak resident set, set by
+the cache cap rather than by sweep length.
+
+\subsection{Per-Case Solver Traces and Diagnostic Tooling}
+\label{sec:solver-trace}
+
+The Bayesian verifier's output is a scalar log-odds; when a quad
+that ``should have'' matched is rejected, that scalar gives no
+visibility into \emph{why}. To support post-mortem analysis on real
+imagery, the bench harness can optionally emit a per-case
+\texttt{<case>.trace.json} sidecar containing the fitted WCS, the
+matched quad's four \texttt{(field, catalog)} pairs (with the
+index-band identifier that produced the match), and the full
+verification matched-pair list. A companion Python renderer overlays
+all of that on the original FITS image: catalog stars projected
+through the recovered WCS, detection-side sources, the four backbone
+vertices, and per-pair connection segments clipped at vertex disks.
+
+The renderer was developed specifically to investigate verification
+failures on HST archival fields and surfaced the proper-motion
+mismatch described in \S\ref{sec:pm}: at high enough proper motion,
+a real detection's match to the right catalog star can fall outside
+the verifier's match radius purely because the catalog position is
+fixed at the Gaia DR3 epoch. The trace renderer made the
+displacement immediately visible as a systematic offset between
+detected and projected positions for the misclassified star,
+motivating the epoch-aware verifier change that this paper's
+\S\ref{sec:pm} measures end-to-end.
+
 % =============================================================================
 \section{Proper Motion at the Observation Epoch} \label{sec:pm}
 % =============================================================================
