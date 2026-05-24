@@ -1191,8 +1191,14 @@ orders of magnitude:
     complete one (the bundle does). Per-file \texttt{fsync} adds no
     atomicity guarantee beyond what the manifest already provides;
     the Linux page cache flushes the shards within seconds either
-    way. Dropping the fsync calls yields roughly another $30\times$
-    reduction.
+    way. Dropping the fsync calls breaks the per-file
+    journal-commit floor that step~1's parallelism could not
+    eliminate---the tidy collapses to a few minutes of cache-bound
+    copying, roughly another $30\times$ reduction in practice. The
+    crash window between ``tidy returned'' and ``writeback flushed
+    everything'' is bounded by the ext4 default \texttt{commit=5}
+    interval ($\sim$5\,s), an exposure negligible against a
+    multi-hour build.
 
   \item \textbf{Rename in place rather than copy.} Once the copy is
     no longer load-bearing, it has no purpose at all: the work
@@ -1202,7 +1208,9 @@ orders of magnitude:
     \texttt{rename(2)} on the same filesystem is atomic against
     namespace observers: a concurrent reader sees either the
     pre-tidy or post-tidy state, never a half-merged one. Wall-clock
-    cost: microseconds.
+    cost: microseconds, and the ${\sim}170$\,GB of cell-shard bytes
+    that the depth-9 bundle would otherwise have replicated into the
+    \texttt{<output>.partial/} sibling are never touched.
 \end{enumerate}
 
 The resulting commit edge is essentially free: bundle finalisation
