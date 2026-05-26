@@ -1032,17 +1032,33 @@ performance are primarily attributable to the test data characteristics.
 
 \subsection{Pure-Rust Implementation}
 
-Zodiacal is implemented in $\sim$4{,}000 lines of Rust with no unsafe
-code, no C bindings, and no runtime dependencies beyond the standard
-library and pure-Rust crates. The const-generic $k$-d tree
-(\texttt{KdTree<const DIM: usize>}) specializes at compile time for
-3D (star positions), 4D (quad codes), and 2D (pixel-space verification),
-avoiding runtime dispatch overhead.
+Zodiacal is implemented in $\sim$13{,}000 lines of Rust outside of
+inline test modules ($\sim$23{,}000 lines including the colocated
+tests), with no C bindings and no runtime dependencies beyond the
+standard library and pure-Rust crates. Ten \texttt{unsafe} blocks
+support two narrow needs. The zero-copy mmap path used by the
+legacy index, the per-cell sidecar reader, and the bundle accessor
+needs three \texttt{Mmap::map} sites plus a handful of slice casts
+and one \texttt{ptr::read\_unaligned} of the fixed-layout
+\texttt{SidecarRecord}; an in-process catalog mmap with no
+intermediate parse is the lever that lets a depth-9 bundle query
+respond in single-digit milliseconds (\S\ref{sec:region-solve}).
+Two \texttt{unsafe impl Sync} declarations on a \texttt{CrashOnce}
+sentinel are confined to fault-injection tests in the index-builder
+modules. The const-generic $k$-d tree (\texttt{KdTree<const DIM:
+usize>}) specialises at compile time for 3D (star positions), 4D
+(quad codes), and 2D (pixel-space verification), avoiding runtime
+dispatch overhead.
 
-The monolithic index format (\texttt{.zdcl}) bundles metadata, stars,
-quads, and codes into a single binary file with a JSON metadata header,
-simplifying distribution compared to \texttt{astrometry.net}'s multi-file
-FITS-based format.
+Zodiacal ships two on-disk index representations. The legacy
+\texttt{.zdcl} file bundles metadata, stars, quads, and codes into a
+single binary file with a JSON header, simplifying distribution
+compared to \texttt{astrometry.net}'s multi-file FITS-based format.
+The newer \texttt{.zdcl.bundle} format (\S\ref{sec:bundle-format})
+trades that single-file convenience for two-axis sharding by
+HEALPix cell and quad-scale band, which is what lets the depth-9
+$G \le 20$ catalog ($\sim$170\,GB on disk) be queried region-by-
+region without loading the whole.
 
 \subsection{Future Directions}
 
