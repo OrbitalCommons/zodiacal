@@ -1494,6 +1494,31 @@ detected and projected positions for the misclassified star,
 motivating the epoch-aware verifier change that this paper's
 \S\ref{sec:pm} measures end-to-end.
 
+The renderer has since grown into a three-tool diagnostic suite as
+additional verification-failure classes became visible.
+\texttt{render\_miss\_grid.py} zooms to a small image crop around
+each top-$N$ verifier reject and buckets it against an additional
+\texttt{projected\_catalog} array in the trace sidecar: the set of
+every bundle catalog star (\S\ref{sec:bundle-format}) whose
+PM-propagated solved-WCS projection lands inside the image rectangle.
+A reject is then either \emph{in-catalog}---a known bundle star
+projects within a few pixels of the detection, so the verifier
+rejected it for WCS-local error or Bayesian-threshold reasons---or
+\emph{missing-from-catalog}, no bundle star projects nearby, so the
+detection is below the Gaia DR3 $G \le 20$ depth or otherwise outside
+the catalog the solver was given. \texttt{probe\_detection.py}
+drills into a single detection across a multi-radius shared-scale
+colourbar grid; both tools share a photometric fit
+$\log_{10}\!\text{flux} = m \cdot G + c$ threaded through the trace's
+matched hits, which converts any detection's measured flux into an
+implied Gaia $G$ and reports it alongside the nearest catalog
+projection, answering ``is this a real star our catalog should have
+known about, and at what magnitude?'' inline rather than as a second
+tooling pass. For HST cases the source JSON carries the MAST product
+identifier and the tools auto-download and disk-cache the FITS image
+on first use, collapsing the diagnostic loop on a previously-unseen
+archival plate to a single command against the trace sidecar.
+
 % =============================================================================
 \section{Proper Motion at the Observation Epoch} \label{sec:pm}
 % =============================================================================
