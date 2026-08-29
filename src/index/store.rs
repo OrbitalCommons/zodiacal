@@ -70,8 +70,8 @@ impl Index {
 
         for star in &self.stars {
             write_u64(&mut w, star.catalog_id)?;
-            write_f64(&mut w, star.ra)?;
-            write_f64(&mut w, star.dec)?;
+            write_f64(&mut w, star.position.ra)?;
+            write_f64(&mut w, star.position.dec)?;
             write_f64(&mut w, star.mag)?;
         }
 
@@ -84,7 +84,7 @@ impl Index {
         let star_positions: Vec<[f64; 3]> = self
             .stars
             .iter()
-            .map(|s| radec_to_xyz(s.ra, s.dec))
+            .map(|s| radec_to_xyz(s.position.ra, s.position.dec))
             .collect();
         for quad in &self.quads {
             let star_xyz: [_; DIMQUADS] = std::array::from_fn(|i| star_positions[quad.star_ids[i]]);
@@ -234,7 +234,11 @@ fn load_filtered(path: &Path, region_filter: Option<(&SkyRegion, f64)>) -> io::R
             }
         }
         if keep {
-            stars.push(IndexStar::without_pm(catalog_id, ra, dec, mag));
+            stars.push(IndexStar::without_pm(
+                catalog_id,
+                Equatorial::new(ra, dec),
+                mag,
+            ));
         }
     }
 
@@ -299,7 +303,10 @@ fn load_filtered(path: &Path, region_filter: Option<(&SkyRegion, f64)>) -> io::R
         }
     }
 
-    let star_points: Vec<[f64; 3]> = stars.iter().map(|s| radec_to_xyz(s.ra, s.dec)).collect();
+    let star_points: Vec<[f64; 3]> = stars
+        .iter()
+        .map(|s| radec_to_xyz(s.position.ra, s.position.dec))
+        .collect();
     let star_indices: Vec<usize> = (0..stars.len()).collect();
     let star_tree = KdTree::<3>::build(star_points, star_indices);
 
@@ -367,8 +374,7 @@ mod tests {
             let frac = i as f64 / num_stars.max(1) as f64;
             stars.push(IndexStar::without_pm(
                 (i as u64) * 100 + 1,
-                base_ra + frac * 0.01,
-                base_dec + frac * 0.01,
+                Equatorial::new(base_ra + frac * 0.01, base_dec + frac * 0.01),
                 5.0 + frac * 10.0,
             ));
         }
@@ -381,7 +387,10 @@ mod tests {
             });
         }
 
-        let star_points: Vec<[f64; 3]> = stars.iter().map(|s| radec_to_xyz(s.ra, s.dec)).collect();
+        let star_points: Vec<[f64; 3]> = stars
+            .iter()
+            .map(|s| radec_to_xyz(s.position.ra, s.position.dec))
+            .collect();
         let star_indices: Vec<usize> = (0..num_stars).collect();
         let star_tree = KdTree::<3>::build(star_points.clone(), star_indices);
 
@@ -424,8 +433,8 @@ mod tests {
 
         for (a, b) in loaded.stars.iter().zip(idx.stars.iter()) {
             assert_eq!(a.catalog_id, b.catalog_id);
-            assert!((a.ra - b.ra).abs() < 1e-15);
-            assert!((a.dec - b.dec).abs() < 1e-15);
+            assert!((a.position.ra - b.position.ra).abs() < 1e-15);
+            assert!((a.position.dec - b.position.dec).abs() < 1e-15);
             assert!((a.mag - b.mag).abs() < 1e-15);
         }
 
@@ -496,13 +505,13 @@ mod tests {
         assert_eq!(loaded.star_tree.len(), 10);
 
         for (i, star) in loaded.stars.iter().enumerate() {
-            let xyz = radec_to_xyz(star.ra, star.dec);
+            let xyz = radec_to_xyz(star.position.ra, star.position.dec);
             let result = loaded.star_tree.nearest(&xyz).unwrap();
             assert_eq!(result.index, i);
             assert!(result.dist_sq < 1e-20);
         }
 
-        let query = radec_to_xyz(loaded.stars[0].ra, loaded.stars[0].dec);
+        let query = radec_to_xyz(loaded.stars[0].position.ra, loaded.stars[0].position.dec);
         let results = loaded.star_tree.range_search(&query, 0.1);
         assert!(!results.is_empty());
         assert!(results.iter().any(|r| r.index == 0));
@@ -579,8 +588,7 @@ mod tests {
             let frac = i as f64 / n_a as f64;
             stars.push(IndexStar::without_pm(
                 1000 + i as u64,
-                patch_a[0] + frac * 0.005,
-                patch_a[1] + frac * 0.005,
+                Equatorial::new(patch_a[0] + frac * 0.005, patch_a[1] + frac * 0.005),
                 5.0 + frac,
             ));
         }
@@ -588,8 +596,7 @@ mod tests {
             let frac = i as f64 / n_b as f64;
             stars.push(IndexStar::without_pm(
                 2000 + i as u64,
-                patch_b[0] + frac * 0.005,
-                patch_b[1] + frac * 0.005,
+                Equatorial::new(patch_b[0] + frac * 0.005, patch_b[1] + frac * 0.005),
                 5.0 + frac,
             ));
         }
@@ -620,7 +627,10 @@ mod tests {
             },
         ];
 
-        let star_points: Vec<[f64; 3]> = stars.iter().map(|s| radec_to_xyz(s.ra, s.dec)).collect();
+        let star_points: Vec<[f64; 3]> = stars
+            .iter()
+            .map(|s| radec_to_xyz(s.position.ra, s.position.dec))
+            .collect();
         let star_indices: Vec<usize> = (0..stars.len()).collect();
         let star_tree = KdTree::<3>::build(star_points.clone(), star_indices);
         let mut codes: Vec<Code> = Vec::with_capacity(quads.len());
@@ -719,17 +729,15 @@ mod tests {
 
         // Region centered between A and B, with radius just barely covering
         // both patches; padding 0.
-        let center_ra = (patch_a[0] + patch_b[0]) / 2.0;
-        let center_dec = (patch_a[1] + patch_b[1]) / 2.0;
-        let center_xyz = radec_to_xyz(center_ra, center_dec);
-        let patch_a_xyz = radec_to_xyz(patch_a[0], patch_a[1]);
-        let patch_b_xyz = radec_to_xyz(patch_b[0], patch_b[1]);
-        let dist_a = crate::geom::sphere::angular_distance(center_xyz, patch_a_xyz);
-        let dist_b = crate::geom::sphere::angular_distance(center_xyz, patch_b_xyz);
+        let center = Equatorial::new(
+            (patch_a[0] + patch_b[0]) / 2.0,
+            (patch_a[1] + patch_b[1]) / 2.0,
+        );
+        let dist_a = center.angular_distance(&Equatorial::new(patch_a[0], patch_a[1]));
+        let dist_b = center.angular_distance(&Equatorial::new(patch_b[0], patch_b[1]));
         let radius = dist_a.max(dist_b) + 0.02; // small slack
 
-        let region =
-            SkyRegion::from_radians(starfield::Equatorial::new(center_ra, center_dec), radius);
+        let region = SkyRegion::from_radians(center, radius);
 
         // No padding — straddle quad survives because both patches are in.
         let regional = Index::load_in_region(&path, &region).unwrap();

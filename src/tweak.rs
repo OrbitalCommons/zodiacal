@@ -62,7 +62,7 @@ pub fn tweak_solution(
 
         for result in &nearby {
             let star = &index.stars[result.index];
-            let xyz = radec_to_xyz(star.ra, star.dec);
+            let xyz = radec_to_xyz(star.position.ra, star.position.dec);
 
             // Use TAN projection to get undistorted predicted pixel position.
             let tan_pixel = sip.tan.xyz_to_pixel(xyz);
@@ -311,6 +311,7 @@ mod tests {
     use crate::index::{Index, IndexStar};
     use crate::kdtree::KdTree;
     use crate::quads::{DIMCODES, Quad};
+    use starfield::Equatorial;
 
     fn make_test_wcs() -> TanWcs {
         let arcsec_rad = (2.0_f64 / 3600.0).to_radians();
@@ -340,7 +341,11 @@ mod tests {
                 let py = h * 0.1 + h * 0.8 * (iy as f64) / (side as f64 - 1.0).max(1.0);
                 let (ra, dec) = wcs.pixel_to_radec(px, py);
 
-                stars.push(IndexStar::without_pm(count as u64, ra, dec, count as f64));
+                stars.push(IndexStar::without_pm(
+                    count as u64,
+                    Equatorial::new(ra, dec),
+                    count as f64,
+                ));
                 sources.push(DetectedSource {
                     x: px,
                     y: py,
@@ -350,7 +355,10 @@ mod tests {
             }
         }
 
-        let points: Vec<[f64; 3]> = stars.iter().map(|s| radec_to_xyz(s.ra, s.dec)).collect();
+        let points: Vec<[f64; 3]> = stars
+            .iter()
+            .map(|s| radec_to_xyz(s.position.ra, s.position.dec))
+            .collect();
         let indices: Vec<usize> = (0..stars.len()).collect();
         let star_tree = KdTree::<3>::build(points, indices);
         let code_tree = KdTree::<{ DIMCODES }>::build(vec![], vec![]);
@@ -420,8 +428,7 @@ mod tests {
 
                 stars.push(IndexStar::without_pm(
                     (iy * side + ix) as u64,
-                    ra,
-                    dec,
+                    Equatorial::new(ra, dec),
                     10.0,
                 ));
 
@@ -443,7 +450,10 @@ mod tests {
             }
         }
 
-        let points: Vec<[f64; 3]> = stars.iter().map(|s| radec_to_xyz(s.ra, s.dec)).collect();
+        let points: Vec<[f64; 3]> = stars
+            .iter()
+            .map(|s| radec_to_xyz(s.position.ra, s.position.dec))
+            .collect();
         let indices: Vec<usize> = (0..stars.len()).collect();
         let star_tree = KdTree::<3>::build(points, indices);
         let code_tree = KdTree::<{ DIMCODES }>::build(vec![], vec![]);

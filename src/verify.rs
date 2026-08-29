@@ -77,7 +77,7 @@ pub fn verify_solution(
     field_sources: &[DetectedSource],
     index: &Index,
     config: &VerifyConfig,
-    obs_epoch: Option<f64>,
+    obs_epoch: Option<&starfield::time::Time>,
 ) -> VerifyResult {
     if field_sources.is_empty() {
         return VerifyResult {
@@ -104,18 +104,13 @@ pub fn verify_solution(
 
     for result in &nearby_results {
         let star = &index.stars[result.index];
-        let (ra, dec) = match obs_epoch {
-            Some(obs) => crate::geom::sphere::propagate_pm(
-                star.ra,
-                star.dec,
-                star.pmra,
-                star.pmdec,
-                star.ref_epoch,
-                obs,
-            ),
-            None => (star.ra, star.dec),
+        let pos = match (obs_epoch, &star.proper_motion) {
+            (Some(obs), Some(pm)) => {
+                crate::geom::sphere::propagate_pm(star.position, *pm, &star.ref_epoch, obs)
+            }
+            _ => star.position,
         };
-        if let Some((px, py)) = wcs.radec_to_pixel(ra, dec)
+        if let Some((px, py)) = wcs.radec_to_pixel(pos.ra, pos.dec)
             && px >= -margin
             && px <= wcs.image_size[0] + margin
             && py >= -margin
@@ -229,6 +224,7 @@ mod tests {
     use crate::index::{Index, IndexStar};
     use crate::kdtree::KdTree;
     use crate::quads::{DIMCODES, Quad};
+    use starfield::Equatorial;
     use std::f64::consts::PI;
 
     fn make_test_wcs() -> TanWcs {
@@ -242,7 +238,10 @@ mod tests {
     }
 
     fn make_test_index(stars: Vec<IndexStar>) -> Index {
-        let points: Vec<[f64; 3]> = stars.iter().map(|s| radec_to_xyz(s.ra, s.dec)).collect();
+        let points: Vec<[f64; 3]> = stars
+            .iter()
+            .map(|s| radec_to_xyz(s.position.ra, s.position.dec))
+            .collect();
         let indices: Vec<usize> = (0..stars.len()).collect();
         let star_tree = KdTree::<3>::build(points, indices);
 
@@ -266,7 +265,7 @@ mod tests {
             .enumerate()
             .map(|(i, &(px, py))| {
                 let (ra, dec) = wcs.pixel_to_radec(px, py);
-                IndexStar::without_pm(i as u64, ra, dec, 10.0)
+                IndexStar::without_pm(i as u64, Equatorial::new(ra, dec), 10.0)
             })
             .collect()
     }
@@ -482,7 +481,7 @@ mod tests {
     fn empty_field() {
         let wcs = make_test_wcs();
 
-        let stars = vec![IndexStar::without_pm(0, PI, 0.25, 10.0)];
+        let stars = vec![IndexStar::without_pm(0, Equatorial::new(PI, 0.25), 10.0)];
         let index = make_test_index(stars);
 
         let field_sources: Vec<DetectedSource> = vec![];
@@ -630,31 +629,29 @@ mod tests {
         //
         // Push it harder: 500 mas/yr × 14 yr = 7000 mas = 7″ = 7 px,
         // outside the default tolerance.
-        let pmra_mas_per_yr = 500.0;
-        let pmdec_mas_per_yr = 200.0;
-        let ref_epoch = 2016.0;
-        let obs_epoch = 2002.0;
-        let dt = obs_epoch - ref_epoch; // negative
+        let pm = starfield::ProperMotion {
+            pmra: 500.0,
+            pmdec: 200.0,
+        };
+        let ts = starfield::time::Timescale::default();
+        let ref_epoch = ts.j(2016.0);
+        let obs_epoch = ts.j(2002.0);
+        let dt = obs_epoch.j() - ref_epoch.j(); // negative
 
         const MAS_TO_RAD: f64 = std::f64::consts::PI / (180.0 * 3600.0 * 1000.0);
         // Reverse the PM extrapolation: where the star was at ref_epoch
         // such that at obs_epoch (with the recorded PM) it ends up at
         // (det_ra, det_dec).
         let cos_dec = det_dec.cos();
-        let dra = pmra_mas_per_yr * dt * MAS_TO_RAD / cos_dec;
-        let ddec = pmdec_mas_per_yr * dt * MAS_TO_RAD;
+        let dra = pm.pmra * dt * MAS_TO_RAD / cos_dec;
+        let ddec = pm.pmdec * dt * MAS_TO_RAD;
         // Store position at ref_epoch = det position - PM*dt (rearranged
         // from propagate_pm).
-        let ra_2016 = det_ra - dra;
-        let dec_2016 = det_dec - ddec;
-
         let star_with_pm = IndexStar {
             catalog_id: 1,
-            ra: ra_2016,
-            dec: dec_2016,
+            position: Equatorial::new(det_ra - dra, det_dec - ddec),
             mag: 10.0,
-            pmra: pmra_mas_per_yr,
-            pmdec: pmdec_mas_per_yr,
+            proper_motion: Some(pm),
             ref_epoch,
         };
         let index = make_test_index(vec![star_with_pm]);
@@ -673,7 +670,7 @@ mod tests {
 
         // With obs_epoch: propagate_pm forwards the catalog position to
         // 2002, landing on the detection. Now it's a hit.
-        let r_with_pm = verify_solution(&wcs, &field_sources, &index, &config, Some(obs_epoch));
+        let r_with_pm = verify_solution(&wcs, &field_sources, &index, &config, Some(&obs_epoch));
         assert_eq!(
             r_with_pm.n_matched, 1,
             "With obs_epoch the high-PM star should match; got {} matches",

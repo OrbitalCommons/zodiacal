@@ -1,5 +1,8 @@
 use std::f64::consts::TAU;
 
+use starfield::time::Time;
+use starfield::{Equatorial, ProperMotion};
+
 /// Convert (RA, Dec) in radians to a unit vector `[x, y, z]`.
 pub fn radec_to_xyz(ra: f64, dec: f64) -> [f64; 3] {
     let cos_dec = dec.cos();
@@ -83,12 +86,10 @@ pub fn star_coords(point: [f64; 3], reference: [f64; 3]) -> Option<(f64, f64)> {
 /// `ref_epoch` to `obs_epoch`.
 ///
 /// Inputs:
-/// - `ra`, `dec` — sky position at `ref_epoch`, **radians**.
-/// - `pmra`, `pmdec` — Gaia DR3 proper motions in **mas/yr**. `pmra`
-///   carries the cos(dec) factor (Gaia convention), so a true-sky
-///   rate, not a coordinate rate. Either may be NaN; if so the
-///   position is returned unchanged.
-/// - `ref_epoch`, `obs_epoch` — Julian decimal years (e.g. 2016.0).
+/// - `position` — sky position at `ref_epoch`.
+/// - `pm` — Gaia DR3 proper motion (`pmra` carries the cos(dec) factor).
+/// - `ref_epoch`, `obs_epoch` — observed via [`starfield::time::Time::j`]
+///   (TT Julian decimal year, so 2016.0 for Gaia DR3).
 ///
 /// The math is the standard small-angle linear extrapolation. For
 /// fast-moving stars (~5000 mas/yr) and decade-scale gaps this is
@@ -97,27 +98,22 @@ pub fn star_coords(point: [f64; 3], reference: [f64; 3]) -> Option<(f64, f64)> {
 /// here — those live in the apparent-place pipeline used by the
 /// `crate::refinement` module.
 pub fn propagate_pm(
-    ra: f64,
-    dec: f64,
-    pmra: f64,
-    pmdec: f64,
-    ref_epoch: f64,
-    obs_epoch: f64,
-) -> (f64, f64) {
-    if pmra.is_nan() || pmdec.is_nan() {
-        return (ra, dec);
-    }
-    let dt_yr = obs_epoch - ref_epoch;
+    position: Equatorial,
+    pm: ProperMotion,
+    ref_epoch: &Time,
+    obs_epoch: &Time,
+) -> Equatorial {
+    let dt_yr = obs_epoch.j() - ref_epoch.j();
     // 1 mas = pi / (180 * 3600 * 1000) rad
     const MAS_TO_RAD: f64 = std::f64::consts::PI / (180.0 * 3600.0 * 1000.0);
-    let cos_dec = dec.cos();
+    let cos_dec = position.dec.cos();
     // pmra has cos(dec) baked in; divide it out to get the coordinate
     // rate dRA/dt. cos(dec) is bounded away from zero everywhere except
     // exactly at the poles; sources within a few arcsec of either pole
     // are vanishingly rare in Gaia.
-    let dra = pmra * dt_yr * MAS_TO_RAD / cos_dec;
-    let ddec = pmdec * dt_yr * MAS_TO_RAD;
-    (ra + dra, dec + ddec)
+    let dra = pm.pmra * dt_yr * MAS_TO_RAD / cos_dec;
+    let ddec = pm.pmdec * dt_yr * MAS_TO_RAD;
+    Equatorial::new(position.ra + dra, position.dec + ddec)
 }
 
 #[cfg(test)]
@@ -181,25 +177,25 @@ mod tests {
 
     #[test]
     fn propagate_pm_zero_dt_is_identity() {
-        let ra = 1.234;
-        let dec = 0.567;
-        let (ra2, dec2) = propagate_pm(ra, dec, 12.34, -5.67, 2016.0, 2016.0);
-        assert_close(ra, ra2, EPS);
-        assert_close(dec, dec2, EPS);
+        let ts = starfield::time::Timescale::default();
+        let pos = Equatorial::new(1.234, 0.567);
+        let pm = ProperMotion {
+            pmra: 12.34,
+            pmdec: -5.67,
+        };
+        let t = ts.j(2016.0);
+        let out = propagate_pm(pos, pm, &t, &t);
+        assert_close(pos.ra, out.ra, EPS);
+        assert_close(pos.dec, out.dec, EPS);
     }
 
     #[test]
-    fn propagate_pm_nan_pm_is_identity() {
-        let ra = 0.5;
-        let dec = 0.3;
-        // Either NaN component must short-circuit to identity. Gaia
-        // 2-parameter solutions leave both NaN, but defending against
-        // a single NaN component is free.
-        for (pmra, pmdec) in [(f64::NAN, 0.0), (0.0, f64::NAN), (f64::NAN, f64::NAN)] {
-            let (ra2, dec2) = propagate_pm(ra, dec, pmra, pmdec, 2016.0, 2002.0);
-            assert_close(ra, ra2, EPS);
-            assert_close(dec, dec2, EPS);
-        }
+    fn propagate_pm_zero_pm_is_identity() {
+        let ts = starfield::time::Timescale::default();
+        let pos = Equatorial::new(0.5, 0.3);
+        let out = propagate_pm(pos, ProperMotion::ZERO, &ts.j(2016.0), &ts.j(2002.0));
+        assert_close(pos.ra, out.ra, EPS);
+        assert_close(pos.dec, out.dec, EPS);
     }
 
     #[test]
@@ -208,17 +204,17 @@ mod tests {
         // PR #126's investigation). Verified against the user-space
         // astropy calculation: 13.126 yr × pmra=-12.145 mas/yr (cos dec
         // included) → -159.5 mas in true sky, -3.3 mas in declination.
-        let ra_deg: f64 = 210.826611;
-        let dec_deg: f64 = 54.347952;
-        let ra = ra_deg.to_radians();
-        let dec = dec_deg.to_radians();
-        let pmra = -12.14525611646663;
-        let pmdec = -0.25469925378605757;
+        let ts = starfield::time::Timescale::default();
+        let pos = Equatorial::from_degrees(210.826611, 54.347952);
+        let pm = ProperMotion {
+            pmra: -12.14525611646663,
+            pmdec: -0.25469925378605757,
+        };
         // From Gaia 2016.0 backward to HST DATE-OBS 2002-11-15
         // midpoint = MJD 52593.98 = decimal year 2002.87392.
-        let (ra2, dec2) = propagate_pm(ra, dec, pmra, pmdec, 2016.0, 2002.87392);
-        let dra_arcsec = (ra2 - ra).to_degrees() * 3600.0 * dec.cos();
-        let ddec_arcsec = (dec2 - dec).to_degrees() * 3600.0;
+        let out = propagate_pm(pos, pm, &ts.j(2016.0), &ts.j(2002.87392));
+        let dra_arcsec = (out.ra - pos.ra).to_degrees() * 3600.0 * pos.dec.cos();
+        let ddec_arcsec = (out.dec - pos.dec).to_degrees() * 3600.0;
         // Expected: -12.145 * (2002.874 - 2016.0) = +159.4 mas RA·cos
         // (sign: -pmra × negative dt → +mas), +3.3 mas Dec.
         assert!(
@@ -233,15 +229,38 @@ mod tests {
 
     #[test]
     fn propagate_pm_sign_convention() {
-        // Positive pmra at positive dt should increase RA (in radians);
-        // positive pmdec at positive dt should increase Dec.
-        let (ra2, dec2) = propagate_pm(1.0, 0.0, 100.0, 100.0, 2000.0, 2010.0);
-        assert!(ra2 > 1.0, "pmra>0, dt>0 should push ra up: got {ra2}");
-        assert!(dec2 > 0.0, "pmdec>0, dt>0 should push dec up: got {dec2}");
-        // And the converse.
-        let (ra2, dec2) = propagate_pm(1.0, 0.0, -100.0, -100.0, 2000.0, 2010.0);
-        assert!(ra2 < 1.0, "pmra<0, dt>0 should pull ra down: got {ra2}");
-        assert!(dec2 < 0.0, "pmdec<0, dt>0 should pull dec down: got {dec2}");
+        let ts = starfield::time::Timescale::default();
+        let pos = Equatorial::new(1.0, 0.0);
+        let pm_pos = ProperMotion {
+            pmra: 100.0,
+            pmdec: 100.0,
+        };
+        let pm_neg = ProperMotion {
+            pmra: -100.0,
+            pmdec: -100.0,
+        };
+        let out_pos = propagate_pm(pos, pm_pos, &ts.j(2000.0), &ts.j(2010.0));
+        assert!(
+            out_pos.ra > 1.0,
+            "pmra>0, dt>0 should push ra up: got {}",
+            out_pos.ra
+        );
+        assert!(
+            out_pos.dec > 0.0,
+            "pmdec>0, dt>0 should push dec up: got {}",
+            out_pos.dec
+        );
+        let out_neg = propagate_pm(pos, pm_neg, &ts.j(2000.0), &ts.j(2010.0));
+        assert!(
+            out_neg.ra < 1.0,
+            "pmra<0, dt>0 should pull ra down: got {}",
+            out_neg.ra
+        );
+        assert!(
+            out_neg.dec < 0.0,
+            "pmdec<0, dt>0 should pull dec down: got {}",
+            out_neg.dec
+        );
     }
 
     #[test]
@@ -249,12 +268,19 @@ mod tests {
         // At dec = 60°, cos(dec) = 0.5, so a given pmra (which has
         // cos(dec) baked in) should produce twice the RA-coordinate
         // change as the same pmra at dec = 0.
-        let pmra = 100.0;
-        let dt = 10.0;
-        let (ra_eq, _) = propagate_pm(0.0, 0.0, pmra, 0.0, 0.0, dt);
-        let (ra_60, _) = propagate_pm(0.0, 60.0_f64.to_radians(), pmra, 0.0, 0.0, dt);
-        // ra change at 60° should be ra_eq / cos(60°) = ra_eq / 0.5
-        let ratio = ra_60 / ra_eq;
+        let ts = starfield::time::Timescale::default();
+        let pm = ProperMotion {
+            pmra: 100.0,
+            pmdec: 0.0,
+        };
+        let out_eq = propagate_pm(Equatorial::new(0.0, 0.0), pm, &ts.j(0.0), &ts.j(10.0));
+        let out_60 = propagate_pm(
+            Equatorial::new(0.0, 60.0_f64.to_radians()),
+            pm,
+            &ts.j(0.0),
+            &ts.j(10.0),
+        );
+        let ratio = out_60.ra / out_eq.ra;
         assert!(
             (ratio - 2.0).abs() < 1e-9,
             "ra change at dec=60 should be 2x equator: ratio={ratio}"

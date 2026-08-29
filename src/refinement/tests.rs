@@ -24,6 +24,7 @@ use crate::geom::tan::TanWcs;
 use crate::index::{Index, IndexStar};
 use crate::kdtree::KdTree;
 use crate::quads::{DIMCODES, Quad};
+use starfield::Equatorial;
 
 const PIXEL_SCALE_ARCSEC: f64 = 2.0;
 const IMAGE_SIZE: f64 = 512.0;
@@ -97,7 +98,11 @@ fn make_scenario() -> (
         let ref_ra = apparent_ra - d_ra;
         let ref_dec = apparent_dec - d_dec;
 
-        index_stars.push(IndexStar::without_pm(i as u64, ref_ra, ref_dec, i as f64));
+        index_stars.push(IndexStar::without_pm(
+            i as u64,
+            Equatorial::new(ref_ra, ref_dec),
+            i as f64,
+        ));
 
         field_sources.push(DetectedSource {
             x: px,
@@ -130,7 +135,7 @@ fn make_scenario() -> (
     // Build Index.
     let star_points: Vec<[f64; 3]> = index_stars
         .iter()
-        .map(|s| radec_to_xyz(s.ra, s.dec))
+        .map(|s| radec_to_xyz(s.position.ra, s.position.dec))
         .collect();
     let star_indices: Vec<usize> = (0..index_stars.len()).collect();
     let star_tree = KdTree::<3>::build(star_points, star_indices);

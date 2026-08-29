@@ -42,6 +42,8 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 
+use starfield::Equatorial;
+
 use crate::bundle::gaia_shard::GaiaRecord;
 use crate::quads::{Code, DIMCODES, DIMQUADS, Quad};
 use crate::refinement::{SidecarRecord, SidecarStreamWriter};
@@ -389,7 +391,11 @@ fn read_cell_artifact(path: &Path) -> io::Result<LoadedCellArtifact> {
         let ra = read_f64(&mut f)?;
         let dec = read_f64(&mut f)?;
         let mag = read_f64(&mut f)?;
-        stars.push(IndexStar::without_pm(catalog_id, ra, dec, mag));
+        stars.push(IndexStar::without_pm(
+            catalog_id,
+            Equatorial::new(ra, dec),
+            mag,
+        ));
     }
     let mut quads_by_cid: Vec<[u64; DIMQUADS]> = Vec::with_capacity(n_quads);
     for _ in 0..n_quads {
