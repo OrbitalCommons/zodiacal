@@ -29,8 +29,8 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use chrono::Utc;
-use starfield_gaia::download::Downloader;
-use starfield_gaia::{Dr3, Dr3Catalog, Dr3Entry};
+use starfield::catalogs::gaia::download::Downloader;
+use starfield::catalogs::gaia::{Dr3, Dr3Catalog, Dr3Entry};
 
 use zodiacal::bundle::ZdclBundle;
 use zodiacal::bundle::gaia_shard::GaiaRecord;

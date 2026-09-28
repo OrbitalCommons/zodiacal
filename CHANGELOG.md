@@ -3,6 +3,11 @@
 ## Unreleased
 
 ### Changed
+- Bump starfield 0.12 → 0.18. `zodiacal-tools` drops the
+  `starfield-datasources` git dependency (`starfield-gaia`) in favour of
+  starfield's `gaia` feature (`starfield::catalogs::gaia`). Gaia shard
+  downloads now resolve through the starfield datastore
+  (`local → STARFIELD_MIRROR → upstream only with STARFIELD_ALLOW_UPSTREAM=1`).
 - Move `test_cases/` (1000 JSON solver fixtures) out of the repo into the new
   data repo [OrbitalCommons/zodiacal-test-cases](https://github.com/OrbitalCommons/zodiacal-test-cases)
   under `set1-legacy/` (#102). Keeps ~13 MB of JSON out of the source checkout
