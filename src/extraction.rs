@@ -114,8 +114,11 @@ fn otsu_threshold(image: &Array2<f32>) -> f32 {
 
     // Find the histogram range using clipped percentiles to avoid
     // extreme values (like saturated star peaks) dominating the bins.
-    let mut sorted: Vec<f32> = image.iter().copied().collect();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let mut sorted: Vec<f32> = image.iter().copied().filter(|v| v.is_finite()).collect();
+    if sorted.is_empty() {
+        return 0.0;
+    }
+    sorted.sort_by(|a, b| a.total_cmp(b));
     let n = sorted.len();
     let min_val = sorted[0];
     let clip_hi = sorted[(n as f64 * 0.999) as usize]; // p99.9
@@ -129,7 +132,7 @@ fn otsu_threshold(image: &Array2<f32>) -> f32 {
     let mut histogram = vec![0u64; n_bins];
     let total_pixels = n as f64;
 
-    for &v in image.iter() {
+    for &v in image.iter().filter(|v| v.is_finite()) {
         let v_clipped = v.min(clip_hi);
         let bin = (((v_clipped - min_val) / range) * (n_bins - 1) as f32) as usize;
         histogram[bin.min(n_bins - 1)] += 1;
@@ -176,7 +179,7 @@ fn median(values: &[f32]) -> f32 {
         return 0.0;
     }
     let mut sorted: Vec<f32> = values.to_vec();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    sorted.sort_by(|a, b| a.total_cmp(b));
     let n = sorted.len();
     if n.is_multiple_of(2) {
         (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
@@ -190,9 +193,14 @@ fn median(values: &[f32]) -> f32 {
 /// Returns `(background, sigma)` where background is the median pixel value
 /// and sigma is estimated from the median absolute deviation (MAD):
 /// `sigma = 1.4826 * MAD`.
+///
+/// Non-finite pixels are ignored. Drizzled HST products pad the area outside
+/// the exposure footprint with NaN; letting those into the sort makes the
+/// median land on NaN for some images, which poisons the threshold and
+/// silently yields zero detections.
 #[cfg(feature = "image-processing")]
 fn estimate_background(image: &Array2<f32>) -> (f32, f32) {
-    let pixels: Vec<f32> = image.iter().copied().collect();
+    let pixels: Vec<f32> = image.iter().copied().filter(|v| v.is_finite()).collect();
     if pixels.is_empty() {
         return (0.0, 0.0);
     }
@@ -589,6 +597,58 @@ mod image_tests {
 
         assert!(has_source_near_40_40, "missing source near (40, 40)");
         assert!(has_source_near_90_90, "missing source near (90, 90)");
+    }
+
+    /// 64×64 noisy frame with one star whose top 32 rows are NaN, like the
+    /// off-footprint padding of a drizzled HST product. With a NaN-tolerant
+    /// `partial_cmp` sort this exact layout puts NaN at the median, which
+    /// used to make every threshold NaN and yield zero detections.
+    fn nan_padded_frame() -> Array2<f32> {
+        let mut image = Array2::<f32>::zeros((64, 64));
+        let (ny, nx) = image.dim();
+        for y in 0..ny {
+            for x in 0..nx {
+                image[[y, x]] = ((x * 7919 + y * 104729 + 1) % 1000) as f32 / 100.0;
+            }
+        }
+        make_gaussian(&mut image, 40.0, 48.0, 2.0, 500.0);
+        for y in 0..32 {
+            for x in 0..nx {
+                image[[y, x]] = f32::NAN;
+            }
+        }
+        image
+    }
+
+    #[test]
+    fn nan_padding_background_is_finite() {
+        let (background, sigma) = estimate_background(&nan_padded_frame());
+        assert!(background.is_finite(), "background {background}");
+        assert!(sigma.is_finite() && sigma > 0.0, "sigma {sigma}");
+    }
+
+    #[test]
+    fn nan_padding_does_not_poison_sigma_threshold() {
+        let config = ExtractionConfig {
+            psf_sigma: 2.0,
+            threshold_sigma: 5.0,
+            max_sources: 10,
+            use_otsu: false,
+            ..ExtractionConfig::default()
+        };
+        let sources = extract_sources(&nan_padded_frame(), &config);
+        assert!(
+            sources
+                .iter()
+                .any(|s| (s.x - 40.0).abs() < 2.0 && (s.y - 48.0).abs() < 2.0),
+            "missing source near (40, 48); got {sources:?}"
+        );
+    }
+
+    #[test]
+    fn nan_padding_does_not_poison_otsu_threshold() {
+        let threshold = otsu_threshold(&nan_padded_frame());
+        assert!(threshold.is_finite(), "otsu threshold {threshold}");
     }
 
     #[test]
