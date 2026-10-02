@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Fixed
+- `extract`: background/noise estimation and the Otsu threshold now ignore
+  non-finite pixels and sort with `total_cmp`. NaN padding (the
+  off-footprint area of drizzled HST products) used to break the
+  `partial_cmp` sort, yielding a NaN or wildly wrong median/MAD and
+  therefore zero detections on ~29% of the `hubble-f606w` corpus
+  (47% of ACS/WFC), and skewed thresholds on the rest.
+
 ### Changed
 - Bump starfield 0.12 → 0.18. `zodiacal-tools` drops the
   `starfield-datasources` git dependency (`starfield-gaia`) in favour of
