@@ -67,9 +67,9 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
       # The test runner must match the wasm-bindgen version in Cargo.lock exactly.
       - name: Install wasm-bindgen-test-runner
         run: |

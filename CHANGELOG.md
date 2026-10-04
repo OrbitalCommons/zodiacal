@@ -7,9 +7,10 @@ Breaking: public types and signatures changed since 0.4.1 (proper-motion fields 
 
 ### Added
 - Builds and runs on `wasm32-unknown-unknown`. Depend on zodiacal with
-  `default-features = false`; the solver, index loading, verification and fitting all work in the
-  browser. CI checks the wasm32 build and runs solver tests under Node with a timeout, so clock
-  reads happen in the JS environment.
+  `default-features = false`; solving, verification, fitting and in-memory indexes work in the
+  browser, while file and memory-mapped index loading stay native-only (see the README). CI
+  checks the wasm32 build and runs solver tests under Node with a timeout, so clock reads happen
+  in the JS environment.
 - `datastore` feature (on by default, and enabled by `cli`), forwarding starfield's local data
   cache. Native users get the same behaviour as before; browser builds turn it off.
 - Publish workflow: a version that is not yet on crates.io is published when it merges to main.
