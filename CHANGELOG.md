@@ -1,6 +1,25 @@
 # Changelog
 
-## Unreleased
+## 0.5.0
+
+Breaking: public types and signatures changed since 0.4.1 (proper-motion fields on `IndexStar`,
+`verify_solution` takes an observation epoch, and other changes listed below).
+
+### Added
+- Builds and runs on `wasm32-unknown-unknown`. Depend on zodiacal with
+  `default-features = false`; the solver, index loading, verification and fitting all work in the
+  browser. CI checks the wasm32 build and runs solver tests under Node with a timeout, so clock
+  reads happen in the JS environment.
+- `datastore` feature (on by default, and enabled by `cli`), forwarding starfield's local data
+  cache. Native users get the same behaviour as before; browser builds turn it off.
+- Publish workflow: a version that is not yet on crates.io is published when it merges to main.
+
+### Changed
+- starfield is now a `default-features = false` dependency (requires starfield 0.18.2, whose
+  downloaders are native-only).
+- Timing (`Instant`, and `SystemTime` in the multiband cell builder) uses `web-time`, which is
+  `std::time` on native targets and the browser clock on wasm32. Writing index files and
+  sidecars still uses process ids and the filesystem, so those paths remain native-only.
 
 ### Fixed
 - `extract`: background/noise estimation and the Otsu threshold now ignore

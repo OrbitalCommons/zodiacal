@@ -1,0 +1,66 @@
+name: Publish
+
+# Publish the `zodiacal` crate whenever a version that is not yet on crates.io merges to main.
+#
+# The job reads the package version, asks crates.io whether `zodiacal@version` already exists,
+# and runs `cargo publish` only if it does not. Re-runs, and manifest edits that leave the version
+# unchanged, are no-ops. `zodiacal-tools` is not published. No git tag is created: the version on
+# crates.io is the record of what shipped.
+#
+# Requires a `CARGO_REGISTRY_TOKEN` repository secret with publish-update scope for `zodiacal`.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "Cargo.toml"
+      - ".github/workflows/publish.yml"
+  # Re-run by hand, e.g. after adding or fixing the token, without another bump.
+  workflow_dispatch:
+
+# Never cancel an in-flight publish, and never run two at once.
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish to crates.io
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check whether this version is already published
+        id: plan
+        run: |
+          version=$(cargo metadata --format-version 1 --no-deps \
+            | jq -r '.packages[] | select(.name == "zodiacal") | .version')
+          code=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "User-Agent: zodiacal-publish-ci (https://github.com/OrbitalCommons/zodiacal)" \
+            "https://crates.io/api/v1/crates/zodiacal/${version}")
+          case "$code" in
+            200) echo "zodiacal ${version}: already on crates.io"; echo "publish=false" >> "$GITHUB_OUTPUT" ;;
+            404) echo "zodiacal ${version}: not yet published"; echo "publish=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::unexpected HTTP ${code} from crates.io for zodiacal ${version}"; exit 1 ;;
+          esac
+
+      - name: Publish
+        if: steps.plan.outputs.publish == 'true'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          if [ -z "$CARGO_REGISTRY_TOKEN" ]; then
+            echo "::error::CARGO_REGISTRY_TOKEN is not set, so this version merged to main without being released. Add the secret, then re-run this workflow."
+            exit 1
+          fi
+          cargo publish --locked -p zodiacal
