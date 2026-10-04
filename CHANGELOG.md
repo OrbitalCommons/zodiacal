@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.5.1
+
+### Added
+- `refit` module: robust TAN refit from verified correspondences.
+  - `refit_tan`: least-squares projective fit (eight homography coefficients from normalised
+    pixels to the solution's tangent plane), re-expressed as a TAN WCS centred on the image.
+    Rejects rank-deficient geometry, out-of-range pairs and non-finite inputs.
+  - `robust_refit_tan`: deterministic RANSAC over that fit (all pairs, then seeded four-pair
+    samples), counting each star once through its closest source.
+  - `refine_solution`: re-verifies a solver solution exhaustively, then keeps up to
+    `RefitConfig::rounds` refits that pass the caller's acceptance config.
+  - All three take an optional observation epoch, applied to star positions exactly as
+    `verify_solution` does. With the defaults this matches the refinement the OrbitalCommons
+    browser demo shipped with.
+- `VerifyConfig::exhaustive`: a copy with infinite accept/bail thresholds, for gathering every
+  correspondence; judge acceptance with the original config.
+
 ## 0.5.0
 
 Breaking: public types and signatures changed since 0.4.1 (proper-motion fields on `IndexStar`,

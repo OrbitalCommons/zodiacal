@@ -3,7 +3,7 @@ members = ["zodiacal-tools"]
 
 [package]
 name = "zodiacal"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2024"
 description = "A blind astrometry plate-solving library"
 license = "Apache-2.0"

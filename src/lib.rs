@@ -14,6 +14,7 @@ pub mod pointing;
 pub mod quads;
 pub mod realtime;
 pub mod refinement;
+pub mod refit;
 pub mod solver;
 pub mod tweak;
 pub mod verify;
