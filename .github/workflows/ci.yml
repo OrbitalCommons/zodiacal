@@ -57,3 +57,36 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --locked --no-default-features --features "${{ matrix.features }}" --lib
       - run: cargo test --locked --no-default-features --features "${{ matrix.features }}" --lib
+
+  wasm:
+    name: WebAssembly
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      # The test runner must match the wasm-bindgen version in Cargo.lock exactly.
+      - name: Install wasm-bindgen-test-runner
+        run: |
+          version=$(cargo metadata --format-version 1 --locked \
+            | jq -r '.packages[] | select(.name == "wasm-bindgen") | .version' | head -1)
+          cargo install wasm-bindgen-cli --locked --version "$version"
+      - run: cargo check --locked --target wasm32-unknown-unknown --no-default-features --lib
+      # Runs the solver with a timeout under Node, so clock reads happen in the JS environment.
+      - run: cargo test --locked --target wasm32-unknown-unknown --no-default-features --test wasm
+        env:
+          CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasm-bindgen-test-runner
+
+  package:
+    name: Package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo publish --locked --dry-run -p zodiacal

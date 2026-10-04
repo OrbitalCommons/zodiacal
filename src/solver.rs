@@ -1,7 +1,8 @@
 //! Main blind plate solver that ties together quad building, code matching,
 //! WCS fitting, and verification.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 use starfield::Equatorial;
 

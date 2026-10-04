@@ -13,7 +13,7 @@ name = "zodiacal-tools"
 path = "src/main.rs"
 
 [dependencies]
-zodiacal = { path = "..", version = "0.4" }
+zodiacal = { path = "..", version = "0.5.0" }
 cdshealpix = "0.9"
 starfield = { version = "0.18", features = ["gaia"] }
 chrono = { version = "0.4", features = ["serde"] }
