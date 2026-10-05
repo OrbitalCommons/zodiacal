@@ -772,11 +772,28 @@ fn cmd_build_index_series(
 ) {
     use starfield::catalogs::MinimalCatalog;
 
+    if !scale_lower.is_finite()
+        || !scale_upper.is_finite()
+        || scale_lower <= 0.0
+        || scale_upper <= scale_lower
+        || !scale_factor.is_finite()
+        || scale_factor <= 1.0
+    {
+        eprintln!(
+            "Invalid scales: require finite 0 < --scale-lower < --scale-upper and finite --scale-factor > 1"
+        );
+        process::exit(1);
+    }
+
     // Compute bands: each band covers [lo, lo * scale_factor].
     let mut bands: Vec<(f64, f64)> = Vec::new();
     let mut lo = scale_lower;
     while lo < scale_upper {
         let hi = (lo * scale_factor).min(scale_upper);
+        if hi <= lo {
+            eprintln!("Scale factor is too close to 1 to advance the band bounds");
+            process::exit(1);
+        }
         bands.push((lo, hi));
         lo = hi;
         if (hi - scale_upper).abs() < 1e-10 {
