@@ -29,7 +29,7 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --locked --features cli,fits -- -D warnings
+      - run: cargo clippy --locked --all-targets --workspace --features cli,fits -- -D warnings
 
   test:
     name: Test
@@ -38,7 +38,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --locked --features cli,fits
+      - run: cargo test --locked --workspace --features cli,fits
 
   features:
     name: Feature combinations
