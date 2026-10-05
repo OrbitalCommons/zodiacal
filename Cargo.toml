@@ -30,7 +30,7 @@ cli = ["dep:clap", "dep:glob", "dep:image", "dep:indicatif", "image-processing",
 
 [dependencies]
 clap = { version = "4.5.57", features = ["derive"], optional = true }
-fitsio-pure = { version = "0.9.2", features = ["compat"], optional = true }
+fitsio-pure = { version = "0.14", features = ["compat"], optional = true }
 glob = { version = "0.3.3", optional = true }
 image = { version = "0.25.9", optional = true }
 indicatif = { version = "0.18.3", optional = true }

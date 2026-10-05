@@ -279,10 +279,11 @@ fn load_fits(path: &Path) -> Array2<f32> {
         process::exit(1);
     });
 
-    // Standard FITS: NAXIS1 = fastest-varying axis = image cols (width),
-    // NAXIS2 = slower axis = image rows (height), origin bottom-left.
-    let cols = shape[0];
-    let rows = shape[1];
+    // The shape is row-major, as in fitsio: [.., NAXIS2, NAXIS1]. NAXIS1 is
+    // the fastest-varying axis = image cols (width), NAXIS2 = image rows
+    // (height), origin bottom-left.
+    let cols = shape[shape.len() - 1];
+    let rows = shape[shape.len() - 2];
     eprintln!("FITS: {}x{}", cols, rows);
 
     // Read pixels as f32 (compat API handles BSCALE/BZERO automatically)
