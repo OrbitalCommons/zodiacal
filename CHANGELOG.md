@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- The `fits` feature uses fitsio-pure 0.14 (was 0.9). Its compat image shapes are now row-major,
+  as in `fitsio`, so the FITS loader reads width and height from the last two axes. Output is
+  unchanged: extracting from a 480×300 image gives byte-identical results before and after.
+
 ## 0.5.1
 
 ### Added
