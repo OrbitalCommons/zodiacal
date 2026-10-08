@@ -155,7 +155,7 @@ enum Commands {
         #[arg(long)]
         limit: Option<usize>,
 
-        /// Hint the solver with truth pixel scale ±5%.
+        /// Hint the solver with truth pixel scale ±25%.
         #[arg(long)]
         scale_hint: bool,
 
@@ -178,6 +178,18 @@ enum Commands {
         /// cases default to no propagation.
         #[arg(long)]
         obs_epoch: Option<f64>,
+
+        /// Verification match radius in pixels.
+        #[arg(long, default_value_t = 3.0)]
+        match_radius_pix: f64,
+
+        /// Number of brightest field sources the solver considers.
+        #[arg(long, default_value_t = 50)]
+        max_field_stars: usize,
+
+        /// Quad-code match tolerance (squared L2 distance in code space).
+        #[arg(long, default_value_t = 0.002)]
+        code_tolerance: f64,
     },
 
     /// Triage why specific bench cases failed. Projects bundle catalog
@@ -381,6 +393,9 @@ fn main() {
             timeout_secs,
             trace_out,
             obs_epoch,
+            match_radius_pix,
+            max_field_stars,
+            code_tolerance,
         } => {
             let cfg = BenchBundleConfig {
                 bundle_path: bundle_path.clone(),
@@ -391,6 +406,9 @@ fn main() {
                 timeout_secs: *timeout_secs,
                 trace_out: trace_out.clone(),
                 obs_epoch: *obs_epoch,
+                match_radius_pix: *match_radius_pix,
+                max_field_stars: *max_field_stars,
+                code_tolerance: *code_tolerance,
             };
             if let Err(e) = run_bench_bundle(&cfg) {
                 eprintln!("bench-bundle failed: {e}");
