@@ -78,7 +78,7 @@ pub struct BenchBundleConfig {
     pub radius_deg: f64,
     /// If set, stop after this many cases.
     pub limit: Option<usize>,
-    /// If true, hint the solver with truth pixel scale ±5%.
+    /// If true, hint the solver with truth pixel scale ±25%.
     pub scale_hint: bool,
     /// Per-case solve timeout (seconds). 0 disables.
     pub timeout_secs: u64,
@@ -92,6 +92,16 @@ pub struct BenchBundleConfig {
     /// from the test case's `hst.t_min_mjd`/`t_max_mjd` midpoint (HST
     /// cases) and leaves it as `None` for synthetic corpora.
     pub obs_epoch: Option<f64>,
+    /// Verification match radius in pixels.
+    pub match_radius_pix: f64,
+    /// Number of brightest field sources the solver considers.
+    pub max_field_stars: usize,
+    /// Quad-code match tolerance (squared L2 distance in code space).
+    pub code_tolerance: f64,
+    /// Verification log-odds needed to accept a solution.
+    pub log_odds_accept: f64,
+    /// Minimum verified star matches needed to accept a solution.
+    pub min_matches: usize,
 }
 
 pub fn run(cfg: &BenchBundleConfig) -> io::Result<()> {
@@ -157,12 +167,12 @@ pub fn run(cfg: &BenchBundleConfig) -> io::Result<()> {
             .collect();
 
         let mut solver_cfg = SolverConfig {
-            max_field_stars: 50,
-            code_tolerance: 0.002,
+            max_field_stars: cfg.max_field_stars,
+            code_tolerance: cfg.code_tolerance,
             verify: VerifyConfig {
-                match_radius_pix: 3.0,
-                log_odds_accept: 20.0,
-                min_matches: 5,
+                match_radius_pix: cfg.match_radius_pix,
+                log_odds_accept: cfg.log_odds_accept,
+                min_matches: cfg.min_matches,
                 ..VerifyConfig::default()
             },
             ..SolverConfig::default()
