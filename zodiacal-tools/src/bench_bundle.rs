@@ -98,6 +98,10 @@ pub struct BenchBundleConfig {
     pub max_field_stars: usize,
     /// Quad-code match tolerance (squared L2 distance in code space).
     pub code_tolerance: f64,
+    /// Verification log-odds needed to accept a solution.
+    pub log_odds_accept: f64,
+    /// Minimum verified star matches needed to accept a solution.
+    pub min_matches: usize,
 }
 
 pub fn run(cfg: &BenchBundleConfig) -> io::Result<()> {
@@ -167,8 +171,8 @@ pub fn run(cfg: &BenchBundleConfig) -> io::Result<()> {
             code_tolerance: cfg.code_tolerance,
             verify: VerifyConfig {
                 match_radius_pix: cfg.match_radius_pix,
-                log_odds_accept: 20.0,
-                min_matches: 5,
+                log_odds_accept: cfg.log_odds_accept,
+                min_matches: cfg.min_matches,
                 ..VerifyConfig::default()
             },
             ..SolverConfig::default()

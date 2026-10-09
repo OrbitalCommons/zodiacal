@@ -190,6 +190,14 @@ enum Commands {
         /// Quad-code match tolerance (squared L2 distance in code space).
         #[arg(long, default_value_t = 0.002)]
         code_tolerance: f64,
+
+        /// Verification log-odds needed to accept a solution.
+        #[arg(long, default_value_t = 20.0)]
+        log_odds_accept: f64,
+
+        /// Minimum verified star matches needed to accept a solution.
+        #[arg(long, default_value_t = 5)]
+        min_matches: usize,
     },
 
     /// Triage why specific bench cases failed. Projects bundle catalog
@@ -396,6 +404,8 @@ fn main() {
             match_radius_pix,
             max_field_stars,
             code_tolerance,
+            log_odds_accept,
+            min_matches,
         } => {
             let cfg = BenchBundleConfig {
                 bundle_path: bundle_path.clone(),
@@ -409,6 +419,8 @@ fn main() {
                 match_radius_pix: *match_radius_pix,
                 max_field_stars: *max_field_stars,
                 code_tolerance: *code_tolerance,
+                log_odds_accept: *log_odds_accept,
+                min_matches: *min_matches,
             };
             if let Err(e) = run_bench_bundle(&cfg) {
                 eprintln!("bench-bundle failed: {e}");
