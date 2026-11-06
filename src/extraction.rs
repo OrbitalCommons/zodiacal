@@ -61,6 +61,12 @@ impl DetectedSource {
         }
         Ok(Self { x, y, flux })
     }
+    /// Check this source against an image's inclusive pixel-center bounds.
+    /// Useful for adapters whose policy is to drop out-of-frame detections.
+    pub fn validate_in_image(&self, image_size: (f64, f64)) -> Result<(), SourceError> {
+        validate_sources(std::slice::from_ref(self), image_size)
+    }
+
     pub fn x(&self) -> f64 {
         self.x
     }
@@ -538,6 +544,7 @@ mod tests {
     fn image_bounds_are_checked_at_solver_boundary() {
         use crate::solver::{SolverConfig, solve};
         let valid = DetectedSource::new(9.0, 19.0, 1.0).unwrap();
+        assert!(valid.validate_in_image((10.0, 20.0)).is_ok());
         assert!(validate_sources(&[valid], (10.0, 20.0)).is_ok());
         for (x, y) in [(-0.01, 0.0), (0.0, -0.01), (9.01, 0.0), (0.0, 19.01)] {
             let source = DetectedSource::new(x, y, 1.0).unwrap();

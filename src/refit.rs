@@ -95,8 +95,8 @@ pub fn refit_tan(
         let p = &sources[fi];
         let (ra, dec) = star_position(index, si, obs_epoch);
         let (x, y) = star_coords(radec_to_xyz(ra, dec), reference)?;
-        let u = (p.x - w / 2.0) / w;
-        let v = (p.y - h / 2.0) / w;
+        let u = (p.x() - w / 2.0) / w;
+        let v = (p.y() - h / 2.0) / w;
         for (j, value) in [u, v, 1.0, 0.0, 0.0, 0.0, -x * u, -x * v]
             .iter()
             .enumerate()
@@ -220,7 +220,7 @@ pub fn robust_refit_tan(
             let (ra, dec) = star_position(index, si, obs_epoch);
             if let Some((x, y)) = candidate.radec_to_pixel(ra, dec) {
                 let p = &sources[fi];
-                let d = (x - p.x).powi(2) + (y - p.y).powi(2);
+                let d = (x - p.x()).powi(2) + (y - p.y()).powi(2);
                 if d < radius_sq {
                     let entry = unique.entry(si).or_insert((fi, d));
                     if d < entry.1 {
@@ -307,8 +307,8 @@ fn valid_inputs(
                 return false;
             }
             let (ra, dec) = star_position(index, si, obs_epoch);
-            sources[fi].x.is_finite()
-                && sources[fi].y.is_finite()
+            sources[fi].x().is_finite()
+                && sources[fi].y().is_finite()
                 && ra.is_finite()
                 && dec.is_finite()
         })
@@ -350,11 +350,7 @@ mod tests {
             let (px, py) = (40.0 + rng() * (SIZE - 80.0), 40.0 + rng() * (SIZE - 80.0));
             let (ra, dec) = wcs.pixel_to_radec(px, py);
             catalog.push((i as u64, ra, dec, i as f64));
-            sources.push(DetectedSource {
-                x: px,
-                y: py,
-                flux: 1000.0 - i as f64,
-            });
+            sources.push(DetectedSource::new(px, py, 1000.0 - i as f64).unwrap());
         }
         let scale = wcs.pixel_scale().to_radians();
         let index = build_index(
@@ -369,7 +365,7 @@ mod tests {
         // build_index keeps every star; pair each source with the star at its position.
         let pairs = (0..n)
             .map(|fi| {
-                let (ra, dec) = wcs.pixel_to_radec(sources[fi].x, sources[fi].y);
+                let (ra, dec) = wcs.pixel_to_radec(sources[fi].x(), sources[fi].y());
                 let si = index
                     .stars
                     .iter()
@@ -441,17 +437,16 @@ mod tests {
     fn collinear_pairs_are_rejected() {
         let wcs = truth();
         let sources: Vec<DetectedSource> = (0..6)
-            .map(|i| DetectedSource {
-                x: 100.0 + i as f64 * 150.0,
-                y: 100.0 + i as f64 * 150.0,
-                flux: 1.0,
+            .map(|i| {
+                DetectedSource::new(100.0 + i as f64 * 150.0, 100.0 + i as f64 * 150.0, 1.0)
+                    .unwrap()
             })
             .collect();
         let catalog: Vec<_> = sources
             .iter()
             .enumerate()
             .map(|(i, s)| {
-                let (ra, dec) = wcs.pixel_to_radec(s.x, s.y);
+                let (ra, dec) = wcs.pixel_to_radec(s.x(), s.y());
                 (i as u64, ra, dec, i as f64)
             })
             .collect();

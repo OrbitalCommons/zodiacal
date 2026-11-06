@@ -182,9 +182,9 @@ fn synth_pointing(
     for s in stars {
         if let Some((px, py)) = wcs.radec_to_pixel(s.ra_rad, s.dec_rad)
             && px >= 0.0
-            && px < IMAGE_SIZE.0
+            && px <= IMAGE_SIZE.0 - 1.0
             && py >= 0.0
-            && py < IMAGE_SIZE.1
+            && py <= IMAGE_SIZE.1 - 1.0
         {
             let flux = 10f64.powf(-0.4 * (s.mag - 12.0)); // 1.0 at mag 12
             sources.push(DetectedSource::new(px, py, flux).unwrap());

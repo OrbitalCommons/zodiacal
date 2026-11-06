@@ -15,7 +15,11 @@ Invalid input returns no solution and sets `SolveStats::invalid_input`; no
 sources are discarded or renumbered. `validate_sources` exposes the same check
 for callers that want to report errors before solving.
 
-Aperture1 adapters can remove duplicate finite-value, flux, and bounds checks.
+Aperture1 adapters can remove duplicate validity formulas, but must retain their
+policy of dropping invalid detections before applying the mission source cap.
+Use checked construction to discard intrinsic invalidity, then
+`source.validate_in_image(image_size).is_ok()` to filter out-of-frame centroids.
+Passing an unfiltered out-of-frame source to the solver rejects the whole frame.
 Keep mission source-count limits and ordering policy downstream. These changes
 intentionally break unchecked source construction while retaining the legacy
 solver tuple and JSON wire format.
