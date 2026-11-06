@@ -555,9 +555,10 @@ impl ZdclBundle {
 
     /// Load the per-cell `.zqd` + `.zga` byte buffers (cached).
     fn cell_bytes(&self, cell_id: u32) -> io::Result<Arc<CellEntries>> {
+        // Cached immutable entries remain usable after a reader panic.
         // Fast path: LRU hit. `get` promotes the entry to most-recent.
         {
-            let mut cache = self.cell_cache.lock().expect("cell cache poisoned");
+            let mut cache = self.cell_cache.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(entry) = cache.get(&cell_id) {
                 return Ok(Arc::clone(entry));
             }
@@ -577,7 +578,7 @@ impl ZdclBundle {
             gaia: g_arc,
         });
 
-        let mut cache = self.cell_cache.lock().expect("cell cache poisoned");
+        let mut cache = self.cell_cache.lock().unwrap_or_else(|e| e.into_inner());
         // Lost a race? Use whatever's already there so concurrent
         // callers converge on the same Arc when possible.
         if let Some(existing) = cache.get(&cell_id) {
@@ -1031,6 +1032,27 @@ mod tests {
         // Populated cells exactly match what we built.
         let pop: Vec<u32> = b.populated_cells().iter().copied().collect();
         assert_eq!(pop, cells);
+    }
+
+    #[test]
+    fn poisoned_cell_cache_preserves_hits_and_misses() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+        let (_w, _o, path, cells) = build_test_bundle_folder();
+        let bundle = ZdclBundle::open(path).unwrap();
+        let cached = bundle.cell_bytes(cells[0]).unwrap();
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| {
+                let _guard = bundle.cell_cache.lock().unwrap();
+                panic!("reader panicked");
+            }))
+            .is_err()
+        );
+        assert!(Arc::ptr_eq(&cached, &bundle.cell_bytes(cells[0]).unwrap()));
+        let uncached = bundle.cell_bytes(cells[1]).unwrap();
+        assert!(Arc::ptr_eq(
+            &uncached,
+            &bundle.cell_bytes(cells[1]).unwrap()
+        ));
     }
 
     #[test]

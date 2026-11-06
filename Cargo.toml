@@ -3,7 +3,7 @@ members = ["zodiacal-tools"]
 
 [package]
 name = "zodiacal"
-version = "1.0.1"
+version = "1.1.0"
 edition = "2024"
 description = "A blind astrometry plate-solving library"
 license = "Apache-2.0"
@@ -44,7 +44,8 @@ rayon = "1.11.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 starfield = { version = "0.18.2", default-features = false }
-zip = { version = "0.6", default-features = false, features = ["deflate"] }
+# Bundles use stored or deflated entries; keep optional codecs/encryption disabled.
+zip = { version = "9.4.1", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 lru = "0.18.0"
 web-time = "1"
 

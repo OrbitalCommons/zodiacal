@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.1.0
+
+### Changed
+- Remove the unused public `ExtractionConfig::psf_sigma` field. This is a source-breaking
+  cleanup: remove that field from struct literals and assignments. Extraction behavior
+  is unchanged; the field never affected detection.
+- Upgrade ZIP support to zip 9.4.1 with stored/deflated entries and use a hash set
+  for entry-name lookup. Other compression codecs remain unsupported.
+- Specify sorted, file-only `list_prefix` results, including empty and partial prefixes.
+
+### Fixed
+- Recover filesystem, ZIP, and bundle cell-cache locks after a reader panic.
+- Allocate ZIP read buffers from actual decoded bytes instead of trusting the
+  uncompressed size in the archive header. This does not impose a total size limit.
+
 ## 1.0.1
 
 ### Changed
