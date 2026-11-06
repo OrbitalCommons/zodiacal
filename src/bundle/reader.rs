@@ -976,6 +976,52 @@ mod tests {
     }
 
     #[test]
+    fn regional_solve_validates_before_io_and_preserves_load_errors() {
+        use crate::bundle::RegionalSolveError;
+        use crate::input::{ConfigError, SolveInputError};
+        use crate::solver::SolverConfig;
+        let (_w, _o, path, _) = build_test_bundle_folder();
+        let bundle = ZdclBundle::open(&path).unwrap();
+        let (ra, dec) = cell_center(TEST_DEPTH, 0);
+        let region = SkyRegion::try_from_radians(Equatorial::new(ra, dec), 0.001).unwrap();
+        // Remove unloaded shards; any attempt to load now must fail.
+        std::fs::remove_dir_all(path.join("gaia")).unwrap();
+        let invalid = SolverConfig {
+            code_tolerance: f64::NAN,
+            ..SolverConfig::default()
+        };
+        assert!(matches!(
+            bundle.solve_region(&[], (10.0, 10.0), &region, &invalid),
+            Err(RegionalSolveError::InvalidInput(SolveInputError::Config(
+                ConfigError::CodeTolerance
+            )))
+        ));
+        let bad_region = SkyRegion {
+            radius_rad: f64::NAN,
+            ..region.clone()
+        };
+        assert!(matches!(
+            bundle.solve_region(&[], (10.0, 10.0), &bad_region, &SolverConfig::default()),
+            Err(RegionalSolveError::InvalidInput(SolveInputError::Config(
+                ConfigError::RegionRadius
+            )))
+        ));
+        assert!(matches!(
+            bundle.solve_region(&[], (0.0, 10.0), &region, &SolverConfig::default()),
+            Err(RegionalSolveError::InvalidInput(SolveInputError::Sources(
+                _
+            )))
+        ));
+        let error = bundle
+            .solve_region(&[], (10.0, 10.0), &region, &SolverConfig::default())
+            .unwrap_err();
+        match error {
+            RegionalSolveError::Load(e) => assert_eq!(e.kind(), io::ErrorKind::NotFound),
+            _ => panic!("expected underlying I/O error"),
+        }
+    }
+
+    #[test]
     fn open_folder_bundle() {
         let (_w, _o, bundle, cells) = build_test_bundle_folder();
         let b = ZdclBundle::open(&bundle).expect("open folder bundle");
