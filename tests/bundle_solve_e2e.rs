@@ -27,7 +27,7 @@ use zodiacal::index::cell_builder::{CellStar, CellStarSource};
 use zodiacal::index::multiband_cell_builder::{
     BundleWorkDirPaths, MultiBandCellBuildConfig, ScaleBand, build_bundle_work_dir,
 };
-use zodiacal::solver::{SkyRegion, SolverConfig, solve};
+use zodiacal::solver::{SkyRegion, SolveOutcome, SolverConfig, solve};
 use zodiacal::verify::VerifyConfig;
 
 const TEST_DEPTH: u8 = 5;
@@ -313,6 +313,52 @@ fn bundle_solves_synthetic_pointings() {
             ..SolverConfig::default()
         };
         let (solution, stats) = solve(&sources, &index_refs, IMAGE_SIZE, &solver_cfg);
+        let regional = bundle
+            .solve_region(&sources, IMAGE_SIZE, &region, &solver_cfg)
+            .unwrap();
+        assert_eq!(regional.profile.bands_loaded, indexes.len());
+        assert_eq!(regional.profile.stars_loaded, indexes[0].stars.len());
+        assert_eq!(
+            regional.profile.quads_loaded,
+            indexes.iter().map(|i| i.quads.len()).sum::<usize>()
+        );
+        assert!(
+            regional.profile.total_elapsed
+                >= regional.profile.load_elapsed
+                    + regional.profile.index_elapsed
+                    + regional.profile.solve_elapsed
+        );
+        assert_eq!(regional.solve.stats.n_verified, stats.n_verified);
+        match (&regional.solve.outcome, &solution) {
+            (SolveOutcome::Solved(actual), Some(expected)) => {
+                assert_eq!(actual.wcs.crval, expected.wcs.crval);
+                assert_eq!(actual.wcs.crpix, expected.wcs.crpix);
+                assert_eq!(actual.wcs.cd, expected.wcs.cd);
+                assert_eq!(
+                    actual.verify_result.matched_pairs,
+                    expected.verify_result.matched_pairs
+                );
+                let retained = &regional.indexes[actual.quad_match.index_id];
+                for &(_, star) in &actual.verify_result.matched_pairs {
+                    assert!(star < retained.stars.len());
+                }
+            }
+            _ => panic!("regional and manual solves must both solve this synthetic field"),
+        }
+        if i == 0 {
+            let no_match = bundle
+                .solve_region(&[], IMAGE_SIZE, &region, &solver_cfg)
+                .unwrap();
+            assert!(matches!(no_match.solve.outcome, SolveOutcome::NoMatch));
+            let timeout_cfg = SolverConfig {
+                timeout: Some(std::time::Duration::ZERO),
+                ..solver_cfg
+            };
+            let timed_out = bundle
+                .solve_region(&sources, IMAGE_SIZE, &region, &timeout_cfg)
+                .unwrap();
+            assert!(matches!(timed_out.solve.outcome, SolveOutcome::TimedOut));
+        }
 
         let err = solution.map(|sol| {
             let (got_ra, got_dec) = sol.wcs.field_center();

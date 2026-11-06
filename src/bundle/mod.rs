@@ -14,6 +14,9 @@ pub mod layout;
 pub mod manifest;
 pub mod quad_shard;
 pub mod reader;
+pub mod solve;
 pub mod tidy;
 
 pub use reader::{MultiBandFragment, VerifyError, VerifyErrorKind, VerifyReport, ZdclBundle};
+
+pub use solve::{RegionalSolveError, RegionalSolveProfile, RegionalSolveReport};
