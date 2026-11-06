@@ -852,12 +852,9 @@ mod tests {
             ..SolverConfig::default()
         };
         let report = solve_checked(&sources, &[&regional], image_size, &solver_cfg).unwrap();
-        let _stats = report.stats;
-        let solution = match report.outcome {
-            crate::solver::SolveOutcome::Solved(solution) => Some(*solution),
-            crate::solver::SolveOutcome::TimedOut | crate::solver::SolveOutcome::NoMatch => None,
+        let crate::solver::SolveOutcome::Solved(solution) = report.outcome else {
+            panic!("sparse-loaded index should solve");
         };
-        let solution = solution.expect("sparse-loaded index should solve");
 
         // The solved WCS image center should match truth's image center to
         // within a few arcsec. (CRVAL is not directly comparable because

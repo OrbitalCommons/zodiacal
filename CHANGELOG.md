@@ -13,7 +13,6 @@
   `sources_from_points` now returns `Result`. Solving rejects out-of-image sources.
 - `RealtimeOutput::solution` is replaced by `solve: SolveReport`. Realtime solving
   returns invalid input as `io::ErrorKind::InvalidInput` before refreshing indexes.
-- See [the migration guide](docs/migration-1.0.md).
 
 ### Added
 - Checked SolverConfig/VerifyConfig validation and SkyRegion constructors with typed errors.

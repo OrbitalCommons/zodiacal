@@ -969,12 +969,9 @@ mod tests {
             ..SolverConfig::default()
         };
         let report = solve_checked(&sources, &[&reloaded], image_size, &solver_cfg).unwrap();
-        let _stats = report.stats;
-        let solution = match report.outcome {
-            crate::solver::SolveOutcome::Solved(solution) => Some(*solution),
-            crate::solver::SolveOutcome::TimedOut | crate::solver::SolveOutcome::NoMatch => None,
+        let crate::solver::SolveOutcome::Solved(solution) = report.outcome else {
+            panic!("v3-loaded index should solve");
         };
-        let solution = solution.expect("v3-loaded index should solve");
 
         let (solved_ra, solved_dec) = solution.wcs.field_center();
         let (truth_ra, truth_dec) = truth_wcs.field_center();

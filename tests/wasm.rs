@@ -84,12 +84,9 @@ fn solves_a_synthetic_field_with_a_timeout() {
         &config(Some(Duration::from_secs(10))),
     )
     .unwrap();
-    let _ = report.stats;
-    let solution = match report.outcome {
-        zodiacal::solver::SolveOutcome::Solved(solution) => Some(*solution),
-        zodiacal::solver::SolveOutcome::TimedOut | zodiacal::solver::SolveOutcome::NoMatch => None,
+    let zodiacal::solver::SolveOutcome::Solved(solution) = report.outcome else {
+        panic!("solver should find the synthetic field");
     };
-    let solution = solution.expect("solver should find the synthetic field");
 
     let (ra, dec) = solution.wcs.field_center();
     let (true_ra, true_dec) = truth.field_center();
