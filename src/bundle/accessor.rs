@@ -9,13 +9,14 @@
 //! Two concrete implementations are provided here:
 //!
 //! - [`FsAccessor`] — backs entries with files in a directory root and
-//!   memory-maps each entry on first access (cached for the lifetime of
-//!   the accessor).
+//!   memory-maps entries on demand in a bounded LRU cache. Returned
+//!   entries keep their mappings alive even after eviction.
 //! - [`ZipAccessor`] — backs entries with a `zip::ZipArchive<File>` and
 //!   decompresses each entry into an owned `Vec<u8>` on every read.
 //!
 //! See `docs/bundle-format.md` for the broader bundle format design.
 
+use std::collections::HashSet;
 use std::fs::File;
 use std::io;
 use std::num::NonZeroUsize;
@@ -45,6 +46,10 @@ pub trait SubfileAccessor: Send + Sync {
     fn exists(&self, rel: &str) -> bool;
 
     /// List all entry names whose relative path starts with `prefix`.
+    ///
+    /// An empty prefix returns all file entries; directory entries are excluded.
+    /// Matching uses string `starts_with`, so `"qua"` also matches `"quads/x"`.
+    /// Results are sorted in ascending lexicographic order.
     ///
     /// The returned strings are bundle-relative entry names (e.g.
     /// `"quads/cell_00000.zqd"`), suitable to pass back to
@@ -263,9 +268,10 @@ impl SubfileAccessor for FsAccessor {
         // safe path.
         Self::validate_name(rel)?;
 
+        // Cached mappings remain valid after a reader panics; recover poisoned locks.
         // Fast path: LRU hit. `get` promotes the entry to most-recent.
         {
-            let mut cache = self.cache.lock().expect("FsAccessor cache poisoned");
+            let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(mmap) = cache.get(rel) {
                 return Ok(EntryBytes::Mmap(Arc::clone(mmap)));
             }
@@ -279,7 +285,7 @@ impl SubfileAccessor for FsAccessor {
         let mmap = unsafe { Mmap::map(&file)? };
         let arc = Arc::new(mmap);
 
-        let mut cache = self.cache.lock().expect("FsAccessor cache poisoned");
+        let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
         // Another thread may have raced us; if so, prefer the entry
         // that's already cached so concurrent callers converge on the
         // same Arc when possible. The LRU's `put` returns the previous
@@ -335,7 +341,7 @@ pub struct ZipAccessor {
     archive: Mutex<ZipArchive<File>>,
     /// Snapshot of entry names taken at open. Used by `exists` and
     /// `list_prefix` without holding the archive mutex.
-    names: Vec<String>,
+    names: HashSet<String>,
 }
 
 impl ZipAccessor {
@@ -343,7 +349,10 @@ impl ZipAccessor {
     pub fn open(path: impl AsRef<Path>) -> io::Result<Self> {
         let file = File::open(path.as_ref())?;
         let archive = ZipArchive::new(file).map_err(zip_to_io_err)?;
-        let names: Vec<String> = archive.file_names().map(|s| s.to_string()).collect();
+        let names = archive
+            .file_names()
+            .map(|name| name.map(|name| name.into_owned()).map_err(zip_to_io_err))
+            .collect::<io::Result<HashSet<_>>>()?;
         Ok(Self {
             archive: Mutex::new(archive),
             names,
@@ -353,7 +362,7 @@ impl ZipAccessor {
 
 impl SubfileAccessor for ZipAccessor {
     fn exists(&self, rel: &str) -> bool {
-        self.names.iter().any(|n| n == rel)
+        self.names.contains(rel)
     }
 
     fn list_prefix(&self, prefix: &str) -> io::Result<Vec<String>> {
@@ -372,10 +381,24 @@ impl SubfileAccessor for ZipAccessor {
 
     fn read_entry(&self, rel: &str) -> io::Result<EntryBytes> {
         use std::io::Read;
-        let mut archive = self.archive.lock().expect("ZipAccessor mutex poisoned");
+        // Opening an entry re-seeks the archive, including after an interrupted read.
+        let mut archive = self.archive.lock().unwrap_or_else(|e| e.into_inner());
         let mut entry = archive.by_name(rel).map_err(zip_to_io_err)?;
-        let mut buf = Vec::with_capacity(entry.size() as usize);
-        entry.read_to_end(&mut buf)?;
+        // Allocate only for bytes actually decoded, never for a header's claimed
+        // size. This is not a total decompressed-size limit.
+        let mut buf = Vec::new();
+        let mut chunk = [0u8; 64 * 1024];
+        loop {
+            let n = match entry.read(&mut chunk) {
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                result => result?,
+            };
+            if n == 0 {
+                break;
+            }
+            buf.try_reserve(n).map_err(io::Error::other)?;
+            buf.extend_from_slice(&chunk[..n]);
+        }
         Ok(EntryBytes::Owned(buf))
     }
 }
@@ -434,8 +457,8 @@ mod tests {
     fn write_zip_layout(zip_path: &Path, entries: &BTreeMap<&'static str, Vec<u8>>) {
         let f = File::create(zip_path).expect("create zip file");
         let mut zw = zip::write::ZipWriter::new(f);
-        let opts =
-            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
         for (rel, bytes) in entries {
             zw.start_file(*rel, opts).expect("start zip entry");
             zw.write_all(bytes).expect("write zip entry bytes");
@@ -548,24 +571,119 @@ mod tests {
             "gaia/cell_00001.zga".to_string(),
         ];
 
-        let mut fs_quads = fs_acc.list_prefix("quads/").expect("fs list quads");
-        fs_quads.sort();
+        let fs_quads = fs_acc.list_prefix("quads/").expect("fs list quads");
         assert_eq!(fs_quads, want_quads);
         // Should not include any gaia/ entries.
         assert!(fs_quads.iter().all(|n| !n.starts_with("gaia/")));
 
-        let mut zip_quads = zip_acc.list_prefix("quads/").expect("zip list quads");
-        zip_quads.sort();
+        let zip_quads = zip_acc.list_prefix("quads/").expect("zip list quads");
         assert_eq!(zip_quads, want_quads);
         assert!(zip_quads.iter().all(|n| !n.starts_with("gaia/")));
 
-        let mut fs_gaia = fs_acc.list_prefix("gaia/").expect("fs list gaia");
-        fs_gaia.sort();
+        let fs_gaia = fs_acc.list_prefix("gaia/").expect("fs list gaia");
         assert_eq!(fs_gaia, want_gaia);
 
-        let mut zip_gaia = zip_acc.list_prefix("gaia/").expect("zip list gaia");
-        zip_gaia.sort();
+        let zip_gaia = zip_acc.list_prefix("gaia/").expect("zip list gaia");
         assert_eq!(zip_gaia, want_gaia);
+        for accessor in [&fs_acc as &dyn SubfileAccessor, &zip_acc] {
+            assert_eq!(accessor.list_prefix("qua").unwrap(), want_quads);
+            assert_eq!(
+                accessor.list_prefix("").unwrap(),
+                entries.keys().copied().collect::<Vec<_>>()
+            );
+            assert!(accessor.list_prefix("missing").unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn poisoned_accessors_remain_readable() {
+        use std::io::Read;
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+        let tmp = tempfile::tempdir().unwrap();
+        let entries = sample_entries();
+        write_fs_layout(tmp.path(), &entries);
+        let fs = FsAccessor::open(tmp.path()).unwrap();
+        let cached = fs.read_entry("manifest.json").unwrap();
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| {
+                let _guard = fs.cache.lock().unwrap();
+                panic!("reader panicked");
+            }))
+            .is_err()
+        );
+        assert_eq!(
+            cached.as_ptr(),
+            fs.read_entry("manifest.json").unwrap().as_ptr()
+        );
+        assert_eq!(
+            &*fs.read_entry("quads/cell_00000.zqd").unwrap(),
+            entries["quads/cell_00000.zqd"]
+        );
+
+        let path = tmp.path().join("bundle.zip");
+        write_zip_layout(&path, &entries);
+        let zip = ZipAccessor::open(path).unwrap();
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| {
+                let mut archive = zip.archive.lock().unwrap();
+                let mut entry = archive.by_name("manifest.json").unwrap();
+                entry.read_exact(&mut [0; 1]).unwrap();
+                panic!("interrupted entry read");
+            }))
+            .is_err()
+        );
+        for (name, bytes) in &entries {
+            assert_eq!(&*zip.read_entry(name).unwrap(), bytes);
+        }
+    }
+
+    #[test]
+    fn zip_directory_entries_are_excluded_from_listing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("bundle.zip");
+        let mut writer = zip::ZipWriter::new(File::create(&path).unwrap());
+        let opts = zip::write::SimpleFileOptions::default();
+        writer.add_directory("quads/", opts).unwrap();
+        writer.start_file("quads/a", opts).unwrap();
+        writer.write_all(b"payload").unwrap();
+        writer.finish().unwrap();
+        let accessor = ZipAccessor::open(path).unwrap();
+        assert_eq!(accessor.list_prefix("").unwrap(), ["quads/a"]);
+        assert_eq!(accessor.list_prefix("qua").unwrap(), ["quads/a"]);
+    }
+
+    #[test]
+    fn forged_zip_uncompressed_size_does_not_drive_allocation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("forged.zip");
+        let entries = BTreeMap::from([("small", b"small payload".to_vec())]);
+        write_zip_layout(&path, &entries);
+        let mut bytes = std::fs::read(&path).unwrap();
+        let central = bytes.windows(4).position(|w| w == b"PK\x01\x02").unwrap();
+        let claimed = u32::MAX - 1;
+        bytes[central + 24..central + 28].copy_from_slice(&claimed.to_le_bytes());
+        bytes[22..26].copy_from_slice(&claimed.to_le_bytes());
+        std::fs::write(&path, bytes).unwrap();
+        let accessor = ZipAccessor::open(path).unwrap();
+        assert_eq!(
+            accessor
+                .archive
+                .lock()
+                .unwrap()
+                .by_name("small")
+                .unwrap()
+                .size(),
+            u64::from(claimed)
+        );
+        // Readers may reject the inconsistent header or return the actual bytes;
+        // neither path should reserve the claimed four gigabytes.
+        match accessor.read_entry("small") {
+            Ok(bytes) => assert_eq!(&*bytes, b"small payload"),
+            Err(err) => assert!(matches!(
+                err.kind(),
+                io::ErrorKind::InvalidData | io::ErrorKind::UnexpectedEof | io::ErrorKind::Other
+            )),
+        }
     }
 
     #[test]
@@ -726,8 +844,8 @@ mod tests {
         let zip_path = tmp.path().join("empty.zip");
         let f = File::create(&zip_path).expect("create zip");
         let mut zw = zip::write::ZipWriter::new(f);
-        let opts =
-            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
         zw.start_file("empty.bin", opts).expect("start zip entry");
         // No bytes written.
         zw.finish().expect("finish zip");
@@ -747,13 +865,13 @@ mod tests {
         let f = File::create(&zip_path).expect("create zip");
         let mut zw = zip::write::ZipWriter::new(f);
 
-        let stored =
-            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        let stored = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
         zw.start_file("stored.bin", stored).expect("start stored");
         zw.write_all(b"raw bytes").expect("write stored");
 
-        let deflated =
-            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        let deflated = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
         zw.start_file("deflated.bin", deflated)
             .expect("start deflated");
         // Use a payload that compresses well so the stored and deflated

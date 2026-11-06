@@ -102,8 +102,6 @@ pub fn validate_sources(
 /// Configuration for source extraction.
 #[derive(Debug, Clone)]
 pub struct ExtractionConfig {
-    /// Gaussian PSF sigma in pixels (not FWHM).
-    pub psf_sigma: f64,
     /// Detection threshold in units of background sigma.
     /// Used only when `use_otsu` is false.
     pub threshold_sigma: f64,
@@ -125,7 +123,6 @@ pub struct ExtractionConfig {
 impl Default for ExtractionConfig {
     fn default() -> Self {
         Self {
-            psf_sigma: 1.5,
             threshold_sigma: 5.0,
             max_sources: 200,
             use_otsu: false,
@@ -620,7 +617,6 @@ mod image_tests {
         make_gaussian(&mut image, 30.0, 25.0, 2.0, 1000.0);
 
         let config = ExtractionConfig {
-            psf_sigma: 2.0,
             threshold_sigma: 3.0,
             max_sources: 10,
             use_otsu: false,
@@ -646,7 +642,6 @@ mod image_tests {
         make_gaussian(&mut image, 50.0, 100.0, 2.0, 200.0);
 
         let config = ExtractionConfig {
-            psf_sigma: 2.0,
             threshold_sigma: 3.0,
             max_sources: 10,
             use_otsu: false,
@@ -672,7 +667,6 @@ mod image_tests {
         make_gaussian(&mut image, true_x, true_y, 1.5, 500.0);
 
         let config = ExtractionConfig {
-            psf_sigma: 1.5,
             threshold_sigma: 3.0,
             max_sources: 10,
             use_otsu: false,
@@ -709,7 +703,6 @@ mod image_tests {
         }
 
         let config = ExtractionConfig {
-            psf_sigma: 2.0,
             threshold_sigma: 3.0,
             max_sources: 5,
             use_otsu: false,
@@ -741,7 +734,6 @@ mod image_tests {
         make_gaussian(&mut image, 90.0, 90.0, 2.0, 800.0);
 
         let config = ExtractionConfig {
-            psf_sigma: 2.0,
             threshold_sigma: 5.0,
             max_sources: 10,
             use_otsu: false,
@@ -798,7 +790,6 @@ mod image_tests {
     #[test]
     fn nan_padding_does_not_poison_sigma_threshold() {
         let config = ExtractionConfig {
-            psf_sigma: 2.0,
             threshold_sigma: 5.0,
             max_sources: 10,
             use_otsu: false,

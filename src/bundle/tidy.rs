@@ -58,7 +58,7 @@ use std::path::{Path, PathBuf};
 
 use rayon::prelude::*;
 use zip::CompressionMethod;
-use zip::write::FileOptions;
+use zip::write::SimpleFileOptions;
 
 use super::gaia_shard::GaiaShard;
 use super::layout::{cell_filename_width, cell_shard_path};
@@ -536,9 +536,10 @@ pub fn tidy_to_zip(
         let mut buf = BufWriter::new(f);
         {
             let mut zip = zip::ZipWriter::new(&mut buf);
-            let stored_opts = FileOptions::default().compression_method(CompressionMethod::Stored);
+            let stored_opts =
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
             let deflated_opts =
-                FileOptions::default().compression_method(CompressionMethod::Deflated);
+                SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
 
             let width = cell_filename_width(metadata.cell_depth);
             for &cell_id in &populated {
@@ -594,7 +595,7 @@ fn zip_add_file<W: Write + std::io::Seek>(
     zip: &mut zip::ZipWriter<W>,
     name: &str,
     src: &Path,
-    opts: FileOptions,
+    opts: SimpleFileOptions,
 ) -> io::Result<()> {
     zip.start_file(name, opts).map_err(io::Error::other)?;
     let bytes = std::fs::read(src)?;
@@ -890,7 +891,7 @@ mod tests {
         // Walk by index so we see the *stored* order, not the
         // hash-map-iteration order that `file_names()` would return.
         let names: Vec<String> = (0..archive.len())
-            .map(|i| archive.by_index(i).unwrap().name().to_string())
+            .map(|i| archive.by_index(i).unwrap().name().unwrap().into_owned())
             .collect();
 
         // Cells appear in ascending id order; manifest is the last entry.
