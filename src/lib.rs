@@ -9,6 +9,7 @@ pub mod extraction;
 pub mod fitting;
 pub mod geom;
 pub mod index;
+pub mod input;
 pub mod kdtree;
 pub mod pointing;
 pub mod quads;
