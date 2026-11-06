@@ -2,7 +2,7 @@
 //!
 //! Builds a tiny synthetic bundle from in-memory stars, packages it via
 //! the tidy phase, opens it through `ZdclBundle::open`, and runs
-//! `solve()` against synthesized field detections at the bundle's
+//! `solve_checked()` against synthesized field detections at the bundle's
 //! known star positions. This exercises the full
 //! build → tidy → reader → solver path that unit tests cover only in
 //! isolation, and would have caught (and now regression-guards) the
@@ -27,7 +27,7 @@ use zodiacal::index::cell_builder::{CellStar, CellStarSource};
 use zodiacal::index::multiband_cell_builder::{
     BundleWorkDirPaths, MultiBandCellBuildConfig, ScaleBand, build_bundle_work_dir,
 };
-use zodiacal::solver::{SkyRegion, SolveOutcome, SolverConfig, solve};
+use zodiacal::solver::{SkyRegion, SolveOutcome, SolverConfig, solve_checked};
 use zodiacal::verify::VerifyConfig;
 
 const TEST_DEPTH: u8 = 5;
@@ -312,7 +312,14 @@ fn bundle_solves_synthetic_pointings() {
             },
             ..SolverConfig::default()
         };
-        let (solution, stats) = solve(&sources, &index_refs, IMAGE_SIZE, &solver_cfg);
+        let report = solve_checked(&sources, &index_refs, IMAGE_SIZE, &solver_cfg).unwrap();
+        let stats = report.stats;
+        let solution = match report.outcome {
+            zodiacal::solver::SolveOutcome::Solved(solution) => Some(*solution),
+            zodiacal::solver::SolveOutcome::TimedOut | zodiacal::solver::SolveOutcome::NoMatch => {
+                None
+            }
+        };
         let regional = bundle
             .solve_region(&sources, IMAGE_SIZE, &region, &solver_cfg)
             .unwrap();
@@ -399,7 +406,7 @@ fn bundle_solves_synthetic_pointings() {
     }
     assert_eq!(
         n_solved, n_attempted,
-        "expected all {} pointings to solve, got {}",
+        "expected all {} pointings to solve_checked, got {}",
         n_attempted, n_solved,
     );
 }

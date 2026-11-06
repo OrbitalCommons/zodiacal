@@ -542,20 +542,18 @@ mod tests {
 
     #[test]
     fn image_bounds_are_checked_at_solver_boundary() {
-        use crate::solver::{SolverConfig, solve};
+        use crate::solver::{SolverConfig, solve_checked};
         let valid = DetectedSource::new(9.0, 19.0, 1.0).unwrap();
         assert!(valid.validate_in_image((10.0, 20.0)).is_ok());
         assert!(validate_sources(&[valid], (10.0, 20.0)).is_ok());
         for (x, y) in [(-0.01, 0.0), (0.0, -0.01), (9.01, 0.0), (0.0, 19.01)] {
             let source = DetectedSource::new(x, y, 1.0).unwrap();
-            let (solution, stats) = solve(&[source], &[], (10.0, 20.0), &SolverConfig::default());
-            assert!(solution.is_none());
+            let error =
+                solve_checked(&[source], &[], (10.0, 20.0), &SolverConfig::default()).unwrap_err();
             assert_eq!(
-                stats.invalid_input,
-                Some(SourceError::OutsideImage { index: 0 })
+                error,
+                crate::input::SolveInputError::Sources(SourceError::OutsideImage { index: 0 })
             );
-            assert_eq!(stats.n_verified, 0);
-            assert!(!stats.timed_out);
         }
         for size in [
             (0.0, 10.0),

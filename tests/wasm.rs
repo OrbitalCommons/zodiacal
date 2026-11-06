@@ -13,7 +13,7 @@ use zodiacal::extraction::DetectedSource;
 use zodiacal::geom::tan::TanWcs;
 use zodiacal::index::Index;
 use zodiacal::index::builder::{IndexBuilderConfig, build_index};
-use zodiacal::solver::{SolverConfig, solve};
+use zodiacal::solver::{SolverConfig, solve_checked};
 use zodiacal::verify::VerifyConfig;
 
 const SIZE: f64 = 512.0;
@@ -77,12 +77,18 @@ fn config(timeout: Option<Duration>) -> SolverConfig {
 #[wasm_bindgen_test]
 fn solves_a_synthetic_field_with_a_timeout() {
     let (sources, index, truth) = scenario();
-    let (solution, _) = solve(
+    let report = solve_checked(
         &sources,
         &[&index],
         (SIZE, SIZE),
         &config(Some(Duration::from_secs(10))),
-    );
+    )
+    .unwrap();
+    let _ = report.stats;
+    let solution = match report.outcome {
+        zodiacal::solver::SolveOutcome::Solved(solution) => Some(*solution),
+        zodiacal::solver::SolveOutcome::TimedOut | zodiacal::solver::SolveOutcome::NoMatch => None,
+    };
     let solution = solution.expect("solver should find the synthetic field");
 
     let (ra, dec) = solution.wcs.field_center();
@@ -103,12 +109,16 @@ fn solves_a_synthetic_field_with_a_timeout() {
 #[wasm_bindgen_test]
 fn an_expired_timeout_is_checked_without_panicking() {
     let (sources, index, _) = scenario();
-    // The deadline is already due at the first check. Browser timers are coarse, so a fast solve
-    // may still finish first; the point is that every deadline check reads the clock safely.
-    let _ = solve(
+    // A zero budget expires at the first search phase, even with a coarse browser clock.
+    let report = solve_checked(
         &sources,
         &[&index],
         (SIZE, SIZE),
         &config(Some(Duration::ZERO)),
-    );
+    )
+    .unwrap();
+    assert!(matches!(
+        report.outcome,
+        zodiacal::solver::SolveOutcome::TimedOut
+    ));
 }

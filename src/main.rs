@@ -8,7 +8,9 @@ use ndarray::Array2;
 use zodiacal::extraction::ExtractionConfig;
 use zodiacal::index::builder::{CatalogBuilderConfig, build_index_from_catalog};
 use zodiacal::index::{Index, IndexMetadata};
-use zodiacal::solver::{SolveStats, SolverConfig, solve, solve_image};
+use zodiacal::solver::{
+    SolveOutcome, SolveStats, SolverConfig, solve_checked, solve_image_checked,
+};
 use zodiacal::verify::VerifyConfig;
 
 #[derive(Parser)]
@@ -421,10 +423,15 @@ fn cmd_solve(
         ..SolverConfig::default()
     };
 
-    let (result, stats) = solve_image(&array, &index_refs, &extraction_config, &solver_config);
+    let report = solve_image_checked(&array, &index_refs, &extraction_config, &solver_config)
+        .unwrap_or_else(|e| {
+            eprintln!("Invalid solver input: {e}");
+            process::exit(2);
+        });
+    let stats = report.stats;
     print_solve_stats(&stats);
-    match result {
-        Some(solution) => {
+    match report.outcome {
+        SolveOutcome::Solved(solution) => {
             let (ra, dec) = solution.wcs.field_center();
             let scale_arcsec = solution.wcs.pixel_scale() * 3600.0;
             let rotation = f64::atan2(solution.wcs.cd[1][0], solution.wcs.cd[0][0]).to_degrees();
@@ -444,7 +451,7 @@ fn cmd_solve(
                 solution.verify_result.log_odds
             );
         }
-        None => {
+        SolveOutcome::TimedOut | SolveOutcome::NoMatch => {
             eprintln!("No solution found.");
             process::exit(1);
         }
@@ -510,7 +517,7 @@ fn cmd_batch_solve(
         eprint!("[{:3}/{}] {}: ", i + 1, files.len(), name);
 
         let t0 = Instant::now();
-        let (result, stats) = if file.extension().is_some_and(|e| e == "json") {
+        let report = if file.extension().is_some_and(|e| e == "json") {
             let reader = std::fs::File::open(file).unwrap_or_else(|e| {
                 eprintln!("Failed to open {}: {e}", file.display());
                 process::exit(1);
@@ -519,7 +526,7 @@ fn cmd_batch_solve(
                 eprintln!("Failed to parse {}: {e}", file.display());
                 process::exit(1);
             });
-            solve(
+            solve_checked(
                 &sj.sources,
                 &index_refs,
                 (sj.image_width, sj.image_height),
@@ -527,8 +534,14 @@ fn cmd_batch_solve(
             )
         } else {
             let array = load_image(file);
-            solve_image(&array, &index_refs, extraction_config, solver_config)
-        };
+            solve_image_checked(&array, &index_refs, extraction_config, solver_config)
+        }
+        .unwrap_or_else(|e| {
+            eprintln!("Invalid solver input in {}: {e}", file.display());
+            process::exit(2);
+        });
+        let timed_out = matches!(report.outcome, SolveOutcome::TimedOut);
+        let stats = report.stats;
         let elapsed = t0.elapsed().as_secs_f64();
 
         all_n_verified.push(stats.n_verified);
@@ -545,8 +558,8 @@ fn cmd_batch_solve(
             all_accepted_log_odds.push(lo);
         }
 
-        match result {
-            Some(solution) => {
+        match report.outcome {
+            SolveOutcome::Solved(solution) => {
                 let (ra, dec) = solution.wcs.field_center();
                 let best_reject_lo = stats.best_rejected.map(|(lo, _)| lo).unwrap_or(0.0);
                 eprintln!(
@@ -562,7 +575,7 @@ fn cmd_batch_solve(
                 n_solved += 1;
                 solve_times.push(elapsed);
             }
-            None => {
+            SolveOutcome::TimedOut | SolveOutcome::NoMatch => {
                 let (best_lo, best_nm) = stats.best_rejected.unwrap_or((0.0, 0));
                 eprintln!(
                     "FAILED in {:.1}s  verified={}  best_lo={:.1}({}m){}",
@@ -570,14 +583,14 @@ fn cmd_batch_solve(
                     stats.n_verified,
                     best_lo,
                     best_nm,
-                    if stats.timed_out { "  TIMEOUT" } else { "" },
+                    if timed_out { "  TIMEOUT" } else { "" },
                 );
                 if let Some(fdir) = failures_dir {
                     std::fs::create_dir_all(fdir).ok();
                     let diag = serde_json::json!({
                         "file": name.to_string(),
                         "elapsed_s": elapsed,
-                        "timed_out": stats.timed_out,
+                        "timed_out": timed_out,
                         "n_verified": stats.n_verified,
                         "best_rejected": stats.best_rejected.map(|(lo, nm)| {
                             serde_json::json!({"log_odds": lo, "n_matched": nm})

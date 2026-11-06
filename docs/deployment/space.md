@@ -140,7 +140,7 @@ fn main() -> std::io::Result<()> {
 
         // Tick + blind solve.
         let out = rt.solve(&sources, image_size, &now)?;
-        let Some(blind) = out.solution else {
+        let zodiacal::solver::SolveOutcome::Solved(blind) = out.solve.outcome else {
             continue; // no match this frame — stay silent or report
         };
 

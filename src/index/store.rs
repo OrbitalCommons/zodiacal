@@ -323,7 +323,7 @@ fn load_filtered(path: &Path, region_filter: Option<(&SkyRegion, f64)>) -> io::R
 /// [`IndexStar`]s.
 ///
 /// This is the convenience entry point for callers that want a multi-band
-/// view of a bundle that fits the existing `solve(&[&Index])` signature.
+/// view of a bundle that fits the existing `solve_checked(&[&Index])` signature.
 /// It deliberately does **not** dispatch through [`Index::load`] — bundles
 /// have their own path (folder or zip) and lifecycle, and silently
 /// upgrading a v1/v2 single-file load into a bundle load would be a
@@ -777,7 +777,7 @@ mod tests {
         use crate::extraction::DetectedSource;
         use crate::geom::tan::TanWcs;
         use crate::index::builder::{IndexBuilderConfig, build_index};
-        use crate::solver::{SolverConfig, solve};
+        use crate::solver::{SolverConfig, solve_checked};
         use crate::verify::VerifyConfig;
         use std::f64::consts::PI;
 
@@ -851,7 +851,12 @@ mod tests {
             },
             ..SolverConfig::default()
         };
-        let (solution, _stats) = solve(&sources, &[&regional], image_size, &solver_cfg);
+        let report = solve_checked(&sources, &[&regional], image_size, &solver_cfg).unwrap();
+        let _stats = report.stats;
+        let solution = match report.outcome {
+            crate::solver::SolveOutcome::Solved(solution) => Some(*solution),
+            crate::solver::SolveOutcome::TimedOut | crate::solver::SolveOutcome::NoMatch => None,
+        };
         let solution = solution.expect("sparse-loaded index should solve");
 
         // The solved WCS image center should match truth's image center to

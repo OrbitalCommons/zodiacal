@@ -135,7 +135,7 @@ enum Commands {
 
     /// Sweep the 1000-case test corpus against a built bundle. For
     /// each `NNNN.json` test case, opens a region of the bundle around
-    /// the truth center, builds one Index per band, runs `solve()`,
+    /// the truth center, builds one Index per band, runs `solve_checked()`,
     /// and emits a CSV row per case to stdout plus a summary on
     /// stderr.
     BenchBundle {

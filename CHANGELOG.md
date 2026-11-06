@@ -1,6 +1,29 @@
 # Changelog
 
-## Unreleased
+## 1.0.0
+
+### Breaking changes
+- Remove the tuple-returning `solver::solve`, `solve_with_callback`, and `solve_image`
+  APIs. Use `solve_checked`, `solve_checked_with_callback`, and `solve_image_checked`.
+  They return `Result<SolveReport, SolveInputError>` with explicit `Solved`, `TimedOut`,
+  and `NoMatch` outcomes. `SolveStats` no longer carries `timed_out`, `invalid_input`,
+  or `invalid_config` status fields.
+- `DetectedSource` fields are private. Use checked `DetectedSource::new` and
+  `x()`/`y()`/`flux()` accessors. JSON keeps its object shape but rejects invalid values;
+  `sources_from_points` now returns `Result`. Solving rejects out-of-image sources.
+- `RealtimeOutput::solution` is replaced by `solve: SolveReport`. Realtime solving
+  returns invalid input as `io::ErrorKind::InvalidInput` before refreshing indexes.
+- See [the migration guide](docs/migration-1.0.md).
+
+### Added
+- Checked SolverConfig/VerifyConfig validation and SkyRegion constructors with typed errors.
+- Profiled `ZdclBundle::solve_region`, retaining indexes for matched-star diagnostics.
+- Checked geometric pixel center and analytic local camera tangents preserving row parity.
+  Legacy `field_center`/`field_radius` coordinate conventions remain unchanged pending #67.
+
+### Fixed
+- Timeout comparisons use elapsed time, avoiding deadline-addition overflow.
+
 
 ### Changed
 - The `fits` feature uses fitsio-pure 0.14 (was 0.9). Its compat image shapes are now row-major,

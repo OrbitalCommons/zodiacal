@@ -239,14 +239,21 @@ The CLI is a thin wrapper over the `zodiacal` crate. Embedding the solver into y
 
 ### Core API
 
+See [the 1.0 migration guide](docs/migration-1.0.md) for the removed tuple APIs and checked source construction.
+
 ```rust
 use zodiacal::index::Index;
-use zodiacal::solver::{solve, SolverConfig};
+use zodiacal::solver::{solve_checked, SolveOutcome, SolverConfig};
 use zodiacal::extraction::DetectedSource;
 
 let index = Index::load("my_index_00.zdcl".as_ref())?;
 let sources: Vec<DetectedSource> = /* from extract_sources() or your own pipeline */;
-let (solution, stats) = solve(&sources, &[&index], (image_w, image_h), &SolverConfig::default());
+let report = solve_checked(&sources, &[&index], (image_w, image_h), &SolverConfig::default())?;
+match report.outcome {
+    SolveOutcome::Solved(solution) => { /* use solution.wcs */ }
+    SolveOutcome::TimedOut => { /* search budget exhausted */ }
+    SolveOutcome::NoMatch => { /* no accepted match */ }
+}
 ```
 
 ### In the Browser (WebAssembly)
@@ -254,7 +261,7 @@ let (solution, stats) = solve(&sources, &[&index], (image_w, image_h), &SolverCo
 zodiacal builds for `wasm32-unknown-unknown` with default features off:
 
 ```toml
-zodiacal = { version = "0.5", default-features = false }
+zodiacal = { version = "1.0", default-features = false }
 ```
 
 Solving, verification, fitting and in-memory index building work in the browser, and solver

@@ -98,12 +98,13 @@ fn main() -> std::io::Result<()> {
         // tick + solve in one call. tick() refreshes the LiveIndex;
         // the solver runs against the now-current loaded set.
         let out = rt.solve(&sources, image_size, &now)?;
-        match out.solution {
-            Some(sol) => {
+        match out.solve.outcome {
+            zodiacal::solver::SolveOutcome::Solved(sol) => {
                 let (ra, dec) = sol.wcs.field_center();
                 println!("solved: ra={ra:.3} dec={dec:.3}");
             }
-            None => eprintln!("no solution this frame"),
+            zodiacal::solver::SolveOutcome::TimedOut => eprintln!("search timed out"),
+            zodiacal::solver::SolveOutcome::NoMatch => eprintln!("no solution this frame"),
         }
 
         std::thread::sleep(Duration::from_secs(5)); // your frame rate
@@ -207,14 +208,14 @@ your station has 16+ GB RAM).
 ### Multi-band scale series
 
 For wide-field plus narrow-field cameras on the same mount, hold one
-`LiveIndex` per scale band. `solve()` accepts a slice of `&Index`, so
+`LiveIndex` per scale band. `solve_checked()` accepts a slice of `&Index`, so
 you can call `as_index()` on each `LiveIndex` and feed all the views in:
 
 ```rust
 let v0 = live_band_0.as_index();
 let v1 = live_band_1.as_index();
 let v2 = live_band_2.as_index();
-let (sol, _) = solve(&sources, &[&v0, &v1, &v2], image_size, &config);
+let report = zodiacal::solver::solve_checked(&sources, &[&v0, &v1, &v2], image_size, &config)?;
 ```
 
 `as_index()` is cached on `LiveIndex::build_generation`, so the cost is

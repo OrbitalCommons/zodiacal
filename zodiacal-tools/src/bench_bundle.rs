@@ -1,7 +1,7 @@
 //! `bench-bundle` — sweep the 1000-case test corpus against a bundle.
 //!
 //! For each `NNNN.json` test case, opens a region of the bundle around
-//! the truth center, builds one `Index` per band, and runs `solve()`.
+//! the truth center, builds one `Index` per band, and runs `solve_checked()`.
 //! Records solve success, wall-clock load + solve time, and angular
 //! error vs. truth. Emits per-case CSV on stdout and a summary on
 //! stderr.
@@ -18,7 +18,7 @@ use zodiacal::bundle::reader::ZdclBundle;
 use zodiacal::extraction::DetectedSource;
 use zodiacal::geom::sphere::{angular_distance, radec_to_xyz};
 use zodiacal::index::Index;
-use zodiacal::solver::{SkyRegion, Solution, SolverConfig, solve};
+use zodiacal::solver::{SkyRegion, Solution, SolverConfig, solve_checked};
 use zodiacal::verify::VerifyConfig;
 
 #[derive(Debug, Deserialize)]
@@ -179,12 +179,21 @@ pub fn run(cfg: &BenchBundleConfig) -> io::Result<()> {
         }
 
         let solve_start = Instant::now();
-        let (solution, stats) = solve(
+        let report = solve_checked(
             &sources,
             &index_refs,
             (tc.image_width, tc.image_height),
             &solver_cfg,
-        );
+        )
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+        let timed_out = matches!(report.outcome, zodiacal::solver::SolveOutcome::TimedOut);
+        let stats = report.stats;
+        let solution = match report.outcome {
+            zodiacal::solver::SolveOutcome::Solved(solution) => Some(*solution),
+            zodiacal::solver::SolveOutcome::TimedOut | zodiacal::solver::SolveOutcome::NoMatch => {
+                None
+            }
+        };
         let solve_ms = solve_start.elapsed().as_secs_f64() * 1000.0;
 
         let truth_xyz = radec_to_xyz(tc.ra_deg.to_radians(), tc.dec_deg.to_radians());
@@ -262,7 +271,7 @@ pub fn run(cfg: &BenchBundleConfig) -> io::Result<()> {
             fmt_f(best_rej_log_odds),
             fmt_i(best_rej_n_matched),
             fmt_f(best_rej_error),
-            stats.timed_out as u8,
+            timed_out as u8,
         );
 
         if (i + 1) % 50 == 0 {
@@ -331,7 +340,7 @@ struct TraceQuad {
     /// for a multi-band bundle).
     band_idx: usize,
     /// 4 detected-source indices (into the test-case `sources` list,
-    /// 0-based, in the brightness order the bench passes to `solve`).
+    /// 0-based, in the brightness order the bench passes to `solve_checked`).
     field_indices: [usize; 4],
     /// 4 catalog-star pixel positions (post-fit) and sky positions.
     catalog: [TraceCatalogStar; 4],

@@ -6,7 +6,7 @@ use web_time::Instant;
 
 use starfield::Equatorial;
 
-use crate::extraction::{DetectedSource, SourceError, validate_sources};
+use crate::extraction::{DetectedSource, validate_sources};
 use crate::fitting::{FitError, fit_tan_wcs};
 use crate::geom::sphere::{angular_distance, radec_to_xyz};
 use crate::geom::tan::TanWcs;
@@ -156,10 +156,6 @@ pub struct Solution {
 /// Statistics collected during a solve attempt.
 #[derive(Debug, Clone)]
 pub struct SolveStats {
-    /// Configuration rejected before searching (legacy solve compatibility).
-    pub invalid_config: Option<ConfigError>,
-    /// Input rejected before solving; no sources are silently discarded.
-    pub invalid_input: Option<SourceError>,
     /// Total number of WCS candidates that passed cheap filters and reached verification.
     pub n_verified: usize,
     /// Best rejected candidate: (log_odds, n_matched). None if no rejections.
@@ -168,8 +164,6 @@ pub struct SolveStats {
     pub best_rejected_wcs: Option<TanWcs>,
     /// Log-odds of the accepted candidate (if any).
     pub accepted_log_odds: Option<f64>,
-    /// Whether the solve timed out.
-    pub timed_out: bool,
 }
 
 /// Explicit outcome of a valid solve attempt. Invalid input is a separate error.
@@ -188,6 +182,18 @@ pub struct SolveReport {
 }
 
 /// Validate sources/configuration and solve without requiring outcome inference.
+///
+/// ```
+/// use zodiacal::extraction::DetectedSource;
+/// use zodiacal::solver::{solve_checked, SolveOutcome, SolverConfig};
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let sources = vec![DetectedSource::new(5.0, 5.0, 100.0)?];
+/// let report = solve_checked(&sources, &[], (10.0, 10.0), &SolverConfig::default())?;
+/// assert!(matches!(report.outcome, SolveOutcome::NoMatch));
+/// # Ok(())
+/// # }
+/// ```
+///
 /// Timeout is a cooperative search budget, not a hard wall-clock guarantee.
 /// Empty indexes or fewer than four sources produce NoMatch, even with zero timeout.
 pub fn solve_checked(
@@ -199,7 +205,9 @@ pub fn solve_checked(
     solve_checked_with_callback(sources, indexes, image_size, config, |_| {})
 }
 
-/// Checked solve with the same candidate-verification callback as [`solve_with_callback`].
+/// Checked solve with progress snapshots after each attempted quad.
+/// Invalid input returns an error before any callback runs. Snapshots contain
+/// verification statistics; the final outcome is returned in the report.
 pub fn solve_checked_with_callback(
     sources: &[DetectedSource],
     indexes: &[&Index],
@@ -209,20 +217,20 @@ pub fn solve_checked_with_callback(
 ) -> Result<SolveReport, SolveInputError> {
     validate_sources(sources, image_size)?;
     config.validate()?;
-    let (solution, stats) = solve_with_callback(sources, indexes, image_size, config, on_progress);
-    let outcome = match solution {
-        Some(solution) => SolveOutcome::Solved(Box::new(solution)),
-        None if stats.timed_out => SolveOutcome::TimedOut,
-        None => SolveOutcome::NoMatch,
-    };
-    Ok(SolveReport { outcome, stats })
+    Ok(solve_validated(
+        sources,
+        indexes,
+        image_size,
+        config,
+        on_progress,
+    ))
 }
 
 /// Information about the quad that produced the solution.
 #[derive(Debug, Clone)]
 pub struct QuadMatch {
     /// Position of the matched index in the `&[&Index]` slice passed
-    /// to [`solve`]. With multi-band bundles each band is one Index,
+    /// to [`solve_checked`]. With multi-band bundles each band is one Index,
     /// so this also identifies the band.
     pub index_id: usize,
     /// Indices into the field source list.
@@ -441,55 +449,26 @@ fn try_quad(
     None
 }
 
-/// Attempt to blindly solve a field of detected sources against one or more indexes.
-///
-/// This is the main entry point for plate solving. It:
-/// 1. Sorts field sources by brightness
-/// 2. Builds field quads from the brightest sources
-/// 3. Matches field quad codes against each index's code tree
-/// 4. For each match, fits a TAN WCS and verifies it
-/// 5. Returns the first solution that passes verification
-pub fn solve(
-    sources: &[DetectedSource],
-    indexes: &[&Index],
-    image_size: (f64, f64),
-    config: &SolverConfig,
-) -> (Option<Solution>, SolveStats) {
-    solve_with_callback(sources, indexes, image_size, config, |_| {})
-}
-
-/// Like [`solve`], but calls `on_progress` after each candidate verification.
-///
-/// The callback receives a snapshot of the current [`SolveStats`], which includes
-/// the number of candidates verified, best rejected log-odds, and whether a
-/// timeout has occurred. This can be used for progress bars, logging, or
-/// adaptive termination.
-///
-/// The no-op callback `|_| {}` is optimized away by the compiler, so
-/// [`solve`] has zero overhead from this mechanism.
-pub fn solve_with_callback(
+// Search only after the public checked boundary has validated inputs.
+fn solve_validated(
     sources: &[DetectedSource],
     indexes: &[&Index],
     image_size: (f64, f64),
     config: &SolverConfig,
     mut on_progress: impl FnMut(&SolveStats),
-) -> (Option<Solution>, SolveStats) {
+) -> SolveReport {
     let mut stats = SolveStats {
-        invalid_config: config.validate().err(),
-        invalid_input: validate_sources(sources, image_size).err(),
         n_verified: 0,
         best_rejected: None,
         best_rejected_wcs: None,
         accepted_log_odds: None,
-        timed_out: false,
     };
 
-    if stats.invalid_input.is_some()
-        || stats.invalid_config.is_some()
-        || sources.len() < DIMQUADS
-        || indexes.is_empty()
-    {
-        return (None, stats);
+    if sources.len() < DIMQUADS || indexes.is_empty() {
+        return SolveReport {
+            outcome: SolveOutcome::NoMatch,
+            stats,
+        };
     }
 
     // Comparing elapsed time avoids overflow for any representable Duration.
@@ -548,8 +527,10 @@ pub fn solve_with_callback(
             .timeout
             .is_some_and(|budget| start.elapsed() >= budget)
         {
-            stats.timed_out = true;
-            return (None, stats);
+            return SolveReport {
+                outcome: SolveOutcome::TimedOut,
+                stats,
+            };
         }
 
         // Phase 1: n is on the backbone (B = n).
@@ -590,7 +571,10 @@ pub fn solve_with_callback(
                         dist, scale_rad,
                     ) {
                         on_progress(&stats);
-                        return (Some(sol), stats);
+                        return SolveReport {
+                            outcome: SolveOutcome::Solved(Box::new(sol)),
+                            stats,
+                        };
                     }
                     on_progress(&stats);
                 }
@@ -604,8 +588,10 @@ pub fn solve_with_callback(
                 .timeout
                 .is_some_and(|budget| start.elapsed() >= budget)
             {
-                stats.timed_out = true;
-                return (None, stats);
+                return SolveReport {
+                    outcome: SolveOutcome::TimedOut,
+                    stats,
+                };
             }
             for b in (a + 1)..n {
                 let (_, sa) = sorted[a];
@@ -644,7 +630,10 @@ pub fn solve_with_callback(
                         dist, scale_rad,
                     ) {
                         on_progress(&stats);
-                        return (Some(sol), stats);
+                        return SolveReport {
+                            outcome: SolveOutcome::Solved(Box::new(sol)),
+                            stats,
+                        };
                     }
                     on_progress(&stats);
                 }
@@ -652,27 +641,31 @@ pub fn solve_with_callback(
         }
     }
 
-    (None, stats)
+    SolveReport {
+        outcome: SolveOutcome::NoMatch,
+        stats,
+    }
 }
 
 /// Solve from an image directly.
 ///
 /// Extracts sources, then runs the solver.
 #[cfg(feature = "image-processing")]
-pub fn solve_image(
+pub fn solve_image_checked(
     image: &ndarray::Array2<f32>,
     indexes: &[&Index],
     extraction_config: &crate::extraction::ExtractionConfig,
     solver_config: &SolverConfig,
-) -> (Option<Solution>, SolveStats) {
+) -> Result<SolveReport, SolveInputError> {
     let sources = crate::extraction::extract_sources(image, extraction_config);
     let (h, w) = image.dim();
-    solve(&sources, indexes, (w as f64, h as f64), solver_config)
+    solve_checked(&sources, indexes, (w as f64, h as f64), solver_config)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::extraction::SourceError;
     use crate::geom::tan::TanWcs;
     use crate::index::builder::{IndexBuilderConfig, build_index};
     use std::f64::consts::PI;
@@ -738,6 +731,33 @@ mod tests {
         (sources, index, wcs)
     }
 
+    #[cfg(feature = "image-processing")]
+    #[test]
+    fn image_entry_point_returns_checked_errors_and_outcomes() {
+        let extraction = crate::extraction::ExtractionConfig::default();
+        let config = SolverConfig::default();
+        let empty = ndarray::Array2::<f32>::zeros((0, 10));
+        assert_eq!(
+            solve_image_checked(&empty, &[], &extraction, &config).unwrap_err(),
+            SolveInputError::Sources(SourceError::InvalidImageSize)
+        );
+        let image = ndarray::Array2::<f32>::zeros((10, 10));
+        assert!(matches!(
+            solve_image_checked(&image, &[], &extraction, &config)
+                .unwrap()
+                .outcome,
+            SolveOutcome::NoMatch
+        ));
+        let invalid = SolverConfig {
+            code_tolerance: f64::NAN,
+            ..config
+        };
+        assert_eq!(
+            solve_image_checked(&image, &[], &extraction, &invalid).unwrap_err(),
+            SolveInputError::Config(ConfigError::CodeTolerance)
+        );
+    }
+
     #[test]
     fn checked_outcomes_and_invalid_input_are_distinct() {
         let (sources, index, _) = make_synthetic_scenario();
@@ -750,7 +770,6 @@ mod tests {
         config.timeout = Some(Duration::ZERO);
         let timed_out = solve_checked(&sources, &[&index], (512.0, 512.0), &config).unwrap();
         assert!(matches!(timed_out.outcome, SolveOutcome::TimedOut));
-        assert!(timed_out.stats.timed_out);
         config.timeout = Some(Duration::MAX);
         assert!(matches!(
             solve_checked(&sources, &[&index], (512.0, 512.0), &config)
@@ -764,12 +783,12 @@ mod tests {
             SolveInputError::Config(ConfigError::CodeTolerance)
         );
         let mut callbacks = 0;
-        let (solution, stats) =
-            solve_with_callback(&sources, &[&index], (512.0, 512.0), &config, |_| {
+        let error =
+            solve_checked_with_callback(&sources, &[&index], (512.0, 512.0), &config, |_| {
                 callbacks += 1
-            });
-        assert!(solution.is_none());
-        assert_eq!(stats.invalid_config, Some(ConfigError::CodeTolerance));
+            })
+            .unwrap_err();
+        assert_eq!(error, SolveInputError::Config(ConfigError::CodeTolerance));
         assert_eq!(callbacks, 0);
         config = SolverConfig::default();
         let bad = [DetectedSource::new(-1.0, 0.0, 1.0).unwrap()];
@@ -868,7 +887,12 @@ mod tests {
             ..SolverConfig::default()
         };
 
-        let (solution, stats) = solve(&sources, &[&index], (512.0, 512.0), &config);
+        let report = solve_checked(&sources, &[&index], (512.0, 512.0), &config).unwrap();
+        let stats = report.stats;
+        let solution = match report.outcome {
+            crate::solver::SolveOutcome::Solved(solution) => Some(*solution),
+            crate::solver::SolveOutcome::TimedOut | crate::solver::SolveOutcome::NoMatch => None,
+        };
         assert!(solution.is_some(), "solver should find a solution");
         assert!(stats.accepted_log_odds.is_some());
 
@@ -926,11 +950,17 @@ mod tests {
         let mut call_count = 0usize;
         let mut last_verified = 0usize;
 
-        let (solution, _stats) =
-            solve_with_callback(&sources, &[&index], (512.0, 512.0), &config, |stats| {
+        let report =
+            solve_checked_with_callback(&sources, &[&index], (512.0, 512.0), &config, |stats| {
                 call_count += 1;
                 last_verified = stats.n_verified;
-            });
+            })
+            .unwrap();
+        let _stats = report.stats;
+        let solution = match report.outcome {
+            crate::solver::SolveOutcome::Solved(solution) => Some(*solution),
+            crate::solver::SolveOutcome::TimedOut | crate::solver::SolveOutcome::NoMatch => None,
+        };
 
         assert!(solution.is_some());
         assert!(
@@ -984,7 +1014,12 @@ mod tests {
             ..SolverConfig::default()
         };
 
-        let (solution, stats) = solve(&sources, &[&index], (1024.0, 1024.0), &config);
+        let report = solve_checked(&sources, &[&index], (1024.0, 1024.0), &config).unwrap();
+        let stats = report.stats;
+        let solution = match report.outcome {
+            crate::solver::SolveOutcome::Solved(solution) => Some(*solution),
+            crate::solver::SolveOutcome::TimedOut | crate::solver::SolveOutcome::NoMatch => None,
+        };
         assert!(solution.is_none(), "random sources should not solve");
         assert!(stats.accepted_log_odds.is_none());
     }
@@ -1007,7 +1042,12 @@ mod tests {
             ..SolverConfig::default()
         };
 
-        let (solution, _stats) = solve(&sources, &[&index], (512.0, 512.0), &config);
+        let report = solve_checked(&sources, &[&index], (512.0, 512.0), &config).unwrap();
+        let _stats = report.stats;
+        let solution = match report.outcome {
+            crate::solver::SolveOutcome::Solved(solution) => Some(*solution),
+            crate::solver::SolveOutcome::TimedOut | crate::solver::SolveOutcome::NoMatch => None,
+        };
         assert!(
             solution.is_none(),
             "wrong scale range should prevent solving"
@@ -1046,12 +1086,18 @@ mod tests {
             ..SolverConfig::default()
         };
 
-        let (solution, _stats) = solve(
+        let report = solve_checked(
             &sources,
             &[&decoy_index, &correct_index],
             (512.0, 512.0),
             &config,
-        );
+        )
+        .unwrap();
+        let _stats = report.stats;
+        let solution = match report.outcome {
+            crate::solver::SolveOutcome::Solved(solution) => Some(*solution),
+            crate::solver::SolveOutcome::TimedOut | crate::solver::SolveOutcome::NoMatch => None,
+        };
         assert!(
             solution.is_some(),
             "should solve with correct index among multiple"
@@ -1092,7 +1138,12 @@ mod tests {
         ];
 
         let config = SolverConfig::default();
-        let (solution, _stats) = solve(&sources, &[&index], (512.0, 512.0), &config);
+        let report = solve_checked(&sources, &[&index], (512.0, 512.0), &config).unwrap();
+        let _stats = report.stats;
+        let solution = match report.outcome {
+            crate::solver::SolveOutcome::Solved(solution) => Some(*solution),
+            crate::solver::SolveOutcome::TimedOut | crate::solver::SolveOutcome::NoMatch => None,
+        };
         assert!(solution.is_none(), "fewer than 4 sources should not solve");
     }
 
@@ -1100,7 +1151,12 @@ mod tests {
     fn no_indexes() {
         let (sources, _, _) = make_synthetic_scenario();
         let config = SolverConfig::default();
-        let (solution, _stats) = solve(&sources, &[], (512.0, 512.0), &config);
+        let report = solve_checked(&sources, &[], (512.0, 512.0), &config).unwrap();
+        let _stats = report.stats;
+        let solution = match report.outcome {
+            crate::solver::SolveOutcome::Solved(solution) => Some(*solution),
+            crate::solver::SolveOutcome::TimedOut | crate::solver::SolveOutcome::NoMatch => None,
+        };
         assert!(solution.is_none(), "no indexes should return None");
     }
 
@@ -1253,7 +1309,12 @@ mod tests {
             ..SolverConfig::default()
         };
 
-        let (solution, _stats) = solve(&sources, &[&index], image_size, &config);
+        let report = solve_checked(&sources, &[&index], image_size, &config).unwrap();
+        let _stats = report.stats;
+        let solution = match report.outcome {
+            crate::solver::SolveOutcome::Solved(solution) => Some(*solution),
+            crate::solver::SolveOutcome::TimedOut | crate::solver::SolveOutcome::NoMatch => None,
+        };
         assert!(
             solution.is_some(),
             "solver should find a solution with rotated WCS"
@@ -1287,7 +1348,12 @@ mod tests {
             },
             ..SolverConfig::default()
         };
-        let (solution, stats) = solve(&sources, &[&index], (512.0, 512.0), &config);
+        let report = solve_checked(&sources, &[&index], (512.0, 512.0), &config).unwrap();
+        let stats = report.stats;
+        let solution = match report.outcome {
+            crate::solver::SolveOutcome::Solved(solution) => Some(*solution),
+            crate::solver::SolveOutcome::TimedOut | crate::solver::SolveOutcome::NoMatch => None,
+        };
         assert!(solution.is_none());
         assert_eq!(
             stats.n_verified, 0,
@@ -1320,7 +1386,12 @@ mod tests {
             },
             ..SolverConfig::default()
         };
-        let (solution, stats) = solve(&sources, &[&index], (512.0, 512.0), &config);
+        let report = solve_checked(&sources, &[&index], (512.0, 512.0), &config).unwrap();
+        let stats = report.stats;
+        let solution = match report.outcome {
+            crate::solver::SolveOutcome::Solved(solution) => Some(*solution),
+            crate::solver::SolveOutcome::TimedOut | crate::solver::SolveOutcome::NoMatch => None,
+        };
         assert!(solution.is_none());
         assert_eq!(
             stats.n_verified, 0,
@@ -1348,7 +1419,12 @@ mod tests {
             },
             ..SolverConfig::default()
         };
-        let (solution, _) = solve(&sources, &[&index], (512.0, 512.0), &config);
+        let report = solve_checked(&sources, &[&index], (512.0, 512.0), &config).unwrap();
+        let _ = report.stats;
+        let solution = match report.outcome {
+            crate::solver::SolveOutcome::Solved(solution) => Some(*solution),
+            crate::solver::SolveOutcome::TimedOut | crate::solver::SolveOutcome::NoMatch => None,
+        };
         assert!(
             solution.is_some(),
             "wide scale_range that includes truth should still solve"

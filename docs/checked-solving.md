@@ -21,9 +21,11 @@ For valid attempts, match `report.outcome` on `SolveOutcome::Solved(solution)`,
 `TimedOut`, or `NoMatch`. `Solved` owns a boxed `Solution`; diagnostics are in
 `report.stats`. `solve_checked_with_callback` also exposes verification progress.
 
-The legacy `solve` and `solve_with_callback` signatures remain unchanged.
-Rejected inputs yield no solution and populate `stats.invalid_input` or
-`stats.invalid_config`. No search or callbacks occur on rejected input.
+Version 1.0 removes `solve`, `solve_with_callback`, and the tuple-returning
+`solve_image`. Use the checked APIs above and `solve_image_checked` (with the
+`image-processing` feature). `SolveStats` contains diagnostics only: errors
+come through `Result`, and timeout/no-match/success through `SolveOutcome`.
+No search or callbacks occur on rejected input.
 
 Timeout is a cooperative search budget, not a hard deadline. Input validation
 and index loading are outside the budget; source sorting and search setup are
