@@ -35,7 +35,7 @@ pub fn refine_solution(
     obs: &ObservationContext,
     config: &RefinementConfig,
 ) -> Result<RefinedSolution, RefinementError> {
-    let field_points: Vec<[f64; 2]> = field_sources.iter().map(|s| [s.x, s.y]).collect();
+    let field_points: Vec<[f64; 2]> = field_sources.iter().map(|s| [s.x(), s.y()]).collect();
     let field_indices: Vec<usize> = (0..field_sources.len()).collect();
     let field_tree = KdTree::<2>::build(field_points, field_indices);
 
@@ -95,12 +95,12 @@ pub fn refine_solution(
                 && nearest.dist_sq <= match_radius_sq
             {
                 let fs = &field_sources[nearest.index];
-                let dx = pred_x - fs.x;
-                let dy = pred_y - fs.y;
+                let dx = pred_x - fs.x();
+                let dy = pred_y - fs.y();
                 let residual_pix = (dx * dx + dy * dy).sqrt();
 
                 matched_app_xyz.push(app_xyz);
-                matched_field_xy.push((fs.x, fs.y));
+                matched_field_xy.push((fs.x(), fs.y()));
 
                 let weight = gaia_weight(astro, obs);
                 local_matches.push(RefinedMatch {

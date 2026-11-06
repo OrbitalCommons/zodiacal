@@ -99,11 +99,7 @@ fn make_scenario() -> (
 
         index_stars.push(IndexStar::without_pm(i as u64, ref_ra, ref_dec, i as f64));
 
-        field_sources.push(DetectedSource {
-            x: px,
-            y: py,
-            flux: 1000.0 - i as f64,
-        });
+        field_sources.push(DetectedSource::new(px, py, 1000.0 - i as f64).unwrap());
 
         catalog.insert(
             i as u64,
@@ -170,8 +166,8 @@ fn biased_initial_wcs_has_nontrivial_residuals() {
         let astro = catalog.get(i as u64).unwrap();
         let (app_ra, app_dec) = apparent_radec(astro, &obs).unwrap();
         if let Some((px, py)) = initial.radec_to_pixel(app_ra, app_dec) {
-            let dx = px - fs.x;
-            let dy = py - fs.y;
+            let dx = px - fs.x();
+            let dy = py - fs.y();
             let r_pix = (dx * dx + dy * dy).sqrt();
             let r_mas = r_pix * truth.pixel_scale() * 3_600_000.0;
             if r_mas > max_residual_mas {

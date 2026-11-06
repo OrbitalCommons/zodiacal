@@ -162,7 +162,7 @@ pub fn verify_solution(
     let mut matched_pairs = Vec::new();
 
     for (field_idx, source) in field_sources.iter().enumerate() {
-        let query = [source.x, source.y];
+        let query = [source.x(), source.y()];
         let matches = ref_tree.range_search(&query, match_radius_sq);
 
         // Distractor log-density (updated with matches found so far).
@@ -288,7 +288,7 @@ mod tests {
 
         let field_sources: Vec<DetectedSource> = pixel_positions
             .iter()
-            .map(|&(x, y)| DetectedSource { x, y, flux: 100.0 })
+            .map(|&(x, y)| DetectedSource::new(x, y, 100.0).unwrap())
             .collect();
 
         let config = VerifyConfig::default();
@@ -325,7 +325,7 @@ mod tests {
 
         let field_sources: Vec<DetectedSource> = pixel_positions
             .iter()
-            .map(|&(x, y)| DetectedSource { x, y, flux: 100.0 })
+            .map(|&(x, y)| DetectedSource::new(x, y, 100.0).unwrap())
             .collect();
 
         let config = VerifyConfig {
@@ -362,7 +362,7 @@ mod tests {
 
         let field_sources: Vec<DetectedSource> = pixel_positions
             .iter()
-            .map(|&(x, y)| DetectedSource { x, y, flux: 100.0 })
+            .map(|&(x, y)| DetectedSource::new(x, y, 100.0).unwrap())
             .collect();
 
         let config = VerifyConfig::default();
@@ -394,7 +394,7 @@ mod tests {
 
         let mut field_sources: Vec<DetectedSource> = pixel_positions
             .iter()
-            .map(|&(x, y)| DetectedSource { x, y, flux: 100.0 })
+            .map(|&(x, y)| DetectedSource::new(x, y, 100.0).unwrap())
             .collect();
 
         let mut state: u64 = 42;
@@ -406,11 +406,7 @@ mod tests {
         };
 
         for _ in 0..10 {
-            field_sources.push(DetectedSource {
-                x: rng() * 1024.0,
-                y: rng() * 1024.0,
-                flux: 50.0,
-            });
+            field_sources.push(DetectedSource::new(rng() * 1024.0, rng() * 1024.0, 50.0).unwrap());
         }
 
         let config = VerifyConfig {
@@ -461,11 +457,7 @@ mod tests {
         };
 
         let field_sources: Vec<DetectedSource> = (0..20)
-            .map(|_| DetectedSource {
-                x: rng() * 1024.0,
-                y: rng() * 1024.0,
-                flux: 50.0,
-            })
+            .map(|_| DetectedSource::new(rng() * 1024.0, rng() * 1024.0, 50.0).unwrap())
             .collect();
 
         let config = VerifyConfig::default();
@@ -571,11 +563,7 @@ mod tests {
         };
 
         let field_sources: Vec<DetectedSource> = (0..num_sources)
-            .map(|_| DetectedSource {
-                x: rng() * 1024.0,
-                y: rng() * 1024.0,
-                flux: 50.0,
-            })
+            .map(|_| DetectedSource::new(rng() * 1024.0, rng() * 1024.0, 50.0).unwrap())
             .collect();
 
         let config = VerifyConfig {
@@ -616,11 +604,7 @@ mod tests {
         // Detection at pixel (300, 400).
         let det_px = (300.0_f64, 400.0_f64);
         let (det_ra, det_dec) = wcs.pixel_to_radec(det_px.0, det_px.1);
-        let field_sources = vec![DetectedSource {
-            x: det_px.0,
-            y: det_px.1,
-            flux: 100.0,
-        }];
+        let field_sources = vec![DetectedSource::new(det_px.0, det_px.1, 100.0).unwrap()];
 
         // PM in mas/yr. 50 mas/yr × 14 yr = 700 mas drift in RA. At the
         // synthetic 1″/px plate scale, that's 0.7 px — comfortably

@@ -114,11 +114,7 @@ pub fn run(cfg: &BenchIndexesConfig) -> io::Result<()> {
         let sources: Vec<DetectedSource> = tc
             .sources
             .iter()
-            .map(|s| DetectedSource {
-                x: s.x,
-                y: s.y,
-                flux: s.flux,
-            })
+            .map(|s| DetectedSource::new(s.x, s.y, s.flux).unwrap())
             .collect();
 
         let mut solver_cfg = SolverConfig {

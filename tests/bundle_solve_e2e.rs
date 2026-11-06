@@ -187,7 +187,7 @@ fn synth_pointing(
             && py < IMAGE_SIZE.1
         {
             let flux = 10f64.powf(-0.4 * (s.mag - 12.0)); // 1.0 at mag 12
-            sources.push(DetectedSource { x: px, y: py, flux });
+            sources.push(DetectedSource::new(px, py, flux).unwrap());
         }
     }
     (wcs, sources)

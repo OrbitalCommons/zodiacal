@@ -35,7 +35,7 @@ pub fn tweak_solution(
     let mut sip = SipWcs::from_tan(initial_wcs.clone(), sip_order);
 
     // Build a 2D KD-tree of field source positions for matching.
-    let field_points: Vec<[f64; 2]> = field_sources.iter().map(|s| [s.x, s.y]).collect();
+    let field_points: Vec<[f64; 2]> = field_sources.iter().map(|s| [s.x(), s.y()]).collect();
     let field_indices: Vec<usize> = (0..field_sources.len()).collect();
     let field_tree = KdTree::<2>::build(field_points, field_indices);
 
@@ -88,7 +88,7 @@ pub fn tweak_solution(
             {
                 let fs = &field_sources[nearest.index];
                 matched_ref_px.push((tan_px, tan_py));
-                matched_field_px.push((fs.x, fs.y));
+                matched_field_px.push((fs.x(), fs.y()));
             }
         }
 
@@ -341,11 +341,7 @@ mod tests {
                 let (ra, dec) = wcs.pixel_to_radec(px, py);
 
                 stars.push(IndexStar::without_pm(count as u64, ra, dec, count as f64));
-                sources.push(DetectedSource {
-                    x: px,
-                    y: py,
-                    flux: 1000.0 - count as f64,
-                });
+                sources.push(DetectedSource::new(px, py, 1000.0 - count as f64).unwrap());
                 count += 1;
             }
         }
@@ -435,11 +431,7 @@ mod tests {
                 let v = py - wcs.crpix[1];
                 let dx = k * u * u;
                 let dy = k * v * v;
-                sources.push(DetectedSource {
-                    x: px - dx,
-                    y: py - dy,
-                    flux: 1000.0,
-                });
+                sources.push(DetectedSource::new(px - dx, py - dy, 1000.0).unwrap());
             }
         }
 
@@ -481,16 +473,8 @@ mod tests {
     fn too_few_sources_returns_error() {
         let wcs = make_test_wcs();
         let sources = vec![
-            DetectedSource {
-                x: 100.0,
-                y: 100.0,
-                flux: 1.0,
-            },
-            DetectedSource {
-                x: 200.0,
-                y: 200.0,
-                flux: 1.0,
-            },
+            DetectedSource::new(100.0, 100.0, 1.0).unwrap(),
+            DetectedSource::new(200.0, 200.0, 1.0).unwrap(),
         ];
 
         let (_, index) = make_test_index(&wcs, 10);

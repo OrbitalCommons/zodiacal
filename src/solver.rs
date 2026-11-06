@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use starfield::Equatorial;
 
-use crate::extraction::DetectedSource;
+use crate::extraction::{DetectedSource, SourceError, validate_sources};
 use crate::fitting::{FitError, fit_tan_wcs};
 use crate::geom::sphere::{angular_distance, radec_to_xyz};
 use crate::geom::tan::TanWcs;
@@ -98,6 +98,8 @@ pub struct Solution {
 /// Statistics collected during a solve attempt.
 #[derive(Debug, Clone)]
 pub struct SolveStats {
+    /// Input rejected before solving; no sources are silently discarded.
+    pub invalid_input: Option<SourceError>,
     /// Total number of WCS candidates that passed cheap filters and reached verification.
     pub n_verified: usize,
     /// Best rejected candidate: (log_odds, n_matched). None if no rejections.
@@ -192,8 +194,12 @@ fn try_quad(
     let (c_orig, sc) = sorted[c];
     let (d_orig, sd) = sorted[d];
 
-    let positions: [(f64, f64); DIMQUADS] =
-        [(sa.x, sa.y), (sb.x, sb.y), (sc.x, sc.y), (sd.x, sd.y)];
+    let positions: [(f64, f64); DIMQUADS] = [
+        (sa.x(), sa.y()),
+        (sb.x(), sb.y()),
+        (sc.x(), sc.y()),
+        (sd.x(), sd.y()),
+    ];
     let codes = compute_field_codes(&positions);
     let orig_indices = [a_orig, b_orig, c_orig, d_orig];
 
@@ -363,6 +369,7 @@ pub fn solve_with_callback(
     mut on_progress: impl FnMut(&SolveStats),
 ) -> (Option<Solution>, SolveStats) {
     let mut stats = SolveStats {
+        invalid_input: validate_sources(sources, image_size).err(),
         n_verified: 0,
         best_rejected: None,
         best_rejected_wcs: None,
@@ -370,7 +377,7 @@ pub fn solve_with_callback(
         timed_out: false,
     };
 
-    if sources.len() < DIMQUADS || indexes.is_empty() {
+    if stats.invalid_input.is_some() || sources.len() < DIMQUADS || indexes.is_empty() {
         return (None, stats);
     }
 
@@ -379,8 +386,8 @@ pub fn solve_with_callback(
     // 1. Sort sources by flux (descending = brightest first).
     let mut sorted: Vec<(usize, &DetectedSource)> = sources.iter().enumerate().collect();
     sorted.sort_by(|a, b| {
-        b.1.flux
-            .partial_cmp(&a.1.flux)
+        b.1.flux()
+            .partial_cmp(&a.1.flux())
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     sorted.truncate(config.max_field_stars);
@@ -416,8 +423,8 @@ pub fn solve_with_callback(
                    dist_sq: f64|
      -> bool {
         let (_, si) = sorted[i];
-        let cdx = si.x - mid_x;
-        let cdy = si.y - mid_y;
+        let cdx = si.x() - mid_x;
+        let cdy = si.y() - mid_y;
         cdx * cdx + cdy * cdy <= dist_sq
     };
 
@@ -439,8 +446,8 @@ pub fn solve_with_callback(
             let (_, sa) = sorted[a];
             let (_, sb) = sorted[b];
 
-            let dx = sb.x - sa.x;
-            let dy = sb.y - sa.y;
+            let dx = sb.x() - sa.x();
+            let dy = sb.y() - sa.y();
             let dist_sq = dx * dx + dy * dy;
             let dist = dist_sq.sqrt();
             if dist < 1e-10 {
@@ -450,8 +457,8 @@ pub fn solve_with_callback(
                 continue;
             }
 
-            let mid_x = (sa.x + sb.x) / 2.0;
-            let mid_y = (sa.y + sb.y) / 2.0;
+            let mid_x = (sa.x() + sb.x()) / 2.0;
+            let mid_y = (sa.y() + sb.y()) / 2.0;
 
             // C and D candidates from [0..n), excluding a.
             let candidates: Vec<usize> = (0..n)
@@ -490,8 +497,8 @@ pub fn solve_with_callback(
                 let (_, sa) = sorted[a];
                 let (_, sb) = sorted[b];
 
-                let dx = sb.x - sa.x;
-                let dy = sb.y - sa.y;
+                let dx = sb.x() - sa.x();
+                let dy = sb.y() - sa.y();
                 let dist_sq = dx * dx + dy * dy;
                 let dist = dist_sq.sqrt();
                 if dist < 1e-10 {
@@ -501,8 +508,8 @@ pub fn solve_with_callback(
                     continue;
                 }
 
-                let mid_x = (sa.x + sb.x) / 2.0;
-                let mid_y = (sa.y + sb.y) / 2.0;
+                let mid_x = (sa.x() + sb.x()) / 2.0;
+                let mid_y = (sa.y() + sb.y()) / 2.0;
 
                 // Check if n is in the bounding circle for this backbone.
                 if !in_bbox(&sorted, n, mid_x, mid_y, dist_sq) {
@@ -597,11 +604,7 @@ mod tests {
             let py = 30.0 + rng() * 452.0;
             let (ra, dec) = wcs.pixel_to_radec(px, py);
             catalog.push((i as u64, ra, dec, i as f64));
-            sources.push(DetectedSource {
-                x: px,
-                y: py,
-                flux: 1000.0 - i as f64 * 10.0,
-            });
+            sources.push(DetectedSource::new(px, py, 1000.0 - i as f64 * 10.0).unwrap());
         }
 
         // Compute the angular scale of the field to set index scale bounds.
@@ -739,11 +742,7 @@ mod tests {
 
         // Random pixel positions that don't correspond to index stars.
         let sources: Vec<DetectedSource> = (0..15)
-            .map(|_| DetectedSource {
-                x: rng() * 1024.0,
-                y: rng() * 1024.0,
-                flux: rng() * 1000.0,
-            })
+            .map(|_| DetectedSource::new(rng() * 1024.0, rng() * 1024.0, rng() * 1000.0).unwrap())
             .collect();
 
         let config = SolverConfig {
@@ -860,21 +859,9 @@ mod tests {
         let (_, index, _) = make_synthetic_scenario();
 
         let sources = vec![
-            DetectedSource {
-                x: 100.0,
-                y: 100.0,
-                flux: 100.0,
-            },
-            DetectedSource {
-                x: 200.0,
-                y: 200.0,
-                flux: 90.0,
-            },
-            DetectedSource {
-                x: 300.0,
-                y: 300.0,
-                flux: 80.0,
-            },
+            DetectedSource::new(100.0, 100.0, 100.0).unwrap(),
+            DetectedSource::new(200.0, 200.0, 90.0).unwrap(),
+            DetectedSource::new(300.0, 300.0, 80.0).unwrap(),
         ];
 
         let config = SolverConfig::default();
@@ -1010,11 +997,7 @@ mod tests {
             let py = 30.0 + rng() * 452.0;
             let (ra, dec) = wcs.pixel_to_radec(px, py);
             catalog.push((i as u64, ra, dec, i as f64));
-            sources.push(DetectedSource {
-                x: px,
-                y: py,
-                flux: 1000.0 - i as f64 * 10.0,
-            });
+            sources.push(DetectedSource::new(px, py, 1000.0 - i as f64 * 10.0).unwrap());
         }
 
         let scale_rad = (pixel_scale_arcsec / 3600.0).to_radians();
