@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- Benchmark pointing comparisons can select a calibrated boresight with
+  `--boresight-offset-x/y`. Frozen set1 fixtures require Y = -1; set2/set3 use
+  zero. WCS `field_center()` behavior is unchanged; see
+  [the residual investigation](docs/field-center-residuals.md).
+- Add thread-count and full-field reprojection regression coverage for #98;
+  its original failure was resolved by the quad-radius correction in #133.
+
 ## 1.1.0
 
 ### Changed

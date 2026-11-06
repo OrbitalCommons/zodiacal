@@ -172,8 +172,10 @@ impl TanWcs {
 
     /// RA, Dec (radians) at the legacy center `(width/2, height/2)`.
     /// This is half a pixel above the geometric pixel-center midpoint on each
-    /// axis. Retained pending the residual investigation in issue #67.
-    /// Use [`Self::geometric_center_axes`] for an explicit geometric boresight.
+    /// axis. This convention matches some renderers, but is not necessarily
+    /// the optical boresight (in particular after an image flip). Use
+    /// [`Self::pixel_to_radec`] at the calibrated boresight pixel, or
+    /// [`Self::geometric_center_axes`] for the geometric midpoint.
     pub fn field_center(&self) -> (f64, f64) {
         self.pixel_to_radec(self.image_size[0] / 2.0, self.image_size[1] / 2.0)
     }
@@ -181,7 +183,7 @@ impl TanWcs {
     /// Legacy angular radius about `(width/2, height/2)`, enclosing the four
     /// coordinates `(0,0)`, `(width,0)`, `(0,height)`, `(width,height)`.
     /// These are legacy extent coordinates, not the last pixel centers or
-    /// the exact outer pixel edges. Retained for compatibility with issue #67.
+    /// the exact outer pixel edges. Retained for compatibility.
     pub fn field_radius(&self) -> f64 {
         let (cx, cy) = (self.image_size[0] / 2.0, self.image_size[1] / 2.0);
         let center = self.pixel_to_xyz(cx, cy);
@@ -379,6 +381,42 @@ mod tests {
         let (ra, dec) = wcs.field_center();
         assert_close(ra, wcs.crval[0], EPS);
         assert_close(dec, wcs.crval[1], EPS);
+    }
+
+    #[test]
+    fn vertical_flip_preserves_geometric_center_not_legacy_center() {
+        // #67: flipping zero-based row centers uses y' = height - 1 - y.
+        // A renderer boresight at H/2 therefore moves to H/2 - 1.
+        for size in [[100.0, 80.0], [101.0, 81.0]] {
+            for angle in [0.0_f64, 0.7] {
+                let (sin, cos) = angle.sin_cos();
+                let scale = 1e-5;
+                let original = TanWcs {
+                    crval: [1.0, 0.5],
+                    crpix: [size[0] / 2.0, size[1] / 2.0],
+                    cd: [[scale * cos, -scale * sin], [scale * sin, scale * cos]],
+                    image_size: size,
+                };
+                let mut flipped = original.clone();
+                flipped.crpix[1] = size[1] - 1.0 - original.crpix[1];
+                flipped.cd[0][1] *= -1.0;
+                flipped.cd[1][1] *= -1.0;
+                let (x, y) = original.geometric_pixel_center().unwrap();
+                let a = original.pixel_to_xyz(x, y);
+                let b = flipped.pixel_to_xyz(x, y);
+                assert!(sphere::angular_distance(a, b) < 1e-12);
+                let truth = flipped.pixel_to_radec(size[0] / 2.0, size[1] / 2.0 - 1.0);
+                assert_close(truth.0, original.crval[0], 1e-12);
+                assert_close(truth.1, original.crval[1], 1e-12);
+                let legacy = flipped.field_center();
+                assert!(
+                    sphere::angular_distance(
+                        sphere::radec_to_xyz(legacy.0, legacy.1),
+                        sphere::radec_to_xyz(truth.0, truth.1),
+                    ) > scale * 0.99
+                );
+            }
+        }
     }
 
     #[test]

@@ -42,10 +42,12 @@ pub struct BenchIndexesConfig {
     pub test_cases_dir: PathBuf,
     pub limit: Option<usize>,
     pub scale_hint: bool,
+    pub boresight: crate::bench_boresight::BoresightOffset,
     pub timeout_secs: u64,
 }
 
 pub fn run(cfg: &BenchIndexesConfig) -> io::Result<()> {
+    eprintln!("Benchmark comparison: {:?}", cfg.boresight);
     if cfg.index_files.is_empty() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -156,7 +158,7 @@ pub fn run(cfg: &BenchIndexesConfig) -> io::Result<()> {
 
         let truth_xyz = radec_to_xyz(tc.ra_deg.to_radians(), tc.dec_deg.to_radians());
         let wcs_error_arcsec = |wcs: &zodiacal::geom::tan::TanWcs| -> f64 {
-            let (got_ra, got_dec) = wcs.field_center();
+            let (got_ra, got_dec) = cfg.boresight.radec(wcs);
             let got_xyz = radec_to_xyz(got_ra, got_dec);
             angular_distance(truth_xyz, got_xyz).to_degrees() * 3600.0
         };
