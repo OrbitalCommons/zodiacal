@@ -3,6 +3,63 @@
 ## Unreleased
 
 ### Changed
+- The `fits` feature uses fitsio-pure 0.14 (was 0.9). Its compat image shapes are now row-major,
+  as in `fitsio`, so the FITS loader reads width and height from the last two axes. Output is
+  unchanged: extracting from a 480×300 image gives byte-identical results before and after.
+
+## 0.5.1
+
+### Added
+- `refit` module: robust TAN refit from verified correspondences.
+  - `refit_tan`: least-squares projective fit (eight homography coefficients from normalised
+    pixels to the solution's tangent plane), re-expressed as a TAN WCS centred on the image.
+    Rejects rank-deficient geometry, out-of-range pairs and non-finite inputs.
+  - `robust_refit_tan`: deterministic RANSAC over that fit (all pairs, then seeded four-pair
+    samples), counting each star once through its closest source.
+  - `refine_solution`: re-verifies a solver solution exhaustively, then keeps up to
+    `RefitConfig::rounds` refits that pass the caller's acceptance config.
+  - All three take an optional observation epoch, applied to star positions exactly as
+    `verify_solution` does. With the defaults this matches the refinement the OrbitalCommons
+    browser demo shipped with.
+- `VerifyConfig::exhaustive`: a copy with infinite accept/bail thresholds, for gathering every
+  correspondence; judge acceptance with the original config.
+
+## 0.5.0
+
+Breaking: public types and signatures changed since 0.4.1 (proper-motion fields on `IndexStar`,
+`verify_solution` takes an observation epoch, and other changes listed below).
+
+### Added
+- Builds and runs on `wasm32-unknown-unknown`. Depend on zodiacal with
+  `default-features = false`; solving, verification, fitting and in-memory indexes work in the
+  browser, while file and memory-mapped index loading stay native-only (see the README). CI
+  checks the wasm32 build and runs solver tests under Node with a timeout, so clock reads happen
+  in the JS environment.
+- `datastore` feature (on by default, and enabled by `cli`), forwarding starfield's local data
+  cache. Native users get the same behaviour as before; browser builds turn it off.
+- Publish workflow: a version that is not yet on crates.io is published when it merges to main.
+
+### Changed
+- starfield is now a `default-features = false` dependency (requires starfield 0.18.2, whose
+  downloaders are native-only).
+- Timing (`Instant`, and `SystemTime` in the multiband cell builder) uses `web-time`, which is
+  `std::time` on native targets and the browser clock on wasm32. Writing index files and
+  sidecars still uses process ids and the filesystem, so those paths remain native-only.
+
+### Fixed
+- `extract`: background/noise estimation and the Otsu threshold now ignore
+  non-finite pixels and sort with `total_cmp`. NaN padding (the
+  off-footprint area of drizzled HST products) used to break the
+  `partial_cmp` sort, yielding a NaN or wildly wrong median/MAD and
+  therefore zero detections on ~29% of the `hubble-f606w` corpus
+  (47% of ACS/WFC), and skewed thresholds on the rest.
+
+### Changed
+- Bump starfield 0.12 → 0.18. `zodiacal-tools` drops the
+  `starfield-datasources` git dependency (`starfield-gaia`) in favour of
+  starfield's `gaia` feature (`starfield::catalogs::gaia`). Gaia shard
+  downloads now resolve through the starfield datastore
+  (`local → STARFIELD_MIRROR → upstream only with STARFIELD_ALLOW_UPSTREAM=1`).
 - Move `test_cases/` (1000 JSON solver fixtures) out of the repo into the new
   data repo [OrbitalCommons/zodiacal-test-cases](https://github.com/OrbitalCommons/zodiacal-test-cases)
   under `set1-legacy/` (#102). Keeps ~13 MB of JSON out of the source checkout

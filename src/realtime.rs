@@ -9,7 +9,8 @@
 //! [`crate::solver::solve`] API.
 
 use std::io;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 use starfield::time::Time;
 

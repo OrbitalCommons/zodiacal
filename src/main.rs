@@ -279,10 +279,11 @@ fn load_fits(path: &Path) -> Array2<f32> {
         process::exit(1);
     });
 
-    // Standard FITS: NAXIS1 = fastest-varying axis = image cols (width),
-    // NAXIS2 = slower axis = image rows (height), origin bottom-left.
-    let cols = shape[0];
-    let rows = shape[1];
+    // The shape is row-major, as in fitsio: [.., NAXIS2, NAXIS1]. NAXIS1 is
+    // the fastest-varying axis = image cols (width), NAXIS2 = image rows
+    // (height), origin bottom-left.
+    let cols = shape[shape.len() - 1];
+    let rows = shape[shape.len() - 2];
     eprintln!("FITS: {}x{}", cols, rows);
 
     // Read pixels as f32 (compat API handles BSCALE/BZERO automatically)
@@ -450,6 +451,21 @@ fn cmd_solve(
     }
 }
 
+fn discover_batch_files(pattern: &Path) -> Result<Vec<PathBuf>, String> {
+    let pattern_str = pattern
+        .to_str()
+        .ok_or_else(|| format!("glob path is not valid UTF-8: {}", pattern.display()))?;
+    let paths = glob::glob(pattern_str)
+        .map_err(|e| format!("invalid glob pattern '{}': {e}", pattern.display()))?;
+    let mut files = paths
+        .map(|entry| {
+            entry.map_err(|e| format!("cannot access {}: {}", e.path().display(), e.error()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    files.sort();
+    Ok(files)
+}
+
 fn cmd_batch_solve(
     dir: &Path,
     index_paths: &[PathBuf],
@@ -471,14 +487,10 @@ fn cmd_batch_solve(
     eprintln!("Loaded {} index(es)", indexes.len());
 
     let glob_pattern = dir.join(pattern);
-    let mut files: Vec<PathBuf> = glob::glob(glob_pattern.to_str().unwrap())
-        .unwrap_or_else(|e| {
-            eprintln!("Invalid glob pattern: {e}");
-            process::exit(1);
-        })
-        .filter_map(|r| r.ok())
-        .collect();
-    files.sort();
+    let files = discover_batch_files(&glob_pattern).unwrap_or_else(|e| {
+        eprintln!("Failed to discover batch files: {e}");
+        process::exit(1);
+    });
 
     if files.is_empty() {
         eprintln!("No files matched pattern '{}'", glob_pattern.display());
@@ -771,11 +783,28 @@ fn cmd_build_index_series(
 ) {
     use starfield::catalogs::MinimalCatalog;
 
+    if !scale_lower.is_finite()
+        || !scale_upper.is_finite()
+        || scale_lower <= 0.0
+        || scale_upper <= scale_lower
+        || !scale_factor.is_finite()
+        || scale_factor <= 1.0
+    {
+        eprintln!(
+            "Invalid scales: require finite 0 < --scale-lower < --scale-upper and finite --scale-factor > 1"
+        );
+        process::exit(1);
+    }
+
     // Compute bands: each band covers [lo, lo * scale_factor].
     let mut bands: Vec<(f64, f64)> = Vec::new();
     let mut lo = scale_lower;
     while lo < scale_upper {
         let hi = (lo * scale_factor).min(scale_upper);
+        if hi <= lo {
+            eprintln!("Scale factor is too close to 1 to advance the band bounds");
+            process::exit(1);
+        }
         bands.push((lo, hi));
         lo = hi;
         if (hi - scale_upper).abs() < 1e-10 {
@@ -1423,5 +1452,65 @@ fn main() {
         Commands::Info { index } => {
             cmd_info(index);
         }
+    }
+}
+
+#[cfg(test)]
+mod batch_discovery_tests {
+    use super::*;
+
+    #[test]
+    fn reports_invalid_pattern() {
+        let error = discover_batch_files(Path::new("[")).unwrap_err();
+        assert!(error.contains("invalid glob pattern"));
+    }
+
+    #[test]
+    fn returns_sorted_matches() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["b.json", "a.json", "ignored.txt"] {
+            std::fs::write(dir.path().join(name), "").unwrap();
+        }
+        assert_eq!(
+            discover_batch_files(&dir.path().join("*.json")).unwrap(),
+            vec![dir.path().join("a.json"), dir.path().join("b.json")]
+        );
+        assert!(
+            discover_batch_files(&dir.path().join("*.fits"))
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reports_unreadable_directory_instead_of_partial_results() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let blocked = dir.path().join("blocked");
+        std::fs::create_dir(&blocked).unwrap();
+        std::fs::write(dir.path().join("visible.json"), "").unwrap();
+        std::fs::write(blocked.join("hidden.json"), "").unwrap();
+        let original = std::fs::metadata(&blocked).unwrap().permissions();
+        std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        // Privileged runners may bypass Unix permission checks.
+        let unreadable = std::fs::read_dir(&blocked).is_err();
+        let result = discover_batch_files(&dir.path().join("**/*.json"));
+        std::fs::set_permissions(&blocked, original).unwrap();
+        if unreadable {
+            let error = result.unwrap_err();
+            assert!(error.contains("cannot access"), "{error}");
+            assert!(error.contains("blocked"), "{error}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reports_non_utf8_path_without_panicking() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+        let path = PathBuf::from(OsString::from_vec(b"bad-\xff/*.json".to_vec()));
+        let error = discover_batch_files(&path).unwrap_err();
+        assert!(error.contains("not valid UTF-8"));
     }
 }

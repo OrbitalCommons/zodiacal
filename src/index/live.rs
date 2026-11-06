@@ -14,7 +14,8 @@
 
 use std::collections::{HashMap, HashSet};
 use std::io;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 use crate::geom::sphere::radec_to_xyz;
 use crate::kdtree::{KdForest, KdTree};

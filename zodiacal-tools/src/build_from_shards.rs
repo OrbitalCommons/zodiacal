@@ -19,8 +19,8 @@ use std::sync::Mutex;
 use std::time::Instant;
 
 use rayon::prelude::*;
-use starfield_gaia::download::Downloader;
-use starfield_gaia::{Dr3, Dr3Catalog, Dr3Entry};
+use starfield::catalogs::gaia::download::Downloader;
+use starfield::catalogs::gaia::{Dr3, Dr3Catalog, Dr3Entry};
 
 use zodiacal::index::builder::{IndexBuilderConfig, build_index};
 use zodiacal::refinement::{DEFAULT_PIVOT_STRIDE, SidecarRecord, write_sidecar};
@@ -329,8 +329,8 @@ fn with_suffix(prefix: &Path, suffix: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use starfield_gaia::common::core::{GaiaCore, VarFlag};
-    use starfield_gaia::dr3::entry::Dr3Entry;
+    use starfield::catalogs::gaia::common::core::{GaiaCore, VarFlag};
+    use starfield::catalogs::gaia::dr3::entry::Dr3Entry;
 
     fn make_entry(source_id: u64, ra: f64, dec: f64, mag: f64) -> Dr3Entry {
         Dr3Entry {

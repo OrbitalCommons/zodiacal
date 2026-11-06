@@ -249,6 +249,22 @@ let sources: Vec<DetectedSource> = /* from extract_sources() or your own pipelin
 let (solution, stats) = solve(&sources, &[&index], (image_w, image_h), &SolverConfig::default());
 ```
 
+### In the Browser (WebAssembly)
+
+zodiacal builds for `wasm32-unknown-unknown` with default features off:
+
+```toml
+zodiacal = { version = "0.5", default-features = false }
+```
+
+Solving, verification, fitting and in-memory index building work in the browser, and solver
+timeouts use the browser clock. Anything that touches the filesystem does not:
+`Index::load`, `LiveIndex`, memory-mapped index sources, index and sidecar writers, and
+starfield's `datastore` cache are native-only. In the browser, fetch index data in the host
+and construct an `Index` in memory (its fields are public, or use
+`index::builder::build_index` on a star list). rayon runs single-threaded. CI checks the wasm32
+build and runs solver tests under Node (`tests/wasm.rs`).
+
 ### High-Precision Refinement (10 mas absolute astrometry)
 
 After the blind solve produces a TAN+SIP solution, the `refinement` module re-fits the WCS using each matched catalog star's **apparent direction** at the observation time — applying proper motion, parallax, light-time, and stellar aberration via the [starfield](https://github.com/OrbitalCommons/starfield) apparent-place pipeline.

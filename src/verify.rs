@@ -40,6 +40,24 @@ impl Default for VerifyConfig {
     }
 }
 
+impl VerifyConfig {
+    /// A copy that never stops early, so verification examines every source and returns all
+    /// correspondences in `matched_pairs`.
+    ///
+    /// The infinite thresholds make this config useless for deciding acceptance: a result
+    /// verified with it should still be judged with the original config, as in
+    /// `result.is_accepted(&original)`.
+    pub fn exhaustive(&self) -> Self {
+        Self {
+            match_radius_pix: self.match_radius_pix,
+            distractor_fraction: self.distractor_fraction,
+            log_odds_accept: f64::INFINITY,
+            log_odds_bail: f64::NEG_INFINITY,
+            min_matches: self.min_matches,
+        }
+    }
+}
+
 /// Result of verification.
 #[derive(Debug, Clone)]
 pub struct VerifyResult {
