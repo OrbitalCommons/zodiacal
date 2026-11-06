@@ -11,6 +11,7 @@ use crate::fitting::{FitError, fit_tan_wcs};
 use crate::geom::sphere::{angular_distance, radec_to_xyz};
 use crate::geom::tan::TanWcs;
 use crate::index::Index;
+use crate::input::{ConfigError, SolveInputError};
 use crate::quads::{DIMCODES, DIMQUADS};
 use crate::verify::{VerifyConfig, VerifyResult, verify_solution};
 
@@ -24,6 +25,32 @@ pub struct SkyRegion {
 }
 
 impl SkyRegion {
+    /// Construct a validated region. RA may be any finite angle; declination
+    /// must lie in [-pi/2, pi/2], and radius in [0, pi].
+    pub fn try_from_radians(center: Equatorial, radius_rad: f64) -> Result<Self, ConfigError> {
+        let region = Self { center, radius_rad };
+        region.validate()?;
+        Ok(region)
+    }
+    /// Checked region construction with radius in degrees.
+    pub fn try_from_degrees(center: Equatorial, radius_deg: f64) -> Result<Self, ConfigError> {
+        Self::try_from_radians(center, radius_deg.to_radians())
+    }
+    /// Validate even a region assembled or modified through public fields.
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        if !self.center.ra.is_finite()
+            || !self.center.dec.is_finite()
+            || self.center.dec.abs() > std::f64::consts::FRAC_PI_2
+        {
+            return Err(ConfigError::RegionCenter);
+        }
+        if !self.radius_rad.is_finite() || !(0.0..=std::f64::consts::PI).contains(&self.radius_rad)
+        {
+            return Err(ConfigError::RegionRadius);
+        }
+        Ok(())
+    }
+
     /// Create a sky region from center coordinates and radius in radians.
     pub fn from_radians(center: Equatorial, radius_rad: f64) -> Self {
         Self { center, radius_rad }
@@ -74,6 +101,36 @@ pub struct SolverConfig {
     pub obs_epoch: Option<f64>,
 }
 
+impl SolverConfig {
+    /// Validate the algorithm's constraints. Public fields remain available for
+    /// compatibility; all solve entry points revalidate before searching.
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        if let Some((lo, hi)) = self.scale_range
+            && (!lo.is_finite() || !hi.is_finite() || lo <= 0.0 || hi < lo)
+        {
+            return Err(ConfigError::ScaleRange);
+        }
+        if self.max_field_stars < DIMQUADS {
+            return Err(ConfigError::FieldStarCount);
+        }
+        if !self.code_tolerance.is_finite() || self.code_tolerance < 0.0 {
+            return Err(ConfigError::CodeTolerance);
+        }
+        if self.obs_epoch.is_some_and(|epoch| !epoch.is_finite()) {
+            return Err(ConfigError::ObservationEpoch);
+        }
+        if let Some(region) = &self.within {
+            region.validate()?;
+        }
+        self.verify.validate()
+    }
+    /// Finish checked construction after setting fields on a default config.
+    pub fn validated(self) -> Result<Self, ConfigError> {
+        self.validate()?;
+        Ok(self)
+    }
+}
+
 impl Default for SolverConfig {
     fn default() -> Self {
         Self {
@@ -99,6 +156,8 @@ pub struct Solution {
 /// Statistics collected during a solve attempt.
 #[derive(Debug, Clone)]
 pub struct SolveStats {
+    /// Configuration rejected before searching (legacy solve compatibility).
+    pub invalid_config: Option<ConfigError>,
     /// Input rejected before solving; no sources are silently discarded.
     pub invalid_input: Option<SourceError>,
     /// Total number of WCS candidates that passed cheap filters and reached verification.
@@ -111,6 +170,52 @@ pub struct SolveStats {
     pub accepted_log_odds: Option<f64>,
     /// Whether the solve timed out.
     pub timed_out: bool,
+}
+
+/// Explicit outcome of a valid solve attempt. Invalid input is a separate error.
+#[derive(Debug, Clone)]
+pub enum SolveOutcome {
+    Solved(Box<Solution>),
+    TimedOut,
+    NoMatch,
+}
+
+/// Outcome and diagnostics from a checked solve.
+#[derive(Debug, Clone)]
+pub struct SolveReport {
+    pub outcome: SolveOutcome,
+    pub stats: SolveStats,
+}
+
+/// Validate sources/configuration and solve without requiring outcome inference.
+/// Timeout is a cooperative search budget, not a hard wall-clock guarantee.
+/// Empty indexes or fewer than four sources produce NoMatch, even with zero timeout.
+pub fn solve_checked(
+    sources: &[DetectedSource],
+    indexes: &[&Index],
+    image_size: (f64, f64),
+    config: &SolverConfig,
+) -> Result<SolveReport, SolveInputError> {
+    solve_checked_with_callback(sources, indexes, image_size, config, |_| {})
+}
+
+/// Checked solve with the same candidate-verification callback as [`solve_with_callback`].
+pub fn solve_checked_with_callback(
+    sources: &[DetectedSource],
+    indexes: &[&Index],
+    image_size: (f64, f64),
+    config: &SolverConfig,
+    on_progress: impl FnMut(&SolveStats),
+) -> Result<SolveReport, SolveInputError> {
+    validate_sources(sources, image_size)?;
+    config.validate()?;
+    let (solution, stats) = solve_with_callback(sources, indexes, image_size, config, on_progress);
+    let outcome = match solution {
+        Some(solution) => SolveOutcome::Solved(Box::new(solution)),
+        None if stats.timed_out => SolveOutcome::TimedOut,
+        None => SolveOutcome::NoMatch,
+    };
+    Ok(SolveReport { outcome, stats })
 }
 
 /// Information about the quad that produced the solution.
@@ -370,6 +475,7 @@ pub fn solve_with_callback(
     mut on_progress: impl FnMut(&SolveStats),
 ) -> (Option<Solution>, SolveStats) {
     let mut stats = SolveStats {
+        invalid_config: config.validate().err(),
         invalid_input: validate_sources(sources, image_size).err(),
         n_verified: 0,
         best_rejected: None,
@@ -378,11 +484,16 @@ pub fn solve_with_callback(
         timed_out: false,
     };
 
-    if stats.invalid_input.is_some() || sources.len() < DIMQUADS || indexes.is_empty() {
+    if stats.invalid_input.is_some()
+        || stats.invalid_config.is_some()
+        || sources.len() < DIMQUADS
+        || indexes.is_empty()
+    {
         return (None, stats);
     }
 
-    let deadline = config.timeout.map(|d| Instant::now() + d);
+    // Comparing elapsed time avoids overflow for any representable Duration.
+    let start = Instant::now();
 
     // 1. Sort sources by flux (descending = brightest first).
     let mut sorted: Vec<(usize, &DetectedSource)> = sources.iter().enumerate().collect();
@@ -433,8 +544,9 @@ pub fn solve_with_callback(
     //    Star n must participate in every quad tried at this iteration.
     //    This ensures each unique quad is tried exactly once.
     for n in 2..sorted.len() {
-        if let Some(dl) = deadline
-            && Instant::now() > dl
+        if config
+            .timeout
+            .is_some_and(|budget| start.elapsed() >= budget)
         {
             stats.timed_out = true;
             return (None, stats);
@@ -488,8 +600,9 @@ pub fn solve_with_callback(
         // Phase 2: n is off-diagonal (C = n).
         // Try all backbone pairs A < B < n, with C = n and D from [0..n).
         for a in 0..n {
-            if let Some(dl) = deadline
-                && Instant::now() > dl
+            if config
+                .timeout
+                .is_some_and(|budget| start.elapsed() >= budget)
             {
                 stats.timed_out = true;
                 return (None, stats);
@@ -623,6 +736,119 @@ mod tests {
         let index = build_index(&catalog, &index_config);
 
         (sources, index, wcs)
+    }
+
+    #[test]
+    fn checked_outcomes_and_invalid_input_are_distinct() {
+        let (sources, index, _) = make_synthetic_scenario();
+        let mut config = SolverConfig::default().validated().unwrap();
+        let solved = solve_checked(&sources, &[&index], (512.0, 512.0), &config).unwrap();
+        assert!(matches!(solved.outcome, SolveOutcome::Solved(_)));
+        assert!(solved.stats.accepted_log_odds.is_some());
+        let no_match = solve_checked(&sources, &[], (512.0, 512.0), &config).unwrap();
+        assert!(matches!(no_match.outcome, SolveOutcome::NoMatch));
+        config.timeout = Some(Duration::ZERO);
+        let timed_out = solve_checked(&sources, &[&index], (512.0, 512.0), &config).unwrap();
+        assert!(matches!(timed_out.outcome, SolveOutcome::TimedOut));
+        assert!(timed_out.stats.timed_out);
+        config.timeout = Some(Duration::MAX);
+        assert!(matches!(
+            solve_checked(&sources, &[&index], (512.0, 512.0), &config)
+                .unwrap()
+                .outcome,
+            SolveOutcome::Solved(_)
+        ));
+        config.code_tolerance = f64::NAN;
+        assert_eq!(
+            solve_checked(&sources, &[&index], (512.0, 512.0), &config).unwrap_err(),
+            SolveInputError::Config(ConfigError::CodeTolerance)
+        );
+        let mut callbacks = 0;
+        let (solution, stats) =
+            solve_with_callback(&sources, &[&index], (512.0, 512.0), &config, |_| {
+                callbacks += 1
+            });
+        assert!(solution.is_none());
+        assert_eq!(stats.invalid_config, Some(ConfigError::CodeTolerance));
+        assert_eq!(callbacks, 0);
+        config = SolverConfig::default();
+        let bad = [DetectedSource::new(-1.0, 0.0, 1.0).unwrap()];
+        assert_eq!(
+            solve_checked(&bad, &[], (512.0, 512.0), &config).unwrap_err(),
+            SolveInputError::Sources(SourceError::OutsideImage { index: 0 })
+        );
+    }
+
+    #[test]
+    fn config_and_region_validation() {
+        assert!(SolverConfig::default().validate().is_ok());
+        for range in [
+            (0.0, 1.0),
+            (-1.0, 1.0),
+            (2.0, 1.0),
+            (1.0, f64::INFINITY),
+            (f64::NAN, 1.0),
+        ] {
+            assert_eq!(
+                SolverConfig {
+                    scale_range: Some(range),
+                    ..SolverConfig::default()
+                }
+                .validate(),
+                Err(ConfigError::ScaleRange)
+            );
+        }
+        assert_eq!(
+            SolverConfig {
+                max_field_stars: 3,
+                ..SolverConfig::default()
+            }
+            .validate(),
+            Err(ConfigError::FieldStarCount)
+        );
+        for value in [f64::NAN, f64::INFINITY, -1.0] {
+            assert_eq!(
+                SolverConfig {
+                    code_tolerance: value,
+                    ..SolverConfig::default()
+                }
+                .validate(),
+                Err(ConfigError::CodeTolerance)
+            );
+        }
+        assert_eq!(
+            SolverConfig {
+                obs_epoch: Some(f64::NAN),
+                ..SolverConfig::default()
+            }
+            .validate(),
+            Err(ConfigError::ObservationEpoch)
+        );
+        let center = Equatorial::new(0.0, 0.0);
+        for radius in [-1.0, PI + 0.01, f64::NAN, f64::INFINITY] {
+            assert_eq!(
+                SkyRegion::try_from_radians(center, radius).unwrap_err(),
+                ConfigError::RegionRadius
+            );
+        }
+        for (ra, dec) in [(f64::NAN, 0.0), (0.0, PI), (0.0, f64::INFINITY)] {
+            let region = SkyRegion {
+                center: Equatorial { ra, dec },
+                radius_rad: 1.0,
+            };
+            assert_eq!(region.validate(), Err(ConfigError::RegionCenter));
+        }
+        assert!(SkyRegion::try_from_degrees(center, 180.0).is_ok());
+        let mut region = SkyRegion::try_from_radians(center, 0.0).unwrap();
+        region.radius_rad = -1.0;
+        assert_eq!(
+            SolverConfig {
+                within: Some(region),
+                ..SolverConfig::default()
+            }
+            .validate(),
+            Err(ConfigError::RegionRadius)
+        );
     }
 
     #[test]

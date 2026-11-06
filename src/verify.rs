@@ -11,6 +11,7 @@ use crate::extraction::DetectedSource;
 use crate::geom::sphere::radec_to_xyz;
 use crate::geom::tan::TanWcs;
 use crate::index::Index;
+use crate::input::ConfigError;
 use crate::kdtree::KdTree;
 
 /// Configuration for verification.
@@ -26,6 +27,39 @@ pub struct VerifyConfig {
     pub log_odds_bail: f64,
     /// Minimum number of matched stars to accept a solution.
     pub min_matches: usize,
+}
+
+impl VerifyConfig {
+    /// Validate probability and scoring constraints. Infinite ordered log-odds
+    /// thresholds are allowed to disable early acceptance/rejection; NaN is not.
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        let square = self.match_radius_pix * self.match_radius_pix;
+        if !self.match_radius_pix.is_finite()
+            || self.match_radius_pix <= 0.0
+            || !square.is_finite()
+            || square / 4.0 <= 0.0
+        {
+            return Err(ConfigError::MatchRadius);
+        }
+        if !(0.0 < self.distractor_fraction && self.distractor_fraction < 1.0) {
+            return Err(ConfigError::DistractorFraction);
+        }
+        if self.log_odds_accept.is_nan()
+            || self.log_odds_bail.is_nan()
+            || self.log_odds_bail >= self.log_odds_accept
+        {
+            return Err(ConfigError::LogOddsThresholds);
+        }
+        if self.min_matches == 0 {
+            return Err(ConfigError::MinimumMatches);
+        }
+        Ok(())
+    }
+    /// Finish checked construction after setting fields on a default config.
+    pub fn validated(self) -> Result<Self, ConfigError> {
+        self.validate()?;
+        Ok(self)
+    }
 }
 
 impl Default for VerifyConfig {
@@ -287,6 +321,59 @@ mod tests {
                 IndexStar::without_pm(i as u64, ra, dec, 10.0)
             })
             .collect()
+    }
+
+    #[test]
+    fn checked_verification_config_constraints() {
+        assert!(VerifyConfig::default().validated().is_ok());
+        for radius in [0.0, -1.0, f64::NAN, f64::INFINITY, 1e308, 1e-300] {
+            assert_eq!(
+                VerifyConfig {
+                    match_radius_pix: radius,
+                    ..VerifyConfig::default()
+                }
+                .validate(),
+                Err(ConfigError::MatchRadius)
+            );
+        }
+        for fraction in [-1.0, 0.0, 1.0, f64::NAN, f64::INFINITY] {
+            assert_eq!(
+                VerifyConfig {
+                    distractor_fraction: fraction,
+                    ..VerifyConfig::default()
+                }
+                .validate(),
+                Err(ConfigError::DistractorFraction)
+            );
+        }
+        for (bail, accept) in [(1.0, 1.0), (2.0, 1.0), (f64::NAN, 1.0), (0.0, f64::NAN)] {
+            assert_eq!(
+                VerifyConfig {
+                    log_odds_bail: bail,
+                    log_odds_accept: accept,
+                    ..VerifyConfig::default()
+                }
+                .validate(),
+                Err(ConfigError::LogOddsThresholds)
+            );
+        }
+        assert!(
+            VerifyConfig {
+                log_odds_bail: f64::NEG_INFINITY,
+                log_odds_accept: f64::INFINITY,
+                ..VerifyConfig::default()
+            }
+            .validate()
+            .is_ok()
+        );
+        assert_eq!(
+            VerifyConfig {
+                min_matches: 0,
+                ..VerifyConfig::default()
+            }
+            .validate(),
+            Err(ConfigError::MinimumMatches)
+        );
     }
 
     #[test]
