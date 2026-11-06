@@ -7,7 +7,7 @@
 //! add/drop is now O(1) for tree maintenance; query cost grows linearly
 //! with the number of loaded cells (typically <100 in realtime use).
 //!
-//! For the existing `solve()` path which expects a concrete `Index`
+//! For the existing `solve_checked()` path which expects a concrete `Index`
 //! with flat star/quad/code vectors, `LiveIndex::as_index()` flattens
 //! the forest on demand. That cost is paid lazily — only when a solve
 //! actually needs it, not on every membership change.

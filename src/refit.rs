@@ -318,7 +318,7 @@ fn valid_inputs(
 mod tests {
     use super::*;
     use crate::index::builder::{IndexBuilderConfig, build_index};
-    use crate::solver::{SolverConfig, solve};
+    use crate::solver::{SolverConfig, solve_checked};
 
     const SIZE: f64 = 1024.0;
 
@@ -531,7 +531,12 @@ mod tests {
             code_tolerance: 0.002,
             ..SolverConfig::default()
         };
-        let (solution, _) = solve(&sources, &[&index], (SIZE, SIZE), &config);
+        let report = solve_checked(&sources, &[&index], (SIZE, SIZE), &config).unwrap();
+        let _ = report.stats;
+        let solution = match report.outcome {
+            crate::solver::SolveOutcome::Solved(solution) => Some(*solution),
+            crate::solver::SolveOutcome::TimedOut | crate::solver::SolveOutcome::NoMatch => None,
+        };
         let mut solution = solution.expect("solver should find the synthetic field");
         let before = center_error_arcsec(&solution.wcs, &truth());
         assert!(refine_solution(

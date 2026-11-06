@@ -45,7 +45,7 @@ use zodiacal::refinement::{
     apparent_radec, refine_solution, ObservationContext, ObserverState,
     RefinementCatalog, RefinementConfig, SidecarReader,
 };
-use zodiacal::solver::{solve, SolverConfig};
+use zodiacal::solver::{solve_checked, SolverConfig};
 
 struct ServerState {
     indexes: Vec<Arc<Index>>,
@@ -76,16 +76,15 @@ impl ServerState {
         &self,
         sources: &[DetectedSource],
         image_size: (f64, f64),
-    ) -> Option<zodiacal::solver::Solution> {
+    ) -> Result<zodiacal::solver::SolveReport, zodiacal::input::SolveInputError> {
         let refs: Vec<&Index> = self.indexes.iter().map(|a| &**a).collect();
-        let (sol, _stats) = solve(sources, &refs, image_size, &self.solver_config);
-        sol
+        solve_checked(sources, &refs, image_size, &self.solver_config)
     }
 
     fn solve_batch(
         &self,
         requests: Vec<(Vec<DetectedSource>, (f64, f64))>,
-    ) -> Vec<Option<zodiacal::solver::Solution>> {
+    ) -> Vec<Result<zodiacal::solver::SolveReport, zodiacal::input::SolveInputError>> {
         // rayon — each thread holds its own &Vec<&Index> view; the underlying
         // Arc<Index> instances are shared without contention (KdTree is
         // immutable after build).
@@ -172,7 +171,7 @@ sub-tree machinery would start to pay off.
 
 The recommended index build is a series of narrow angular-scale bands
 (`gaia_jbt_00.zdcl` through `gaia_jbt_06.zdcl` covering 60″ to 600″ at
-√2 spacing). Pass them all to `solve`:
+√2 spacing). Pass them all to `solve_checked`:
 
 ```rust
 let indexes_owned = vec![
@@ -181,7 +180,7 @@ let indexes_owned = vec![
     // ...
 ];
 let refs: Vec<&Index> = indexes_owned.iter().map(|a| &**a).collect();
-solve(&sources, &refs, image_size, &config)
+solve_checked(&sources, &refs, image_size, &config)
 ```
 
 The solver skips bands whose scale range can't overlap the field's

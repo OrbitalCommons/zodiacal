@@ -86,7 +86,7 @@ runtime access patterns:
 Build-side sharding (multiple narrow-band index files like
 `my_index_00.zdcl` ... `my_index_06.zdcl` covering different angular
 scale ranges) is **independent** of cell grouping and handled at the
-solver level via `solve(sources, &[&i0, &i1, &i2, ...], ...)`. All
+solver level via `solve_checked(sources, &[&i0, &i1, &i2, ...], ...)`. All
 three modes can mix these — server mode loads N files into N
 `Arc<Index>` instances and passes them all to `solve`; realtime modes
 hold N `LiveIndex` instances over N `ZdclFile`s.

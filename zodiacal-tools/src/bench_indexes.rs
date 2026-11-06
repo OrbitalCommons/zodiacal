@@ -4,7 +4,7 @@
 //!
 //! Mirrors `bench-bundle`'s output schema so the two can be compared
 //! directly. The indexes are full-sky and loaded once at startup; per
-//! test case we just project sources and run `solve()` against the
+//! test case we just project sources and run `solve_checked()` against the
 //! shared `Vec<&Index>`.
 
 use std::fs;
@@ -17,7 +17,7 @@ use serde::Deserialize;
 use zodiacal::extraction::DetectedSource;
 use zodiacal::geom::sphere::{angular_distance, radec_to_xyz};
 use zodiacal::index::Index;
-use zodiacal::solver::{SolverConfig, solve};
+use zodiacal::solver::{SolverConfig, solve_checked};
 use zodiacal::verify::VerifyConfig;
 
 #[derive(Debug, Deserialize)]
@@ -137,12 +137,21 @@ pub fn run(cfg: &BenchIndexesConfig) -> io::Result<()> {
         }
 
         let solve_start = Instant::now();
-        let (solution, stats) = solve(
+        let report = solve_checked(
             &sources,
             &index_refs,
             (tc.image_width, tc.image_height),
             &solver_cfg,
-        );
+        )
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+        let timed_out = matches!(report.outcome, zodiacal::solver::SolveOutcome::TimedOut);
+        let stats = report.stats;
+        let solution = match report.outcome {
+            zodiacal::solver::SolveOutcome::Solved(solution) => Some(*solution),
+            zodiacal::solver::SolveOutcome::TimedOut | zodiacal::solver::SolveOutcome::NoMatch => {
+                None
+            }
+        };
         let solve_ms = solve_start.elapsed().as_secs_f64() * 1000.0;
 
         let truth_xyz = radec_to_xyz(tc.ra_deg.to_radians(), tc.dec_deg.to_radians());
@@ -188,7 +197,7 @@ pub fn run(cfg: &BenchIndexesConfig) -> io::Result<()> {
             fmt_f(best_rej_log_odds),
             fmt_i(best_rej_n_matched),
             fmt_f(best_rej_error),
-            stats.timed_out as u8,
+            timed_out as u8,
         );
 
         if (i + 1) % 50 == 0 {

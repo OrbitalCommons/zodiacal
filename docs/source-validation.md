@@ -11,8 +11,8 @@ Image dimensions are positive integer pixel counts represented as `f64`.
 Integer coordinates denote zero-based pixel centers. Sources must lie in the
 inclusive rectangle `[0, width - 1] × [0, height - 1]`. The solver checks the
 entire source list before searching, including sources beyond `max_field_stars`.
-Invalid input returns no solution and sets `SolveStats::invalid_input`; no
-sources are discarded or renumbered. `validate_sources` exposes the same check
+Invalid input returns `SolveInputError::Sources`; no sources are discarded or
+renumbered. `validate_sources` exposes the same check
 for callers that want to report errors before solving.
 
 Aperture1 adapters can remove duplicate validity formulas, but must retain their
@@ -21,5 +21,5 @@ Use checked construction to discard intrinsic invalidity, then
 `source.validate_in_image(image_size).is_ok()` to filter out-of-frame centroids.
 Passing an unfiltered out-of-frame source to the solver rejects the whole frame.
 Keep mission source-count limits and ordering policy downstream. These changes
-intentionally break unchecked source construction while retaining the legacy
-solver tuple and JSON wire format.
+intentionally break unchecked source construction. The JSON wire format is
+unchanged; version 1.0 also removes the legacy solver tuple APIs.

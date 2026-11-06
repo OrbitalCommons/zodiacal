@@ -21,7 +21,7 @@ use zodiacal::geom::sphere::radec_to_xyz;
 use zodiacal::geom::tan::TanWcs;
 use zodiacal::index::Index;
 use zodiacal::index::builder::{IndexBuilderConfig, build_index};
-use zodiacal::solver::{SkyRegion, SolveStats, SolverConfig, solve};
+use zodiacal::solver::{SkyRegion, SolveStats, SolverConfig, solve_checked};
 use zodiacal::verify::VerifyConfig;
 
 /// Simple xorshift PRNG for deterministic benchmarks.
@@ -175,7 +175,12 @@ fn solve_timed_multi(
     config: &SolverConfig,
 ) -> (bool, u64, SolveStats) {
     let start = Instant::now();
-    let (solution, stats) = solve(sources, indexes, image_size, config);
+    let report = solve_checked(sources, indexes, image_size, config).unwrap();
+    let stats = report.stats;
+    let solution = match report.outcome {
+        zodiacal::solver::SolveOutcome::Solved(solution) => Some(*solution),
+        zodiacal::solver::SolveOutcome::TimedOut | zodiacal::solver::SolveOutcome::NoMatch => None,
+    };
     let elapsed_us = start.elapsed().as_micros() as u64;
     (solution.is_some(), elapsed_us, stats)
 }

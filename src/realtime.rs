@@ -6,7 +6,7 @@
 //! This is the front door for the two realtime modes (telescope and
 //! star tracker). The server mode (mode 1) doesn't need this — it's a
 //! thin convenience over the existing [`crate::index::Index`] /
-//! [`crate::solver::solve`] API.
+//! [`crate::solver::solve_checked`] API.
 
 use std::io;
 use std::time::Duration;
@@ -19,7 +19,7 @@ use crate::geom::sphere::angular_distance;
 use crate::geom::sphere::radec_to_xyz;
 use crate::index::{EnsureReport, Index, IndexSource, LiveIndex};
 use crate::pointing::PointingSource;
-use crate::solver::{SkyRegion, Solution, SolverConfig, solve};
+use crate::solver::{SkyRegion, SolveReport, SolverConfig, solve_checked};
 
 /// When the orchestrator considers re-running [`PointingSource::current_region`]
 /// and re-syncing the [`LiveIndex`] cell membership.
@@ -51,7 +51,8 @@ pub struct RefreshSnapshot {
 
 #[derive(Debug)]
 pub struct RealtimeOutput {
-    pub solution: Option<Solution>,
+    /// Explicit outcome and solver diagnostics.
+    pub solve: SolveReport,
     pub refresh: Option<EnsureReport>,
     pub solve_elapsed: Duration,
     pub refresh_elapsed: Duration,
@@ -220,6 +221,11 @@ impl<S: IndexSource, P: PointingSource> RealtimeSolver<S, P> {
         image_size: (f64, f64),
         t: &Time,
     ) -> io::Result<RealtimeOutput> {
+        crate::extraction::validate_sources(sources, image_size)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+        self.solver_config
+            .validate()
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
         let refresh_start = Instant::now();
         let refresh = self.tick(t)?;
         let refresh_elapsed = refresh_start.elapsed();
@@ -230,10 +236,11 @@ impl<S: IndexSource, P: PointingSource> RealtimeSolver<S, P> {
         // immutably for the solve call alongside &self.solver_config.
         self.snapshot_index();
         let snapshot: &Index = &self.cached_index.as_ref().unwrap().1;
-        let (solution, _stats) = solve(sources, &[snapshot], image_size, &self.solver_config);
+        let solve = solve_checked(sources, &[snapshot], image_size, &self.solver_config)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
         let solve_elapsed = solve_start.elapsed();
         Ok(RealtimeOutput {
-            solution,
+            solve,
             refresh,
             solve_elapsed,
             refresh_elapsed,
@@ -412,7 +419,9 @@ mod tests {
         let mut rt = RealtimeSolver::new(source, pointing).with_solver_config(solver_cfg);
         let t = time_for_test();
         let out = rt.solve(&sources, (512.0, 512.0), &t).unwrap();
-        let solution = out.solution.expect("orchestrator should solve");
+        let crate::solver::SolveOutcome::Solved(solution) = out.solve.outcome else {
+            panic!("orchestrator should solve")
+        };
         // Image-center separation < 30".
         let (solved_ra, solved_dec) = solution.wcs.field_center();
         let (truth_ra, truth_dec) = truth.field_center();
@@ -426,7 +435,32 @@ mod tests {
     }
 
     #[test]
-    fn solve_returns_none_when_no_match() {
+    fn solve_preserves_timeout_and_rejects_invalid_input_before_refresh() {
+        let (sources, source, truth) = make_synthetic_scenario();
+        let region = SkyRegion::from_radians(Equatorial::new(truth.crval[0], truth.crval[1]), 0.05);
+        let mut rt =
+            RealtimeSolver::new(source, StaticRegion(region)).with_solver_config(SolverConfig {
+                timeout: Some(Duration::ZERO),
+                ..SolverConfig::default()
+            });
+        let time = time_for_test();
+        let invalid = [DetectedSource::new(-1.0, 0.0, 1.0).unwrap()];
+        assert_eq!(
+            rt.solve(&invalid, (512.0, 512.0), &time)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+        assert!(rt.last_refresh.is_none());
+        let report = rt.solve(&sources, (512.0, 512.0), &time).unwrap();
+        assert!(matches!(
+            report.solve.outcome,
+            crate::solver::SolveOutcome::TimedOut
+        ));
+    }
+
+    #[test]
+    fn solve_reports_no_match() {
         let (_sources, source, truth) = make_synthetic_scenario();
         let region = SkyRegion::from_radians(Equatorial::new(truth.crval[0], truth.crval[1]), 0.05);
         let pointing = StaticRegion(region);
@@ -434,7 +468,10 @@ mod tests {
         // Empty source list — solver should bail without crashing.
         let t = time_for_test();
         let out = rt.solve(&[], (512.0, 512.0), &t).unwrap();
-        assert!(out.solution.is_none());
+        assert!(matches!(
+            out.solve.outcome,
+            crate::solver::SolveOutcome::NoMatch
+        ));
     }
 
     #[test]

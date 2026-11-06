@@ -422,7 +422,7 @@ The directory and zip forms differ only in the `EntryBytes` variant returned and
 Ship this as **v1 of the bundle format** and gate it behind a new builder subcommand (`build-from-excerpt-series`) without breaking the v3 single-file path. The first deliverable is enough Rust to:
 
 - write a bundle from the cell-driven builder loop, one band per scale bin,
-- read a bundle into a multi-band view that the existing `solve()` API can consume.
+- read a bundle into a multi-band view that the existing `solve_checked()` API can consume.
 
 The shard-bucketing optimization (item #1 above) and the cross-cell-quads design (item #3) can wait until profiling or use-case shows they matter.
 
@@ -515,7 +515,7 @@ The consumption-side type that wraps a `SubfileAccessor` and serves region queri
 - `load_region_band(band_idx, region)` for the single-band path the solver dispatches.
 - `gaia_get(source_id, cell_hint) -> Option<GaiaRecord>` and `gaia_get_many`, with the cell derivation path exercised when no hint.
 - `bundle.verify()` opt-in structural-integrity walk (magic, version, cell_id-vs-filename, sizes).
-- `MultiBandFragment` exposes `&[&Index]` for the existing `solve()` signature — solver gets a multi-band view with no API change.
+- `MultiBandFragment` exposes `&[&Index]` for the existing `solve_checked()` signature — solver gets a multi-band view with no API change.
 
 **Tests**
 - Open a synthetic bundle (built via PR 3 + PR 4 in test fixtures), iterate every cell, count records.
@@ -540,7 +540,7 @@ The user-facing surface that ties phases 1+2 of the build together, plus the con
 
 **Tests**
 - CLI smoke test: `build-from-excerpt-series` on a small synthetic excerpt → produces a folder bundle → `zodiacal info` (extended to recognize bundles) reads it back.
-- `Index::load` on a bundle path returns an Index that survives `solve()` against a tiny field.
+- `Index::load` on a bundle path returns an Index that survives `solve_checked()` against a tiny field.
 
 **Depends on:** PR 3 (build), PR 4 (tidy), PR 5 (reader).
 

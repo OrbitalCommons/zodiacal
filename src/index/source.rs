@@ -897,12 +897,12 @@ mod tests {
     #[test]
     fn v3_solve_smoke_via_index_from_fragment() {
         // End-to-end: build an index, save as v3, open via ZdclFile,
-        // load full, convert IndexFragment → Index, run solve(), verify
+        // load full, convert IndexFragment → Index, run solve_checked(), verify
         // the recovered WCS matches the truth.
         use crate::extraction::DetectedSource;
         use crate::geom::tan::TanWcs;
         use crate::index::builder::{IndexBuilderConfig, build_index};
-        use crate::solver::{SolverConfig, solve};
+        use crate::solver::{SolverConfig, solve_checked};
         use crate::verify::VerifyConfig;
         use std::f64::consts::PI;
 
@@ -968,7 +968,12 @@ mod tests {
             },
             ..SolverConfig::default()
         };
-        let (solution, _stats) = solve(&sources, &[&reloaded], image_size, &solver_cfg);
+        let report = solve_checked(&sources, &[&reloaded], image_size, &solver_cfg).unwrap();
+        let _stats = report.stats;
+        let solution = match report.outcome {
+            crate::solver::SolveOutcome::Solved(solution) => Some(*solution),
+            crate::solver::SolveOutcome::TimedOut | crate::solver::SolveOutcome::NoMatch => None,
+        };
         let solution = solution.expect("v3-loaded index should solve");
 
         let (solved_ra, solved_dec) = solution.wcs.field_center();
