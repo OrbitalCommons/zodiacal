@@ -4,10 +4,99 @@ use serde::{Deserialize, Serialize};
 
 /// A detected source in an image.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(try_from = "SourceFields")]
 pub struct DetectedSource {
-    pub x: f64,
-    pub y: f64,
-    pub flux: f64,
+    x: f64,
+    y: f64,
+    flux: f64,
+}
+
+/// Invalid source data or image geometry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SourceError {
+    NonFinitePosition,
+    InvalidFlux,
+    InvalidImageSize,
+    OutsideImage { index: usize },
+}
+
+impl std::fmt::Display for SourceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NonFinitePosition => write!(f, "source position must be finite"),
+            Self::InvalidFlux => write!(f, "source flux must be finite and positive"),
+            Self::InvalidImageSize => {
+                write!(f, "image dimensions must be positive finite pixel counts")
+            }
+            Self::OutsideImage { index } => {
+                write!(f, "source {index} is outside the image pixel-center bounds")
+            }
+        }
+    }
+}
+impl std::error::Error for SourceError {}
+
+#[derive(Deserialize)]
+struct SourceFields {
+    x: f64,
+    y: f64,
+    flux: f64,
+}
+impl TryFrom<SourceFields> for DetectedSource {
+    type Error = SourceError;
+    fn try_from(value: SourceFields) -> Result<Self, Self::Error> {
+        Self::new(value.x, value.y, value.flux)
+    }
+}
+
+impl DetectedSource {
+    /// Construct a source with finite coordinates and finite, strictly positive flux.
+    /// Coordinates are zero-based pixel centers; image bounds are checked at solve time.
+    pub fn new(x: f64, y: f64, flux: f64) -> Result<Self, SourceError> {
+        if !x.is_finite() || !y.is_finite() {
+            return Err(SourceError::NonFinitePosition);
+        }
+        if !flux.is_finite() || flux <= 0.0 {
+            return Err(SourceError::InvalidFlux);
+        }
+        Ok(Self { x, y, flux })
+    }
+    /// Check this source against an image's inclusive pixel-center bounds.
+    /// Useful for adapters whose policy is to drop out-of-frame detections.
+    pub fn validate_in_image(&self, image_size: (f64, f64)) -> Result<(), SourceError> {
+        validate_sources(std::slice::from_ref(self), image_size)
+    }
+
+    pub fn x(&self) -> f64 {
+        self.x
+    }
+    pub fn y(&self) -> f64 {
+        self.y
+    }
+    pub fn flux(&self) -> f64 {
+        self.flux
+    }
+}
+
+/// Validate pixel counts and every source against inclusive center bounds
+/// `[0, width - 1] × [0, height - 1]`. No sources are silently discarded.
+pub fn validate_sources(
+    sources: &[DetectedSource],
+    image_size: (f64, f64),
+) -> Result<(), SourceError> {
+    let (w, h) = image_size;
+    if [w, h]
+        .iter()
+        .any(|v| !v.is_finite() || *v < 1.0 || v.fract() != 0.0)
+    {
+        return Err(SourceError::InvalidImageSize);
+    }
+    for (index, s) in sources.iter().enumerate() {
+        if s.x < 0.0 || s.x > w - 1.0 || s.y < 0.0 || s.y > h - 1.0 {
+            return Err(SourceError::OutsideImage { index });
+        }
+    }
+    Ok(())
 }
 
 /// Configuration for source extraction.
@@ -50,10 +139,11 @@ impl Default for ExtractionConfig {
 /// Create sources from a list of (x, y) pixel coordinates.
 ///
 /// All sources get flux = 1.0. Useful when source positions are already known.
-pub fn sources_from_points(points: &[(f64, f64)]) -> Vec<DetectedSource> {
+/// Returns an error if any position is non-finite.
+pub fn sources_from_points(points: &[(f64, f64)]) -> Result<Vec<DetectedSource>, SourceError> {
     points
         .iter()
-        .map(|&(x, y)| DetectedSource { x, y, flux: 1.0 })
+        .map(|&(x, y)| DetectedSource::new(x, y, 1.0))
         .collect()
 }
 
@@ -379,11 +469,7 @@ pub fn extract_sources(image: &Array2<f32>, config: &ExtractionConfig) -> Vec<De
                 return None;
             }
 
-            Some(DetectedSource {
-                x: sum_x / sum_flux,
-                y: sum_y / sum_flux,
-                flux: sum_flux,
-            })
+            DetectedSource::new(sum_x / sum_flux, sum_y / sum_flux, sum_flux).ok()
         })
         .collect();
 
@@ -401,9 +487,93 @@ mod tests {
     use super::*;
 
     #[test]
+    fn rejects_invalid_source_values() {
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(
+                DetectedSource::new(value, 0.0, 1.0).unwrap_err(),
+                SourceError::NonFinitePosition
+            );
+            assert!(DetectedSource::new(0.0, value, 1.0).is_err());
+            assert!(DetectedSource::new(0.0, 0.0, value).is_err());
+        }
+        for flux in [0.0, -1.0] {
+            assert_eq!(
+                DetectedSource::new(0.0, 0.0, flux).unwrap_err(),
+                SourceError::InvalidFlux
+            );
+        }
+        assert!(sources_from_points(&[(f64::NAN, 0.0)]).is_err());
+    }
+
+    #[test]
+    fn json_uses_checked_construction() {
+        for field in ["x", "y", "flux"] {
+            for value in ["NaN", "Infinity", "-Infinity", "1e999", "null"] {
+                let mut fields = vec![
+                    "\"x\":0".to_owned(),
+                    "\"y\":0".to_owned(),
+                    "\"flux\":1".to_owned(),
+                ];
+                fields.retain(|s| !s.starts_with(&format!("\"{field}\":")));
+                fields.push(format!("\"{field}\":{value}"));
+                let json = format!("{{{}}}", fields.join(","));
+                assert!(
+                    serde_json::from_str::<DetectedSource>(&json).is_err(),
+                    "{json}"
+                );
+            }
+        }
+        for flux in ["0", "-1"] {
+            assert!(
+                serde_json::from_str::<DetectedSource>(&format!(
+                    r#"{{"x":0,"y":0,"flux":{flux}}}"#
+                ))
+                .is_err()
+            );
+        }
+        let source = DetectedSource::new(1.25, 2.5, 100.0).unwrap();
+        let encoded = serde_json::to_string(&source).unwrap();
+        let decoded: DetectedSource = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(
+            (decoded.x(), decoded.y(), decoded.flux()),
+            (1.25, 2.5, 100.0)
+        );
+    }
+
+    #[test]
+    fn image_bounds_are_checked_at_solver_boundary() {
+        use crate::solver::{SolverConfig, solve};
+        let valid = DetectedSource::new(9.0, 19.0, 1.0).unwrap();
+        assert!(valid.validate_in_image((10.0, 20.0)).is_ok());
+        assert!(validate_sources(&[valid], (10.0, 20.0)).is_ok());
+        for (x, y) in [(-0.01, 0.0), (0.0, -0.01), (9.01, 0.0), (0.0, 19.01)] {
+            let source = DetectedSource::new(x, y, 1.0).unwrap();
+            let (solution, stats) = solve(&[source], &[], (10.0, 20.0), &SolverConfig::default());
+            assert!(solution.is_none());
+            assert_eq!(
+                stats.invalid_input,
+                Some(SourceError::OutsideImage { index: 0 })
+            );
+            assert_eq!(stats.n_verified, 0);
+            assert!(!stats.timed_out);
+        }
+        for size in [
+            (0.0, 10.0),
+            (10.0, f64::NAN),
+            (10.5, 10.0),
+            (f64::INFINITY, 10.0),
+        ] {
+            assert_eq!(
+                validate_sources(&[], size),
+                Err(SourceError::InvalidImageSize)
+            );
+        }
+    }
+
+    #[test]
     fn sources_from_points_roundtrip() {
         let points = vec![(10.5, 20.3), (30.1, 40.7), (50.0, 60.0)];
-        let sources = sources_from_points(&points);
+        let sources = sources_from_points(&points).unwrap();
 
         assert_eq!(sources.len(), 3);
         for (i, (px, py)) in points.iter().enumerate() {

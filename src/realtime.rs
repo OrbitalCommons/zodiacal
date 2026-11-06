@@ -338,11 +338,7 @@ mod tests {
             let py = 30.0 + rng() * 452.0;
             let (ra, dec) = truth.pixel_to_radec(px, py);
             catalog.push((i as u64, ra, dec, i as f64));
-            sources.push(DetectedSource {
-                x: px,
-                y: py,
-                flux: 1000.0 - i as f64 * 10.0,
-            });
+            sources.push(DetectedSource::new(px, py, 1000.0 - i as f64 * 10.0).unwrap());
         }
         let field_diag = (image_size.0 * image_size.0 + image_size.1 * image_size.1).sqrt();
         let max_angle = field_diag * scale_rad;

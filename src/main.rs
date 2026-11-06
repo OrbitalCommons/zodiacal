@@ -952,7 +952,9 @@ fn cmd_diagnose(
     for (i, src) in sources.iter().take(10).enumerate() {
         eprintln!(
             "  src[{i:3}] ({:7.1}, {:7.1}) flux={:.0}",
-            src.x, src.y, src.flux
+            src.x(),
+            src.y(),
+            src.flux()
         );
     }
 
@@ -1004,7 +1006,7 @@ fn cmd_diagnose(
         for src in sources.iter().take(50) {
             let mut best_dist = f64::MAX;
             for &(rx, ry) in &ref_pixels {
-                let d = ((src.x - rx).powi(2) + (src.y - ry).powi(2)).sqrt();
+                let d = ((src.x() - rx).powi(2) + (src.y() - ry).powi(2)).sqrt();
                 if d < best_dist {
                     best_dist = d;
                 }
@@ -1148,18 +1150,18 @@ fn cmd_diagnose(
         for src in sources.iter().take(n_check) {
             let (px, py) = if combo.swap_xy {
                 let y = if combo.flip_y {
-                    (h as f64 - 1.0) - src.y
+                    (h as f64 - 1.0) - src.y()
                 } else {
-                    src.y
+                    src.y()
                 };
-                (y, src.x)
+                (y, src.x())
             } else {
                 let y = if combo.flip_y {
-                    (h as f64 - 1.0) - src.y
+                    (h as f64 - 1.0) - src.y()
                 } else {
-                    src.y
+                    src.y()
                 };
-                (src.x, y)
+                (src.x(), y)
             };
             let (src_ra, src_dec) = wcs.pixel_to_radec(px, py);
             let src_xyz = radec_to_xyz(src_ra, src_dec);
@@ -1195,7 +1197,7 @@ fn cmd_diagnose(
         image_size: [w as f64, h as f64],
     };
     for (i, src) in sources.iter().take(n_check).enumerate() {
-        let (px, py) = (src.x, src.y);
+        let (px, py) = (src.x(), src.y());
         let (src_ra, src_dec) = wcs_best.pixel_to_radec(px, py);
         let src_xyz = radec_to_xyz(src_ra, src_dec);
         let nearby = index.star_tree.range_search(&src_xyz, search_radius_sq);
@@ -1203,8 +1205,8 @@ fn cmd_diagnose(
             eprintln!(
                 "  {:3}  ({:7.1},{:7.1})  RA={:9.4} Dec={:+9.4}  no match",
                 i,
-                src.x,
-                src.y,
+                src.x(),
+                src.y(),
                 src_ra.to_degrees(),
                 src_dec.to_degrees()
             );
@@ -1219,8 +1221,8 @@ fn cmd_diagnose(
             eprintln!(
                 "  {:3}  ({:7.1},{:7.1})  RA={:9.4} Dec={:+9.4}  idx RA={:9.4} Dec={:+9.4}  sep={:.1}\"",
                 i,
-                src.x,
-                src.y,
+                src.x(),
+                src.y(),
                 src_ra.to_degrees(),
                 src_dec.to_degrees(),
                 star.ra.to_degrees(),

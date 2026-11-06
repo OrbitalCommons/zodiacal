@@ -42,11 +42,7 @@ fn scenario() -> (Vec<DetectedSource>, Index, TanWcs) {
         let (px, py) = (30.0 + rng() * 452.0, 30.0 + rng() * 452.0);
         let (ra, dec) = wcs.pixel_to_radec(px, py);
         catalog.push((i as u64, ra, dec, i as f64));
-        sources.push(DetectedSource {
-            x: px,
-            y: py,
-            flux: 1000.0 - i as f64 * 10.0,
-        });
+        sources.push(DetectedSource::new(px, py, 1000.0 - i as f64 * 10.0).unwrap());
     }
 
     let diag = (2.0 * SIZE * SIZE).sqrt() * scale;

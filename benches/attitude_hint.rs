@@ -98,11 +98,7 @@ fn make_scenario(rng: &mut Rng, n_field_stars: usize) -> Scenario {
         let py = 30.0 + rng.next_f64() * 452.0;
         let (star_ra, star_dec) = wcs.pixel_to_radec(px, py);
         catalog.push((star_id, star_ra, star_dec, i as f64));
-        sources.push(DetectedSource {
-            x: px,
-            y: py,
-            flux: 1000.0 - i as f64 * 10.0,
-        });
+        sources.push(DetectedSource::new(px, py, 1000.0 - i as f64 * 10.0).unwrap());
         star_id += 1;
     }
 
@@ -227,11 +223,7 @@ fn synthesize_sources_from_real_index(
             && py >= 0.0
             && py < image_size.1
         {
-            sources.push(DetectedSource {
-                x: px,
-                y: py,
-                flux: 1000.0 - i as f64 * 10.0,
-            });
+            sources.push(DetectedSource::new(px, py, 1000.0 - i as f64 * 10.0).unwrap());
         }
     }
 
