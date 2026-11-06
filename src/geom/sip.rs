@@ -130,7 +130,10 @@ impl SipWcs {
         self.tan.pixel_scale()
     }
 
-    /// RA, Dec (radians) of the image center pixel.
+    /// RA, Dec (radians) at the legacy center `(width/2, height/2)`,
+    /// including SIP distortion. This is not necessarily the optical boresight.
+    /// For the geometric midpoint, evaluate [`Self::pixel_to_radec`] at
+    /// `self.tan.geometric_pixel_center()?`.
     pub fn field_center(&self) -> (f64, f64) {
         self.pixel_to_radec(self.tan.image_size[0] / 2.0, self.tan.image_size[1] / 2.0)
     }

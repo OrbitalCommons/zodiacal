@@ -13,6 +13,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 
 use zodiacal::index::source::DEFAULT_CELL_DEPTH;
 
+mod bench_boresight;
 mod bench_bundle;
 mod bench_indexes;
 mod bench_triage;
@@ -129,6 +130,9 @@ enum Commands {
         #[arg(long)]
         scale_hint: bool,
 
+        #[command(flatten)]
+        boresight: bench_boresight::BoresightOffset,
+
         #[arg(long, default_value_t = 0)]
         timeout_secs: u64,
     },
@@ -158,6 +162,9 @@ enum Commands {
         /// Hint the solver with truth pixel scale ±5%.
         #[arg(long)]
         scale_hint: bool,
+
+        #[command(flatten)]
+        boresight: bench_boresight::BoresightOffset,
 
         /// Per-case solve timeout in seconds. 0 disables.
         #[arg(long, default_value_t = 0)]
@@ -358,6 +365,7 @@ fn main() {
             test_cases_dir,
             limit,
             scale_hint,
+            boresight,
             timeout_secs,
         } => {
             let cfg = BenchIndexesConfig {
@@ -365,6 +373,7 @@ fn main() {
                 test_cases_dir: test_cases_dir.clone(),
                 limit: *limit,
                 scale_hint: *scale_hint,
+                boresight: *boresight,
                 timeout_secs: *timeout_secs,
             };
             if let Err(e) = run_bench_indexes(&cfg) {
@@ -378,6 +387,7 @@ fn main() {
             radius_deg,
             limit,
             scale_hint,
+            boresight,
             timeout_secs,
             trace_out,
             obs_epoch,
@@ -388,6 +398,7 @@ fn main() {
                 radius_deg: *radius_deg,
                 limit: *limit,
                 scale_hint: *scale_hint,
+                boresight: *boresight,
                 timeout_secs: *timeout_secs,
                 trace_out: trace_out.clone(),
                 obs_epoch: *obs_epoch,

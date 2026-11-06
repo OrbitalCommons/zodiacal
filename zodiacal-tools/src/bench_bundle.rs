@@ -80,6 +80,7 @@ pub struct BenchBundleConfig {
     pub limit: Option<usize>,
     /// If true, hint the solver with truth pixel scale ±5%.
     pub scale_hint: bool,
+    pub boresight: crate::bench_boresight::BoresightOffset,
     /// Per-case solve timeout (seconds). 0 disables.
     pub timeout_secs: u64,
     /// Optional directory for per-case `<case>.trace.json` sidecars.
@@ -95,6 +96,7 @@ pub struct BenchBundleConfig {
 }
 
 pub fn run(cfg: &BenchBundleConfig) -> io::Result<()> {
+    eprintln!("Benchmark comparison: {:?}", cfg.boresight);
     let bundle = ZdclBundle::open(&cfg.bundle_path)?;
     let n_bands = bundle.bands().len();
     eprintln!(
@@ -198,14 +200,14 @@ pub fn run(cfg: &BenchBundleConfig) -> io::Result<()> {
 
         let truth_xyz = radec_to_xyz(tc.ra_deg.to_radians(), tc.dec_deg.to_radians());
         let wcs_error_arcsec = |wcs: &zodiacal::geom::tan::TanWcs| -> f64 {
-            let (got_ra, got_dec) = wcs.field_center();
+            let (got_ra, got_dec) = cfg.boresight.radec(wcs);
             let got_xyz = radec_to_xyz(got_ra, got_dec);
             angular_distance(truth_xyz, got_xyz).to_degrees() * 3600.0
         };
 
         let (solved, error_arcsec, solved_ra_deg, solved_dec_deg) = match &solution {
             Some(sol) => {
-                let (got_ra, got_dec) = sol.wcs.field_center();
+                let (got_ra, got_dec) = cfg.boresight.radec(&sol.wcs);
                 (
                     true,
                     wcs_error_arcsec(&sol.wcs),
@@ -239,7 +241,7 @@ pub fn run(cfg: &BenchBundleConfig) -> io::Result<()> {
         if let (Some(out_dir), Some(sol)) = (cfg.trace_out.as_ref(), solution.as_ref()) {
             std::fs::create_dir_all(out_dir)?;
             let trace_path = out_dir.join(format!("{case_name}.trace.json"));
-            write_trace(&trace_path, &case_name, &tc, sol, &sources, &indexes)?;
+            write_trace(&trace_path, &case_name, &tc, sol, &indexes, cfg.boresight)?;
         }
         let fmt_f = |v: f64| -> String {
             if v.is_nan() {
@@ -327,6 +329,7 @@ struct TraceCenter {
 
 #[derive(Serialize)]
 struct TraceWcs {
+    boresight_pixel: [f64; 2],
     ra_deg: f64,
     dec_deg: f64,
     crpix: [f64; 2],
@@ -382,10 +385,10 @@ fn write_trace(
     case: &str,
     tc: &TestCase,
     sol: &Solution,
-    _sources: &[DetectedSource],
     indexes: &[Index],
+    boresight: crate::bench_boresight::BoresightOffset,
 ) -> io::Result<()> {
-    let (got_ra, got_dec) = sol.wcs.field_center();
+    let (got_ra, got_dec) = boresight.radec(&sol.wcs);
     let band = &indexes[sol.quad_match.index_id];
     let project = |ra: f64, dec: f64| -> (f64, f64) {
         sol.wcs
@@ -431,6 +434,7 @@ fn write_trace(
             plate_scale_arcsec: tc.plate_scale_arcsec,
         },
         solved: TraceWcs {
+            boresight_pixel: boresight.pixel(&sol.wcs),
             ra_deg: got_ra.to_degrees(),
             dec_deg: got_dec.to_degrees(),
             crpix: sol.wcs.crpix,
