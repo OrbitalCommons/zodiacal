@@ -239,8 +239,6 @@ The CLI is a thin wrapper over the `zodiacal` crate. Embedding the solver into y
 
 ### Core API
 
-See [the 1.0 migration guide](docs/migration-1.0.md) for the removed tuple APIs and checked source construction.
-
 ```rust
 use zodiacal::index::Index;
 use zodiacal::solver::{solve_checked, SolveOutcome, SolverConfig};

@@ -889,14 +889,10 @@ mod tests {
 
         let report = solve_checked(&sources, &[&index], (512.0, 512.0), &config).unwrap();
         let stats = report.stats;
-        let solution = match report.outcome {
-            crate::solver::SolveOutcome::Solved(solution) => Some(*solution),
-            crate::solver::SolveOutcome::TimedOut | crate::solver::SolveOutcome::NoMatch => None,
+        let SolveOutcome::Solved(solution) = report.outcome else {
+            panic!("expected a solved field");
         };
-        assert!(solution.is_some(), "solver should find a solution");
         assert!(stats.accepted_log_odds.is_some());
-
-        let solution = solution.unwrap();
 
         // Verify the solved WCS closely matches the original.
         let (solved_ra, solved_dec) = solution.wcs.field_center();
@@ -956,13 +952,8 @@ mod tests {
                 last_verified = stats.n_verified;
             })
             .unwrap();
-        let _stats = report.stats;
-        let solution = match report.outcome {
-            crate::solver::SolveOutcome::Solved(solution) => Some(*solution),
-            crate::solver::SolveOutcome::TimedOut | crate::solver::SolveOutcome::NoMatch => None,
-        };
 
-        assert!(solution.is_some());
+        assert!(matches!(report.outcome, SolveOutcome::Solved(_)));
         assert!(
             call_count > 0,
             "callback should have been called at least once"
@@ -1016,11 +1007,11 @@ mod tests {
 
         let report = solve_checked(&sources, &[&index], (1024.0, 1024.0), &config).unwrap();
         let stats = report.stats;
-        let solution = match report.outcome {
-            crate::solver::SolveOutcome::Solved(solution) => Some(*solution),
-            crate::solver::SolveOutcome::TimedOut | crate::solver::SolveOutcome::NoMatch => None,
-        };
-        assert!(solution.is_none(), "random sources should not solve");
+
+        assert!(
+            matches!(report.outcome, SolveOutcome::NoMatch),
+            "random sources should not solve"
+        );
         assert!(stats.accepted_log_odds.is_none());
     }
 
@@ -1043,13 +1034,9 @@ mod tests {
         };
 
         let report = solve_checked(&sources, &[&index], (512.0, 512.0), &config).unwrap();
-        let _stats = report.stats;
-        let solution = match report.outcome {
-            crate::solver::SolveOutcome::Solved(solution) => Some(*solution),
-            crate::solver::SolveOutcome::TimedOut | crate::solver::SolveOutcome::NoMatch => None,
-        };
+
         assert!(
-            solution.is_none(),
+            matches!(report.outcome, SolveOutcome::NoMatch),
             "wrong scale range should prevent solving"
         );
     }
@@ -1093,17 +1080,10 @@ mod tests {
             &config,
         )
         .unwrap();
-        let _stats = report.stats;
-        let solution = match report.outcome {
-            crate::solver::SolveOutcome::Solved(solution) => Some(*solution),
-            crate::solver::SolveOutcome::TimedOut | crate::solver::SolveOutcome::NoMatch => None,
+        let SolveOutcome::Solved(solution) = report.outcome else {
+            panic!("expected a solved field");
         };
-        assert!(
-            solution.is_some(),
-            "should solve with correct index among multiple"
-        );
 
-        let solution = solution.unwrap();
         let (solved_ra, solved_dec) = solution.wcs.field_center();
         let (known_ra, known_dec) = known_wcs.field_center();
         let arcsec = PI / (180.0 * 3600.0);
@@ -1139,12 +1119,11 @@ mod tests {
 
         let config = SolverConfig::default();
         let report = solve_checked(&sources, &[&index], (512.0, 512.0), &config).unwrap();
-        let _stats = report.stats;
-        let solution = match report.outcome {
-            crate::solver::SolveOutcome::Solved(solution) => Some(*solution),
-            crate::solver::SolveOutcome::TimedOut | crate::solver::SolveOutcome::NoMatch => None,
-        };
-        assert!(solution.is_none(), "fewer than 4 sources should not solve");
+
+        assert!(
+            matches!(report.outcome, SolveOutcome::NoMatch),
+            "fewer than 4 sources should not solve"
+        );
     }
 
     #[test]
@@ -1152,12 +1131,11 @@ mod tests {
         let (sources, _, _) = make_synthetic_scenario();
         let config = SolverConfig::default();
         let report = solve_checked(&sources, &[], (512.0, 512.0), &config).unwrap();
-        let _stats = report.stats;
-        let solution = match report.outcome {
-            crate::solver::SolveOutcome::Solved(solution) => Some(*solution),
-            crate::solver::SolveOutcome::TimedOut | crate::solver::SolveOutcome::NoMatch => None,
-        };
-        assert!(solution.is_none(), "no indexes should return None");
+
+        assert!(
+            matches!(report.outcome, SolveOutcome::NoMatch),
+            "no indexes should report NoMatch"
+        );
     }
 
     #[test]
@@ -1310,17 +1288,10 @@ mod tests {
         };
 
         let report = solve_checked(&sources, &[&index], image_size, &config).unwrap();
-        let _stats = report.stats;
-        let solution = match report.outcome {
-            crate::solver::SolveOutcome::Solved(solution) => Some(*solution),
-            crate::solver::SolveOutcome::TimedOut | crate::solver::SolveOutcome::NoMatch => None,
+        let SolveOutcome::Solved(solution) = report.outcome else {
+            panic!("expected a solved field");
         };
-        assert!(
-            solution.is_some(),
-            "solver should find a solution with rotated WCS"
-        );
 
-        let solution = solution.unwrap();
         let solved_scale = solution.wcs.pixel_scale();
         let known_scale = wcs.pixel_scale();
         let scale_ratio = solved_scale / known_scale;
@@ -1350,11 +1321,8 @@ mod tests {
         };
         let report = solve_checked(&sources, &[&index], (512.0, 512.0), &config).unwrap();
         let stats = report.stats;
-        let solution = match report.outcome {
-            crate::solver::SolveOutcome::Solved(solution) => Some(*solution),
-            crate::solver::SolveOutcome::TimedOut | crate::solver::SolveOutcome::NoMatch => None,
-        };
-        assert!(solution.is_none());
+
+        assert!(matches!(report.outcome, SolveOutcome::NoMatch));
         assert_eq!(
             stats.n_verified, 0,
             "pre-fit scale filter should prevent any candidate from reaching verify"
@@ -1388,11 +1356,8 @@ mod tests {
         };
         let report = solve_checked(&sources, &[&index], (512.0, 512.0), &config).unwrap();
         let stats = report.stats;
-        let solution = match report.outcome {
-            crate::solver::SolveOutcome::Solved(solution) => Some(*solution),
-            crate::solver::SolveOutcome::TimedOut | crate::solver::SolveOutcome::NoMatch => None,
-        };
-        assert!(solution.is_none());
+
+        assert!(matches!(report.outcome, SolveOutcome::NoMatch));
         assert_eq!(
             stats.n_verified, 0,
             "pre-fit within filter should prevent any candidate from reaching verify"
@@ -1420,13 +1385,9 @@ mod tests {
             ..SolverConfig::default()
         };
         let report = solve_checked(&sources, &[&index], (512.0, 512.0), &config).unwrap();
-        let _ = report.stats;
-        let solution = match report.outcome {
-            crate::solver::SolveOutcome::Solved(solution) => Some(*solution),
-            crate::solver::SolveOutcome::TimedOut | crate::solver::SolveOutcome::NoMatch => None,
-        };
+
         assert!(
-            solution.is_some(),
+            matches!(report.outcome, SolveOutcome::Solved(_)),
             "wide scale_range that includes truth should still solve"
         );
     }

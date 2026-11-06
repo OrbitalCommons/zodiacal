@@ -532,12 +532,10 @@ mod tests {
             ..SolverConfig::default()
         };
         let report = solve_checked(&sources, &[&index], (SIZE, SIZE), &config).unwrap();
-        let _ = report.stats;
-        let solution = match report.outcome {
-            crate::solver::SolveOutcome::Solved(solution) => Some(*solution),
-            crate::solver::SolveOutcome::TimedOut | crate::solver::SolveOutcome::NoMatch => None,
+        let crate::solver::SolveOutcome::Solved(mut solution) = report.outcome else {
+            panic!("solver should find the synthetic field");
         };
-        let mut solution = solution.expect("solver should find the synthetic field");
+
         let before = center_error_arcsec(&solution.wcs, &truth());
         assert!(refine_solution(
             &mut solution,

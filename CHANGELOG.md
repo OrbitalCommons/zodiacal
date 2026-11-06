@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.1
+
+### Changed
+- Remove unused stats bindings and assert explicit solver outcomes directly in tests.
+  No solver behavior or public API changes.
+- Remove the standalone 1.0 migration guide and consolidate the useful hints below.
+
 ## 1.0.0
 
 ### Breaking changes
@@ -13,7 +20,26 @@
   `sources_from_points` now returns `Result`. Solving rejects out-of-image sources.
 - `RealtimeOutput::solution` is replaced by `solve: SolveReport`. Realtime solving
   returns invalid input as `io::ErrorKind::InvalidInput` before refreshing indexes.
-- See [the migration guide](docs/migration-1.0.md).
+
+### Migration hints
+- Match `report.outcome` on `SolveOutcome::{Solved, TimedOut, NoMatch}`; `Solved`
+  owns a boxed `Solution`. Read diagnostics from `report.stats` only when needed.
+  Invalid inputs return `SolveInputError::{Sources, Config}` before search/callbacks.
+- Source construction requires finite coordinates and finite, positive flux. Bounds
+  are inclusive zero-based pixel centers through `(width - 1, height - 1)`. Applications
+  that discard bad detections should drop failed constructions, filter with
+  `validate_in_image(image_size)`, then apply their source cap. The solver rejects
+  the whole input rather than silently dropping sources.
+- Finish config construction with `.validated()?`; use
+  `SkyRegion::try_from_radians`/`try_from_degrees`. Public config fields and old region
+  constructors remain, but solve entry points validate again after mutation.
+- `solve_region`'s region controls which cells load; set `config.within` separately
+  to constrain accepted centers. Its profile separates loading, index construction,
+  and solving. Timeout covers sorting/search setup and search, not loading, and is
+  checked at outer search phases rather than enforced as a hard deadline.
+- Use `geometric_center_axes()` for the geometric pixel midpoint and measured row/
+  column directions. Quaternion conventions and row-parity encoding stay downstream.
+  Index formats/manual loading and the JSON source field layout are unchanged.
 
 ### Added
 - Checked SolverConfig/VerifyConfig validation and SkyRegion constructors with typed errors.
@@ -23,7 +49,6 @@
 
 ### Fixed
 - Timeout comparisons use elapsed time, avoiding deadline-addition overflow.
-
 
 ### Changed
 - The `fits` feature uses fitsio-pure 0.14 (was 0.9). Its compat image shapes are now row-major,
