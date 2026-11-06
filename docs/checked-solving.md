@@ -25,9 +25,10 @@ The legacy `solve` and `solve_with_callback` signatures remain unchanged.
 Rejected inputs yield no solution and populate `stats.invalid_input` or
 `stats.invalid_config`. No search or callbacks occur on rejected input.
 
-Timeout is a cooperative search budget, not a hard deadline. Index loading and
-source preparation are outside that budget; expensive individual candidates
-may exceed it. Empty indexes or fewer than four sources produce `NoMatch`
+Timeout is a cooperative search budget, not a hard deadline. Input validation
+and index loading are outside the budget; source sorting and search setup are
+inside it. Checks occur at outer search phases, so a phase may process many
+candidates before checking again and can exceed the requested budget. Empty indexes or fewer than four sources produce `NoMatch`
 without searching, even with zero timeout. Comparing elapsed time avoids
 arithmetic overflow even for `Duration::MAX`.
 

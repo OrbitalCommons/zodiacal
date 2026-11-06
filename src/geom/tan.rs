@@ -1,9 +1,12 @@
 use super::sphere;
+use nalgebra::Vector3;
 
 /// TAN (gnomonic) WCS projection.
 ///
 /// Maps between pixel coordinates and celestial positions using the
-/// standard FITS TAN projection.
+/// standard FITS TAN projection. Pixel coordinates are zero-based pixel centers:
+/// integer `(0, 0)` is the first center, and `(width - 1, height - 1)` the last.
+/// Convert FITS one-based CRPIX values before constructing this representation.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TanWcs {
     /// Reference point on sky (RA, Dec) in radians.
@@ -13,11 +16,117 @@ pub struct TanWcs {
     /// CD matrix mapping pixel offsets to intermediate world coordinates (radians).
     /// `cd[0] = [cd1_1, cd1_2]`, `cd[1] = [cd2_1, cd2_2]`.
     pub cd: [[f64; 2]; 2],
-    /// Image dimensions `(width, height)` in pixels.
+    /// Image dimensions `(width, height)` as positive integer pixel counts.
     pub image_size: [f64; 2],
 }
 
+/// Local directions at the geometric midpoint of the image's pixel centers.
+/// All vectors use the celestial Cartesian frame of `pixel_to_xyz`.
+#[derive(Debug, Clone, Copy)]
+pub struct LocalCameraAxes {
+    /// Unit sky vector at `((width - 1)/2, (height - 1)/2)`.
+    pub boresight: [f64; 3],
+    /// Unit tangent in the direction of increasing pixel column.
+    pub increasing_column: [f64; 3],
+    /// Unit tangent in the direction of increasing pixel row.
+    /// Preserves reflection and shear; need not be perpendicular to the column.
+    pub increasing_row: [f64; 3],
+}
+
+/// Invalid WCS geometry for a checked local camera frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WcsGeometryError {
+    InvalidImageSize,
+    NonFiniteWcs,
+    InvalidDeclination,
+    DegenerateAxes,
+}
+impl std::fmt::Display for WcsGeometryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "invalid WCS geometry: {self:?}")
+    }
+}
+impl std::error::Error for WcsGeometryError {}
+
 impl TanWcs {
+    /// Geometric midpoint of zero-based pixel centers, including even dimensions.
+    /// Rejects empty, fractional, or non-finite pixel counts.
+    pub fn geometric_pixel_center(&self) -> Result<(f64, f64), WcsGeometryError> {
+        if self
+            .image_size
+            .iter()
+            .any(|v| !v.is_finite() || *v < 1.0 || v.fract() != 0.0)
+        {
+            return Err(WcsGeometryError::InvalidImageSize);
+        }
+        Ok((
+            (self.image_size[0] - 1.0) / 2.0,
+            (self.image_size[1] - 1.0) / 2.0,
+        ))
+    }
+
+    /// Analytic TAN derivatives at the geometric pixel center (no finite differences).
+    ///
+    /// Returns the measured row and column tangents without forcing a proper
+    /// rotation. The sign of `column.cross(row).dot(boresight)` retains parity.
+    /// A caller can form a right-handed camera basis with X = column,
+    /// Z = boresight, Y = Z cross X, keeping measured row parity separately.
+    /// Rejects non-finite values, invalid declination, and numerically degenerate
+    /// axes (unit tangent cross-product norm at most 1e-12).
+    pub fn geometric_center_axes(&self) -> Result<LocalCameraAxes, WcsGeometryError> {
+        let (px, py) = self.geometric_pixel_center()?;
+        if self
+            .crval
+            .iter()
+            .chain(self.crpix.iter())
+            .chain(self.cd.iter().flatten())
+            .any(|v| !v.is_finite())
+        {
+            return Err(WcsGeometryError::NonFiniteWcs);
+        }
+        if self.crval[1].abs() > std::f64::consts::FRAC_PI_2 {
+            return Err(WcsGeometryError::InvalidDeclination);
+        }
+        let (reference, east, north) = self.tangent_basis();
+        let u = px - self.crpix[0];
+        let v = py - self.crpix[1];
+        let x = self.cd[0][0] * u + self.cd[0][1] * v;
+        let y = self.cd[1][0] * u + self.cd[1][1] * v;
+        let unit = |v: Vector3<f64>| -> Result<Vector3<f64>, WcsGeometryError> {
+            let norm = v.norm();
+            if !norm.is_finite() || norm <= 0.0 {
+                return Err(WcsGeometryError::DegenerateAxes);
+            }
+            Ok(v / norm)
+        };
+        let boresight = unit(reference + east * x + north * y)?;
+        let tangent = |col: usize| {
+            let d = east * self.cd[0][col] + north * self.cd[1][col];
+            unit(d - boresight * boresight.dot(&d))
+        };
+        let column = tangent(0)?;
+        let row = tangent(1)?;
+        if column.cross(&row).norm() <= 1e-12 {
+            return Err(WcsGeometryError::DegenerateAxes);
+        }
+        Ok(LocalCameraAxes {
+            boresight: boresight.into(),
+            increasing_column: column.into(),
+            increasing_row: row.into(),
+        })
+    }
+
+    // Use the same pole convention as the astrometry.net TAN deprojection.
+    fn tangent_basis(&self) -> (Vector3<f64>, Vector3<f64>, Vector3<f64>) {
+        let r = Vector3::from(sphere::radec_to_xyz(self.crval[0], self.crval[1]));
+        let i = if r.z == 1.0 || r.z == -1.0 {
+            Vector3::new(-1.0, 0.0, 0.0)
+        } else {
+            Vector3::new(r.y, -r.x, 0.0).normalize()
+        };
+        (r, -i, i.cross(&r).normalize())
+    }
+
     /// Convert pixel coordinates to a unit vector on the celestial sphere.
     pub fn pixel_to_xyz(&self, px: f64, py: f64) -> [f64; 3] {
         let u = px - self.crpix[0];
@@ -61,13 +170,18 @@ impl TanWcs {
         det.abs().sqrt().to_degrees()
     }
 
-    /// RA, Dec (radians) of the image center pixel.
+    /// RA, Dec (radians) at the legacy center `(width/2, height/2)`.
+    /// This is half a pixel above the geometric pixel-center midpoint on each
+    /// axis. Retained pending the residual investigation in issue #67.
+    /// Use [`Self::geometric_center_axes`] for an explicit geometric boresight.
     pub fn field_center(&self) -> (f64, f64) {
         self.pixel_to_radec(self.image_size[0] / 2.0, self.image_size[1] / 2.0)
     }
 
-    /// Angular radius (radians) of the smallest circle centered on the image
-    /// center that encloses all four corners.
+    /// Legacy angular radius about `(width/2, height/2)`, enclosing the four
+    /// coordinates `(0,0)`, `(width,0)`, `(0,height)`, `(width,height)`.
+    /// These are legacy extent coordinates, not the last pixel centers or
+    /// the exact outer pixel edges. Retained for compatibility with issue #67.
     pub fn field_radius(&self) -> f64 {
         let (cx, cy) = (self.image_size[0] / 2.0, self.image_size[1] / 2.0);
         let center = self.pixel_to_xyz(cx, cy);
@@ -90,34 +204,8 @@ impl TanWcs {
     ///
     /// Follows the astrometry.net `tan_iwc2xyzarr` algorithm.
     pub(crate) fn iwc_to_xyz(&self, x: f64, y: f64) -> [f64; 3] {
-        let x = -x;
-
-        let r = sphere::radec_to_xyz(self.crval[0], self.crval[1]);
-        let (rx, ry, rz) = (r[0], r[1], r[2]);
-
-        let (ix, iy) = if rz == 1.0 || rz == -1.0 {
-            (-1.0, 0.0)
-        } else {
-            let ix = ry;
-            let iy = -rx;
-            let norm = ix.hypot(iy);
-            (ix / norm, iy / norm)
-        };
-
-        let mut jx = iy * rz;
-        let mut jy = -ix * rz;
-        let mut jz = ix * ry - iy * rx;
-        let jnorm = (jx * jx + jy * jy + jz * jz).sqrt();
-        jx /= jnorm;
-        jy /= jnorm;
-        jz /= jnorm;
-
-        let px = ix * x + jx * y + rx;
-        let py = iy * x + jy * y + ry;
-        let pz = jz * y + rz;
-        let norm = (px * px + py * py + pz * pz).sqrt();
-
-        [px / norm, py / norm, pz / norm]
+        let (reference, east, north) = self.tangent_basis();
+        (reference + east * x + north * y).normalize().into()
     }
 }
 
@@ -125,6 +213,101 @@ impl TanWcs {
 mod tests {
     use super::*;
     use std::f64::consts::{FRAC_PI_2, PI};
+
+    #[test]
+    fn geometric_center_and_analytic_axes() {
+        for size in [[101.0, 81.0], [100.0, 80.0], [1.0, 1.0]] {
+            for angle in [0.0_f64, 0.7, 1.5] {
+                for parity in [-1.0, 1.0] {
+                    for dec in [0.3, FRAC_PI_2, -FRAC_PI_2] {
+                        let (sin, cos) = angle.sin_cos();
+                        let wcs = TanWcs {
+                            crval: [1.2, dec],
+                            crpix: [32.0, 20.0],
+                            cd: [
+                                [cos * 1e-4, -sin * 1e-4 * parity],
+                                [sin * 1e-4, cos * 1e-4 * parity],
+                            ],
+                            image_size: size,
+                        };
+                        let (x, y) = wcs.geometric_pixel_center().unwrap();
+                        assert_eq!((x, y), ((size[0] - 1.0) / 2.0, (size[1] - 1.0) / 2.0));
+                        let axes = wcs.geometric_center_axes().unwrap();
+                        let z = Vector3::from(axes.boresight);
+                        assert!((z - Vector3::from(wcs.pixel_to_xyz(x, y))).norm() < 1e-14);
+                        let col = Vector3::from(axes.increasing_column);
+                        let row = Vector3::from(axes.increasing_row);
+                        assert_eq!(col.cross(&row).dot(&z).signum(), parity);
+                        for (dx, dy, axis) in [(1e-2, 0.0, col), (0.0, 1e-2, row)] {
+                            let measured = (Vector3::from(wcs.pixel_to_xyz(x + dx, y + dy))
+                                - Vector3::from(wcs.pixel_to_xyz(x - dx, y - dy)))
+                            .normalize();
+                            assert!((measured - axis).norm() < 1e-8);
+                            assert!(axis.dot(&z).abs() < 1e-12);
+                        }
+                        assert_eq!(
+                            wcs.field_center(),
+                            wcs.pixel_to_radec(size[0] / 2.0, size[1] / 2.0)
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn checked_axes_reject_bad_geometry_and_preserve_shear() {
+        let base = TanWcs {
+            crval: [0.0, 0.0],
+            crpix: [49.5, 39.5],
+            cd: [[1e-4, 1e-5], [0.0, 1e-4]],
+            image_size: [100.0, 80.0],
+        };
+        let axes = base.geometric_center_axes().unwrap();
+        assert!(
+            Vector3::from(axes.increasing_column).dot(&Vector3::from(axes.increasing_row)) > 0.09
+        );
+        for size in [
+            [0.0, 10.0],
+            [1.5, 10.0],
+            [10.0, f64::NAN],
+            [f64::INFINITY, 10.0],
+        ] {
+            let w = TanWcs {
+                image_size: size,
+                ..base.clone()
+            };
+            assert_eq!(
+                w.geometric_center_axes().unwrap_err(),
+                WcsGeometryError::InvalidImageSize
+            );
+        }
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            for field in 0..8 {
+                let mut w = base.clone();
+                match field {
+                    0..=1 => w.crval[field] = value,
+                    2..=3 => w.crpix[field - 2] = value,
+                    _ => w.cd[(field - 4) / 2][(field - 4) % 2] = value,
+                }
+                assert_eq!(
+                    w.geometric_center_axes().unwrap_err(),
+                    WcsGeometryError::NonFiniteWcs
+                );
+            }
+        }
+        for cd in [
+            [[0.0; 2]; 2],
+            [[1e-4, 2e-4], [1e-4, 2e-4]],
+            [[1e308, 0.0], [0.0, 1e308]],
+        ] {
+            let w = TanWcs { cd, ..base.clone() };
+            assert_eq!(
+                w.geometric_center_axes().unwrap_err(),
+                WcsGeometryError::DegenerateAxes
+            );
+        }
+    }
 
     const EPS: f64 = 1e-10;
 
