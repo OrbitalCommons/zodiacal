@@ -1272,34 +1272,60 @@ mod tests {
             max_quads: 50_000,
         };
 
-        let index = build_index(&catalog, &index_config);
+        // #98: the old, oversized AB circle hit the parallel quad cap and
+        // produced schedule-dependent candidates (including a 1.1376 scale ratio).
+        // Exercise multiple pools with the same seed and acceptance thresholds.
+        let mut reference_quads = None;
+        for threads in [1, 2, 4] {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap();
+            let index = pool.install(|| build_index(&catalog, &index_config));
+            let quad_ids: Vec<_> = index.quads.iter().map(|q| q.star_ids).collect();
+            if let Some(reference) = &reference_quads {
+                assert_eq!(&quad_ids, reference, "index changed with {threads} threads");
+            } else {
+                reference_quads = Some(quad_ids);
+            }
 
-        let config = SolverConfig {
-            scale_range: None,
-            max_field_stars: 30,
-            code_tolerance: 0.002,
-            verify: VerifyConfig {
-                match_radius_pix: 3.0,
-                log_odds_accept: 10.0,
-                min_matches: 3,
-                ..VerifyConfig::default()
-            },
-            ..SolverConfig::default()
-        };
+            let config = SolverConfig {
+                scale_range: None,
+                max_field_stars: 30,
+                code_tolerance: 0.002,
+                verify: VerifyConfig {
+                    match_radius_pix: 3.0,
+                    log_odds_accept: 10.0,
+                    min_matches: 3,
+                    ..VerifyConfig::default()
+                },
+                ..SolverConfig::default()
+            };
 
-        let report = solve_checked(&sources, &[&index], image_size, &config).unwrap();
-        let SolveOutcome::Solved(solution) = report.outcome else {
-            panic!("expected a solved field");
-        };
+            let report = solve_checked(&sources, &[&index], image_size, &config).unwrap();
+            let SolveOutcome::Solved(solution) = report.outcome else {
+                panic!("expected a solved field");
+            };
 
-        let solved_scale = solution.wcs.pixel_scale();
-        let known_scale = wcs.pixel_scale();
-        let scale_ratio = solved_scale / known_scale;
-        assert!(
-            (0.95..=1.05).contains(&scale_ratio),
-            "pixel scale ratio {} outside [0.95, 1.05]",
-            scale_ratio
-        );
+            let solved_scale = solution.wcs.pixel_scale();
+            let known_scale = wcs.pixel_scale();
+            let scale_ratio = solved_scale / known_scale;
+            assert!(
+                (0.95..=1.05).contains(&scale_ratio),
+                "pixel scale ratio {} outside [0.95, 1.05]",
+                scale_ratio
+            );
+            // Scale alone can miss a translated or wrongly rotated solution.
+            for source in &sources {
+                let (ra, dec) = wcs.pixel_to_radec(source.x(), source.y());
+                let (x, y) = solution.wcs.radec_to_pixel(ra, dec).unwrap();
+                let residual = (x - source.x()).hypot(y - source.y());
+                assert!(
+                    residual < 0.01,
+                    "{threads} threads: residual {residual} pixels"
+                );
+            }
+        }
     }
 
     /// Issue #48: a wildly wrong scale_range hint should be rejected before
